@@ -4,7 +4,18 @@ OneValet Memory Manager - Mem0-based long-term memory
 This module provides:
 - MemoryManager: Main class wrapping mem0 for agent memory
 - Auto-recall and auto-store functionality
+
+.. deprecated::
+    Use :class:`onevalet.memory.momex.MomexMemory` instead.
 """
+
+import warnings
+warnings.warn(
+    "onevalet.memory.manager.MemoryManager is deprecated. "
+    "Use onevalet.memory.momex.MomexMemory instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from typing import Dict, Any, List, Optional, Protocol
 

@@ -270,6 +270,10 @@ class AgentPoolManager:
         """
         tenant_id = agent.tenant_id
 
+        # Compute schema version from agent class
+        from ..agents.decorator import get_schema_version
+        schema_version = get_schema_version(type(agent))
+
         # Create pool entry from agent
         entry = AgentPoolEntry(
             agent_id=agent.agent_id,
@@ -279,6 +283,7 @@ class AgentPoolManager:
             collected_fields=agent.collected_fields,
             execution_state=agent.execution_state,
             context=agent.context,
+            schema_version=schema_version,
         )
 
         # Save to backend
@@ -362,6 +367,10 @@ class AgentPoolManager:
         """
         tenant_id = agent.tenant_id
 
+        # Compute schema version from agent class
+        from ..agents.decorator import get_schema_version
+        schema_version = get_schema_version(type(agent))
+
         entry = AgentPoolEntry(
             agent_id=agent.agent_id,
             agent_type=agent.agent_type,
@@ -371,6 +380,7 @@ class AgentPoolManager:
             collected_fields=agent.collected_fields,
             execution_state=agent.execution_state,
             context=agent.context,
+            schema_version=schema_version,
         )
 
         if self.config.enabled:
@@ -419,7 +429,8 @@ class AgentPoolManager:
     async def restore_tenant_session(
         self,
         tenant_id: str,
-        agent_factory: Callable[[AgentPoolEntry], "StandardAgent"]
+        agent_factory: Callable[[AgentPoolEntry], "StandardAgent"],
+        agent_registry: Optional[Any] = None,
     ) -> int:
         """
         Restore all agents for a tenant from storage.
@@ -427,6 +438,7 @@ class AgentPoolManager:
         Args:
             tenant_id: Tenant identifier
             agent_factory: Factory function to create agent from entry
+            agent_registry: Optional registry to check schema versions against
 
         Returns:
             Number of agents restored
@@ -438,6 +450,17 @@ class AgentPoolManager:
 
         restored = 0
         for entry in entries:
+            # Version guard: discard agents with stale schema versions
+            if agent_registry is not None:
+                current_version = agent_registry.get_schema_version(entry.agent_type)
+                if current_version is not None and entry.schema_version != current_version:
+                    logger.warning(
+                        f"Discarded stale agent {entry.agent_id}: schema version mismatch "
+                        f"(pool={entry.schema_version}, current={current_version})"
+                    )
+                    await self._backend.remove_agent(tenant_id, entry.agent_id)
+                    continue
+
             try:
                 agent = agent_factory(entry)
                 self._agents[tenant_id][entry.agent_id] = agent
@@ -450,7 +473,8 @@ class AgentPoolManager:
 
     async def restore_all_sessions(
         self,
-        agent_factory: Callable[[AgentPoolEntry], "StandardAgent"]
+        agent_factory: Callable[[AgentPoolEntry], "StandardAgent"],
+        agent_registry: Optional[Any] = None,
     ) -> int:
         """
         Restore all active sessions from storage.
@@ -459,6 +483,7 @@ class AgentPoolManager:
 
         Args:
             agent_factory: Factory function to create agent from entry
+            agent_registry: Optional registry to check schema versions against
 
         Returns:
             Total number of agents restored
@@ -467,7 +492,9 @@ class AgentPoolManager:
         total = 0
 
         for tenant_id in tenants:
-            restored = await self.restore_tenant_session(tenant_id, agent_factory)
+            restored = await self.restore_tenant_session(
+                tenant_id, agent_factory, agent_registry=agent_registry
+            )
             total += restored
 
         logger.info(f"Restored {total} agents for {len(tenants)} tenants")

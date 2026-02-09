@@ -257,12 +257,19 @@ class StandardAgent(BaseAgent):
         # Recalled memories from orchestrator (when enable_memory=true)
         self._recalled_memories: List[Dict[str, Any]] = []
 
-        # Pre-populate collected_fields with context_hints
+        # Pre-populate collected_fields with context_hints (validate each field)
         if context_hints:
             for field_name, value in context_hints.items():
-                if value:
-                    self.collected_fields[field_name] = value
-            logger.debug(f"Pre-populated fields from context_hints: {list(context_hints.keys())}")
+                if not value:
+                    continue
+                # Check if field has a validator via RequiredField
+                field_def = next((f for f in self.required_fields if f.name == field_name), None)
+                if field_def and field_def.validator:
+                    if not field_def.validator(str(value)):
+                        logger.debug(f"context_hints field '{field_name}' failed validation, skipping")
+                        continue
+                self.collected_fields[field_name] = value
+            logger.debug(f"Pre-populated fields from context_hints: {list(self.collected_fields.keys())}")
 
         # Initialize optional fields with defaults
         self._init_optional_fields()

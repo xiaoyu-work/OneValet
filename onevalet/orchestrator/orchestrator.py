@@ -1,35 +1,54 @@
 """
-OneValet Orchestrator - Central coordinator for all agents
+OneValet Orchestrator - Central coordinator using ReAct loop
 
-This module provides an extensible Orchestrator using the Template Method pattern.
-Subclass and override extension points to customize behavior.
+This module provides an extensible Orchestrator using the Template Method pattern
+combined with a ReAct (Reasoning + Acting) loop for tool/agent execution.
 
-Extension Points:
+Extension Points (override in subclass):
     - prepare_context(): Add memories, user info, custom metadata
     - should_process(): Guardrails, rate limits, tier access control
     - reject_message(): Custom rejection handling
-    - route_message(): Custom routing logic
     - create_agent(): Custom agent instantiation
-    - execute_agent(): Custom agent execution
     - post_process(): Save to memory, notifications, response wrapping
 
-Example:
+Hook-based Extension (no subclass needed):
+    - guardrails_checker: Safety filter with check_input / check_output methods
+    - rate_limiter: Async callable (tenant_id, context) -> {"allowed": bool}
+    - post_process_hooks: List of async callables (result, context) -> result
+      for profile detection, usage recording, personality wrapping, etc.
+
+ReAct Loop:
+    The orchestrator uses a ReAct loop that:
+    1. Sends messages + tool schemas to the LLM
+    2. If LLM returns tool_calls, executes them concurrently
+    3. Appends results and repeats until LLM produces a final answer
+    4. Handles Agent-Tools (agents-as-tools) with approval flow
+
+Example (subclass):
     class MyOrchestrator(Orchestrator):
         async def should_process(self, message, context):
-            # Add guardrails check
             if not await self.safety_checker.check(message):
                 return False
             return True
 
         async def post_process(self, result, context):
-            # Save to memory
             await self.memory.save(result)
-            # Wrap with personality
-            result.raw_message = await self.personality.wrap(result.raw_message)
             return result
+
+Example (hooks, no subclass):
+    orchestrator = Orchestrator(
+        momex=momex,
+        llm_client=llm,
+        guardrails_checker=my_guardrails,
+        rate_limiter=my_rate_limiter,
+        post_process_hooks=[profile_detection_hook, usage_recording_hook],
+    )
 """
 
+import json
+import asyncio
 import logging
+import time
 from typing import Dict, List, Optional, Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from ..message import Message
@@ -37,9 +56,6 @@ from ..result import AgentResult, AgentStatus
 from ..streaming.models import StreamMode, AgentEvent, EventType
 
 from .models import (
-    RoutingAction,
-    RoutingReason,
-    RoutingDecision,
     OrchestratorConfig,
     AgentPoolEntry,
     AgentCallback,
@@ -47,33 +63,42 @@ from .models import (
     callback_handler,
 )
 from .pool import AgentPoolManager
-from .router import MessageRouter
+from .react_config import ReactLoopConfig, ReactLoopResult, ToolCallRecord, TokenUsage
+from .context_manager import ContextManager
+from .agent_tool import execute_agent_tool, AgentToolResult
+from .approval import collect_batch_approvals
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
     from ..msghub import MessageHub
-    from ..workflow import WorkflowExecutor
     from ..protocols import LLMClientProtocol
+    from ..memory.momex import MomexMemory
 
 from ..standard_agent import StandardAgent
 from ..config import AgentRegistry
+from ..tools.models import ToolExecutionContext
 
 logger = logging.getLogger(__name__)
 
 
 class Orchestrator:
     """
-    Central coordinator for all agents with extensible design.
+    Central coordinator for all agents with ReAct loop architecture.
 
     Uses Template Method pattern - override extension points to customize:
 
-    1. prepare_context() - Build context before routing
+    1. prepare_context() - Build context before processing
     2. should_process() - Gate for message processing
     3. reject_message() - Handle rejected messages
-    4. route_message() - Custom routing logic
-    5. create_agent() - Custom agent instantiation
-    6. execute_agent() - Custom execution logic
-    7. post_process() - Post-processing before response
+    4. create_agent() - Custom agent instantiation
+    5. post_process() - Post-processing before response
+
+    ReAct Loop:
+        The core react_loop() method implements the Reasoning + Acting pattern:
+        - LLM reasons about user request and decides which tools to call
+        - Tools (regular + agent-tools) are executed concurrently
+        - Results are fed back to the LLM for the next reasoning step
+        - Loop continues until LLM produces a final answer or max_turns reached
 
     Callback Handlers:
         Use @callback_handler decorator to register handlers that agents can invoke:
@@ -83,12 +108,12 @@ class Orchestrator:
             async def get_cache(self, callback: AgentCallback) -> Any:
                 return self.cache.get(callback.data["key"])
 
-            @callback_handler("send_sms")
-            async def send_sms(self, callback: AgentCallback) -> None:
-                await self.sms.send(callback.data["message"])
-
     Basic Usage:
-        orchestrator = Orchestrator(config_dir="./config", llm_client=llm_client)
+        orchestrator = Orchestrator(
+            llm_client=llm_client,
+            agent_registry=registry,
+            system_prompt="You are a helpful assistant.",
+        )
         await orchestrator.initialize()
         response = await orchestrator.handle_message(tenant_id, message)
     """
@@ -130,49 +155,75 @@ class Orchestrator:
 
     def __init__(
         self,
+        momex: "MomexMemory",
         config: Optional[OrchestratorConfig] = None,
-        config_dir: Optional[str] = None,
         llm_client: Optional["LLMClientProtocol"] = None,
         agent_registry: Optional[AgentRegistry] = None,
+        system_prompt: str = "",
+        react_config: Optional[ReactLoopConfig] = None,
+        credential_store: Optional[Any] = None,
+        trigger_engine: Optional[Any] = None,
         checkpoint_manager: Optional["CheckpointManager"] = None,
         message_hub: Optional["MessageHub"] = None,
-        workflow_executor: Optional["WorkflowExecutor"] = None,
+        guardrails_checker: Optional[Any] = None,
+        rate_limiter: Optional[Callable] = None,
+        post_process_hooks: Optional[List[Callable]] = None,
     ):
         """
         Initialize Orchestrator.
 
         Args:
+            momex: Momex memory — conversation history + long-term knowledge
             config: Full orchestrator configuration
-            config_dir: Path to YAML config directory (alternative to config)
-            llm_client: LLM client for agents
+            llm_client: LLM client for the ReAct loop
             agent_registry: Pre-configured agent registry
+            system_prompt: Persona / system prompt injected into every LLM call
+            react_config: ReAct loop configuration (max_turns, timeouts, etc.)
+            credential_store: CredentialStore for tool execution context
+            trigger_engine: TriggerEngine for proactive trigger tasks
             checkpoint_manager: Checkpoint manager for state persistence
             message_hub: Message hub for multi-agent communication
-            workflow_executor: Executor for workflows
+            guardrails_checker: Optional safety checker with async ``check_input(msg)``
+                and ``check_output(msg, tenant_id)`` methods.  ``check_input``
+                returns ``{"blocked": bool, "reason": str}``.  ``check_output``
+                returns ``{"modified": bool, "output": str}``.
+            rate_limiter: Optional async callable ``(tenant_id, context) -> dict``
+                that returns ``{"allowed": bool, ...}``.  Extra keys are stored
+                in ``context["rate_limit_info"]`` for ``reject_message``.
+            post_process_hooks: Optional list of async callables
+                ``(result: AgentResult, context: dict) -> AgentResult`` invoked
+                after the base post_process logic (momex save).  Hooks run in
+                order; each receives the result returned by the previous hook.
+                Useful for profile detection, usage recording, response wrapping,
+                or sending notifications without subclassing the orchestrator.
         """
         # Configuration
-        if config:
-            self.config = config
-        else:
-            self.config = OrchestratorConfig(
-                config_dir=config_dir or "./config"
-            )
+        self.config = config or OrchestratorConfig()
 
         # Core dependencies
+        self.momex = momex
         self.llm_client = llm_client
         self.checkpoint_manager = checkpoint_manager
         self.message_hub = message_hub
-        self.workflow_executor = workflow_executor
+        self.credential_store = credential_store
+        self.trigger_engine = trigger_engine
+        self.system_prompt = system_prompt
 
-        # Agent registry (lazy loaded if not provided)
+        # ReAct loop configuration
+        self._react_config = react_config or ReactLoopConfig()
+        self._context_manager = ContextManager(self._react_config)
+
+        # Agent registry
         self._agent_registry: Optional[AgentRegistry] = agent_registry
         self._registry_initialized = agent_registry is not None
 
         # Agent pool manager
         self.agent_pool = AgentPoolManager(config=self.config.session)
 
-        # Message router (initialized after registry)
-        self._router: Optional[MessageRouter] = None
+        # Extension hooks
+        self.guardrails_checker = guardrails_checker
+        self.rate_limiter = rate_limiter
+        self._post_process_hooks: List[Callable] = list(post_process_hooks or [])
 
         # State
         self._initialized = False
@@ -181,6 +232,14 @@ class Orchestrator:
     def agent_registry(self) -> Optional[AgentRegistry]:
         """Get the agent registry"""
         return self._agent_registry
+
+    def add_post_process_hook(self, hook: Callable) -> None:
+        """Register an additional post-process hook at runtime.
+
+        Args:
+            hook: Async callable ``(result, context) -> AgentResult``
+        """
+        self._post_process_hooks.append(hook)
 
     # ==========================================================================
     # LIFECYCLE METHODS
@@ -196,31 +255,14 @@ class Orchestrator:
             return
 
         # Initialize agent registry if not provided
-        if not self._registry_initialized:
-            await self._init_registry()
+        if not self._registry_initialized and self._agent_registry is None:
+            logger.warning("No agent registry provided. Agent-Tools will not be available.")
 
         # Validate LLM client is available
         if not self.llm_client:
             raise RuntimeError(
-                "LLM client is required. Either pass llm_client to Orchestrator() "
-                "or configure it in onevalet.yaml under llm.routing"
+                "LLM client is required. Pass llm_client to Orchestrator()."
             )
-
-        # Validate default_agent_type is registered
-        if self.config.default_agent_type:
-            if not self._agent_registry:
-                raise RuntimeError(
-                    f"default_agent_type '{self.config.default_agent_type}' specified but no agent registry available"
-                )
-            if not self._agent_registry.get_agent_class(self.config.default_agent_type):
-                registered_agents = self._agent_registry.get_all_agent_names()
-                raise RuntimeError(
-                    f"default_agent_type '{self.config.default_agent_type}' not found in agent registry. "
-                    f"Available agents: {registered_agents}"
-                )
-
-        # Initialize router
-        await self._init_router()
 
         # Restore sessions if configured
         if self.config.session.enabled and self.config.session.auto_restore_on_start:
@@ -230,38 +272,17 @@ class Orchestrator:
         if self.config.session.enabled and self.config.session.auto_backup_interval_seconds > 0:
             await self.agent_pool.start_auto_backup()
 
+        # Start trigger engine if configured
+        if self.trigger_engine:
+            await self.trigger_engine.start()
+
         self._initialized = True
         logger.info("Orchestrator initialized")
 
-    async def _init_registry(self) -> None:
-        """Initialize agent registry. Override to customize."""
-        try:
-            self._agent_registry = AgentRegistry(
-                config_dir=self.config.config_dir
-            )
-            await self._agent_registry.initialize()
-            self._registry_initialized = True
-
-            # Auto-get routing LLM from registry if not provided
-            if self.llm_client is None:
-                from ..llm.registry import LLMRegistry
-                self.llm_client = LLMRegistry.get_instance().get_routing()
-                if self.llm_client:
-                    logger.info("Using routing LLM from registry")
-        except Exception as e:
-            logger.warning(f"Failed to initialize agent registry: {e}")
-
-    async def _init_router(self) -> None:
-        """Initialize message router. Override to use custom router."""
-        self._router = MessageRouter(
-            agent_registry=self._agent_registry,
-            llm_client=self.llm_client,
-            enable_llm_routing=self.llm_client is not None,
-            default_agent_type=self.config.default_agent_type
-        )
-
     async def shutdown(self) -> None:
         """Shutdown the orchestrator gracefully."""
+        if self.trigger_engine:
+            await self.trigger_engine.stop()
         await self.agent_pool.close()
         if self._agent_registry:
             await self._agent_registry.shutdown()
@@ -269,7 +290,7 @@ class Orchestrator:
         logger.info("Orchestrator shutdown")
 
     # ==========================================================================
-    # MAIN ENTRY POINT - TEMPLATE METHOD
+    # MAIN ENTRY POINT
     # ==========================================================================
 
     async def handle_message(
@@ -279,10 +300,16 @@ class Orchestrator:
         metadata: Optional[Dict[str, Any]] = None
     ) -> AgentResult:
         """
-        Main entry point - handle user message.
+        Main entry point - handle user message via ReAct loop.
 
-        This implements the Template Method pattern. Override the extension
-        points (prepare_context, should_process, etc.) to customize behavior.
+        Flow:
+        1. prepare_context() - build context
+        2. should_process() - gate check
+        3. _check_pending_agents() - check for WAITING agents in pool
+        4. _build_llm_messages() - system prompt + history + user message
+        5. _build_tool_schemas() - merge regular Tools + Agent-Tools
+        6. react_loop() - ReAct reasoning loop
+        7. post_process() - final processing
 
         Args:
             tenant_id: Tenant/user identifier
@@ -302,28 +329,739 @@ class Orchestrator:
         if not await self.should_process(message, context):
             return await self.reject_message(message, context)
 
-        # Step 3: Route message
-        decision = await self.route_message(message, context)
+        # Step 3: Check pending agents (WAITING_FOR_INPUT / WAITING_FOR_APPROVAL)
+        agent_result = await self._check_pending_agents(tenant_id, message, context)
+        if agent_result is not None:
+            return await self.post_process(agent_result, context)
 
-        # Step 4: Handle workflow execution
-        if decision.action == RoutingAction.EXECUTE_WORKFLOW:
-            result = await self._execute_workflow(tenant_id, decision, context)
-            return await self.post_process(result, context)
+        # Step 4: Build LLM messages
+        messages = self._build_llm_messages(context, message)
 
-        # Step 5: Get or create agent (handles ROUTE_TO_EXISTING, CREATE_NEW, ROUTE_TO_DEFAULT)
-        agent = await self.get_or_create_agent(tenant_id, decision, context)
-        if not agent:
-            result = await self.handle_agent_error(decision, context)
-            return await self.post_process(result, context)
+        # Step 5: Build tool schemas
+        tool_schemas = self._build_tool_schemas()
 
-        # Step 6: Execute agent
-        result = await self.execute_agent(agent, message, context)
+        # Step 6: Run ReAct loop
+        loop_result = await self.react_loop(messages, tool_schemas, tenant_id)
 
-        # Step 7: Update pool after execution
-        await self.update_pool_after_execution(tenant_id, agent, result)
+        # Step 7: Map ReactLoopResult -> AgentResult
+        result = AgentResult(
+            agent_type=self.__class__.__name__,
+            status=AgentStatus.COMPLETED,
+            raw_message=loop_result.response,
+            metadata={
+                "react_turns": loop_result.turns,
+                "token_usage": {
+                    "input_tokens": loop_result.token_usage.input_tokens,
+                    "output_tokens": loop_result.token_usage.output_tokens,
+                },
+                "duration_ms": loop_result.duration_ms,
+                "tool_calls_count": len(loop_result.tool_calls),
+            },
+        )
 
-        # Step 8: Post-process result
+        if loop_result.pending_approvals:
+            result.status = AgentStatus.WAITING_FOR_APPROVAL
+            result.metadata["pending_approvals"] = [
+                {
+                    "agent_name": a.agent_name,
+                    "action_summary": a.action_summary,
+                    "details": a.details,
+                    "options": a.options,
+                }
+                for a in loop_result.pending_approvals
+            ]
+
+        # Step 8: Post-process
         return await self.post_process(result, context)
+
+    # ==========================================================================
+    # STREAMING ENTRY POINT
+    # ==========================================================================
+
+    async def stream_message(
+        self,
+        tenant_id: str,
+        message: str,
+        mode: StreamMode = StreamMode.EVENTS,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[AgentEvent]:
+        """
+        Stream agent execution events via ReAct loop.
+
+        Same flow as handle_message but yielding streaming events at each stage.
+
+        Args:
+            tenant_id: Tenant identifier
+            message: User message text
+            mode: Stream mode
+            metadata: Optional message metadata
+
+        Yields:
+            AgentEvent objects
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        # Prepare context
+        context = await self.prepare_context(tenant_id, message, metadata)
+
+        # Check if should process
+        if not await self.should_process(message, context):
+            result = await self.reject_message(message, context)
+            yield AgentEvent(
+                type=EventType.MESSAGE_CHUNK,
+                data={"chunk": result.raw_message or ""},
+            )
+            return
+
+        # Check pending agents
+        agent_result = await self._check_pending_agents(tenant_id, message, context)
+        if agent_result is not None:
+            agent_result = await self.post_process(agent_result, context)
+            yield AgentEvent(
+                type=EventType.MESSAGE_START,
+                data={"agent_type": agent_result.agent_type},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_CHUNK,
+                data={"chunk": agent_result.raw_message or ""},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_END,
+                data={},
+            )
+            return
+
+        # Build messages and tool schemas
+        messages = self._build_llm_messages(context, message)
+        tool_schemas = self._build_tool_schemas()
+
+        # Yield execution start
+        yield AgentEvent(
+            type=EventType.EXECUTION_START,
+            data={"tenant_id": tenant_id},
+        )
+
+        # Run ReAct loop with streaming events
+        start_time = time.monotonic()
+        turn = 0
+        all_tool_records: List[ToolCallRecord] = []
+        total_usage = TokenUsage()
+        pending_approvals = []
+
+        for turn in range(1, self._react_config.max_turns + 1):
+            # Context guard
+            messages = self._context_manager.trim_if_needed(messages)
+
+            # LLM call
+            try:
+                response = await self._llm_call_with_retry(messages, tool_schemas)
+            except Exception as e:
+                yield AgentEvent(
+                    type=EventType.ERROR,
+                    data={"error": str(e), "error_type": type(e).__name__},
+                )
+                return
+
+            # Accumulate token usage
+            usage = getattr(response, "usage", None)
+            if usage:
+                total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
+                total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
+
+            resp_message = response.choices[0].message
+            tool_calls = getattr(resp_message, "tool_calls", None)
+
+            if not tool_calls:
+                # Final answer
+                final_text = getattr(resp_message, "content", "") or ""
+                yield AgentEvent(
+                    type=EventType.MESSAGE_START,
+                    data={"turn": turn},
+                )
+                yield AgentEvent(
+                    type=EventType.MESSAGE_CHUNK,
+                    data={"chunk": final_text},
+                )
+                yield AgentEvent(
+                    type=EventType.MESSAGE_END,
+                    data={},
+                )
+                break
+            else:
+                # Append assistant message with tool_calls
+                messages.append(self._assistant_message_from_response(resp_message))
+
+                # Execute all tool calls concurrently
+                loop_broken = False
+                for tc in tool_calls:
+                    yield AgentEvent(
+                        type=EventType.TOOL_CALL_START,
+                        data={
+                            "tool_name": tc.function.name,
+                            "call_id": tc.id,
+                        },
+                    )
+
+                results = await asyncio.gather(
+                    *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
+                    return_exceptions=True,
+                )
+
+                for tc, result in zip(tool_calls, results):
+                    tc_name = tc.function.name
+                    if isinstance(result, BaseException):
+                        error_text = f"Error: {result}"
+                        messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary={}, success=False,
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={"tool_name": tc_name, "call_id": tc.id, "success": False, "error": str(result)},
+                        )
+                    elif isinstance(result, AgentToolResult) and not result.completed:
+                        # Agent-Tool not completed: store in pool, collect approval
+                        if result.agent:
+                            await self.agent_pool.add_agent(result.agent)
+                        if result.approval_request:
+                            pending_approvals.append(result.approval_request)
+                        messages.append(self._build_tool_result_message(
+                            tc.id,
+                            result.result_text or "Agent is waiting for input.",
+                        ))
+                        waiting_status = (
+                            "WAITING_FOR_APPROVAL" if result.approval_request
+                            else "WAITING_FOR_INPUT"
+                        )
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary={},
+                            result_status=waiting_status,
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={"tool_name": tc_name, "call_id": tc.id, "success": True, "waiting": True},
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATE_CHANGE,
+                            data={"agent_type": tc_name, "status": waiting_status},
+                        )
+                        loop_broken = True
+                    else:
+                        # Regular tool or completed Agent-Tool
+                        if isinstance(result, AgentToolResult):
+                            result_text = result.result_text
+                        else:
+                            result_text = str(result) if result is not None else ""
+                        result_text = self._context_manager.truncate_tool_result(result_text)
+                        messages.append(self._build_tool_result_message(tc.id, result_text))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary={},
+                            result_chars=len(result_text),
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={"tool_name": tc_name, "call_id": tc.id, "success": True},
+                        )
+
+                if loop_broken:
+                    break
+        else:
+            # max_turns reached: ask LLM for summary without tools
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You have used all available turns. Please provide your best "
+                    "final answer based on the information gathered so far."
+                ),
+            })
+            try:
+                response = await self._llm_call_with_retry(messages, tool_schemas=None)
+                final_text = getattr(response.choices[0].message, "content", "") or ""
+            except Exception:
+                final_text = "I was unable to complete the request within the allowed turns."
+
+            yield AgentEvent(
+                type=EventType.MESSAGE_START,
+                data={"turn": turn},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_CHUNK,
+                data={"chunk": final_text},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_END,
+                data={},
+            )
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        yield AgentEvent(
+            type=EventType.EXECUTION_END,
+            data={
+                "duration_ms": duration_ms,
+                "turns": turn,
+                "tool_calls_count": len(all_tool_records),
+            },
+        )
+
+    # ==========================================================================
+    # REACT LOOP
+    # ==========================================================================
+
+    async def react_loop(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_schemas: List[Dict[str, Any]],
+        tenant_id: str,
+    ) -> ReactLoopResult:
+        """
+        Core ReAct (Reasoning + Acting) loop.
+
+        Iterates up to max_turns times:
+        1. Trim context if needed
+        2. Call LLM with messages + tool schemas
+        3. If no tool_calls -> final answer, return
+        4. If tool_calls -> execute all concurrently
+        5. Append results to messages, continue
+
+        Args:
+            messages: Initial LLM message list (system + history + user)
+            tool_schemas: Combined regular tool + agent-tool schemas
+            tenant_id: Tenant identifier for tool execution context
+
+        Returns:
+            ReactLoopResult with response, turns, tool records, token usage, etc.
+        """
+        start_time = time.monotonic()
+        all_tool_records: List[ToolCallRecord] = []
+        total_usage = TokenUsage()
+        pending_approvals = []
+        final_response = ""
+        turns_executed = 0
+
+        for turn in range(1, self._react_config.max_turns + 1):
+            turns_executed = turn
+
+            # Defense 2: context guard
+            messages = self._context_manager.trim_if_needed(messages)
+
+            # LLM call with retry
+            response = await self._llm_call_with_retry(messages, tool_schemas)
+
+            # Accumulate token usage
+            usage = getattr(response, "usage", None)
+            if usage:
+                total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
+                total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
+
+            resp_message = response.choices[0].message
+            tool_calls = getattr(resp_message, "tool_calls", None)
+
+            # No tool calls -> final answer
+            if not tool_calls:
+                final_response = getattr(resp_message, "content", "") or ""
+                break
+
+            # Append assistant message with tool_calls to conversation
+            messages.append(self._assistant_message_from_response(resp_message))
+
+            # Execute all tool calls concurrently
+            tc_start = time.monotonic()
+            results = await asyncio.gather(
+                *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
+                return_exceptions=True,
+            )
+
+            loop_broken = False
+            for tc, result in zip(tool_calls, results):
+                tc_name = tc.function.name
+                tc_duration = int((time.monotonic() - tc_start) * 1000)
+
+                try:
+                    args_summary = json.loads(tc.function.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    args_summary = {}
+                # Truncate args for observability
+                args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
+
+                if isinstance(result, BaseException):
+                    # Exception -> error message as tool_result
+                    error_text = f"Error executing {tc_name}: {result}"
+                    messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
+                    all_tool_records.append(ToolCallRecord(
+                        name=tc_name,
+                        args_summary=args_summary,
+                        duration_ms=tc_duration,
+                        success=False,
+                        result_chars=len(error_text),
+                    ))
+
+                elif isinstance(result, AgentToolResult) and not result.completed:
+                    # Agent-Tool not completed -> store in Pool, collect ApprovalRequest
+                    if result.agent:
+                        await self.agent_pool.add_agent(result.agent)
+                    if result.approval_request:
+                        pending_approvals.append(result.approval_request)
+
+                    waiting_text = result.result_text or "Agent is waiting for further input."
+                    messages.append(self._build_tool_result_message(tc.id, waiting_text))
+                    all_tool_records.append(ToolCallRecord(
+                        name=tc_name,
+                        args_summary=args_summary,
+                        duration_ms=tc_duration,
+                        success=True,
+                        result_status="WAITING_FOR_APPROVAL" if result.approval_request else "WAITING_FOR_INPUT",
+                        result_chars=len(waiting_text),
+                    ))
+                    loop_broken = True
+
+                else:
+                    # Regular tool or completed Agent-Tool
+                    if isinstance(result, AgentToolResult):
+                        result_text = result.result_text
+                    else:
+                        result_text = str(result) if result is not None else ""
+
+                    # Defense 1: truncate individual tool result
+                    result_text = self._context_manager.truncate_tool_result(result_text)
+                    messages.append(self._build_tool_result_message(tc.id, result_text))
+
+                    all_tool_records.append(ToolCallRecord(
+                        name=tc_name,
+                        args_summary=args_summary,
+                        duration_ms=tc_duration,
+                        success=True,
+                        result_status="COMPLETED" if isinstance(result, AgentToolResult) else None,
+                        result_chars=len(result_text),
+                    ))
+
+            if loop_broken:
+                # Collect batch approvals if any
+                if pending_approvals:
+                    pending_approvals = collect_batch_approvals(pending_approvals)
+                # Do one more LLM call to get a response acknowledging the waiting state
+                messages.append({
+                    "role": "user",
+                    "content": "Some agent-tools are waiting for user input or approval. Summarize what has been done and what is pending.",
+                })
+                try:
+                    summary_resp = await self._llm_call_with_retry(messages, tool_schemas=None)
+                    final_response = getattr(summary_resp.choices[0].message, "content", "") or ""
+                except Exception:
+                    final_response = "Some actions require your approval before proceeding."
+                break
+
+        else:
+            # max_turns reached without a final answer
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You have used all available turns. Please provide your best "
+                    "final answer based on the information gathered so far."
+                ),
+            })
+            try:
+                response = await self._llm_call_with_retry(messages, tool_schemas=None)
+                final_response = getattr(response.choices[0].message, "content", "") or ""
+                usage = getattr(response, "usage", None)
+                if usage:
+                    total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
+                    total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
+            except Exception:
+                final_response = "I was unable to complete the request within the allowed turns."
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        return ReactLoopResult(
+            response=final_response,
+            turns=turns_executed,
+            tool_calls=all_tool_records,
+            token_usage=total_usage,
+            duration_ms=duration_ms,
+            pending_approvals=pending_approvals,
+        )
+
+    # ==========================================================================
+    # REACT LOOP HELPERS
+    # ==========================================================================
+
+    async def _llm_call_with_retry(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_schemas: Optional[List[Dict[str, Any]]],
+    ) -> Any:
+        """LLM call with error recovery strategy per design doc section 3.3.
+
+        - RateLimitError -> exponential backoff
+        - ContextOverflowError -> three-step recovery (trim -> truncate_all -> force_trim)
+        - AuthError -> raise immediately
+        - TimeoutError -> retry once
+        """
+        last_error = None
+        for attempt in range(self._react_config.llm_max_retries + 1):
+            try:
+                kwargs: Dict[str, Any] = {"messages": messages}
+                if tool_schemas:
+                    kwargs["tools"] = tool_schemas
+                return await self.llm_client.chat_completion(**kwargs)
+
+            except Exception as e:
+                last_error = e
+                error_name = type(e).__name__.lower()
+
+                # Auth errors: raise immediately
+                if "auth" in error_name or "authentication" in error_name or "permission" in error_name:
+                    raise
+
+                # Rate limit: exponential backoff
+                if "ratelimit" in error_name or "rate_limit" in error_name or "429" in str(e):
+                    delay = self._react_config.llm_retry_base_delay * (2 ** attempt)
+                    logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1})")
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Context overflow: three-step recovery
+                if "context" in error_name or "overflow" in error_name or "token" in error_name or "length" in str(e).lower():
+                    if attempt == 0:
+                        logger.warning("Context overflow, trimming history")
+                        messages = self._context_manager.trim_if_needed(messages)
+                    elif attempt == 1:
+                        logger.warning("Context overflow persists, truncating all tool results")
+                        messages = self._context_manager.truncate_all_tool_results(messages)
+                    else:
+                        logger.warning("Context overflow persists, force trimming")
+                        messages = self._context_manager.force_trim(messages)
+                    continue
+
+                # Timeout: retry once
+                if "timeout" in error_name:
+                    if attempt == 0:
+                        logger.warning("LLM timeout, retrying once")
+                        continue
+                    raise
+
+                # Unknown error: retry with backoff
+                if attempt < self._react_config.llm_max_retries:
+                    delay = self._react_config.llm_retry_base_delay * (2 ** attempt)
+                    logger.warning(f"LLM call failed ({e}), retrying in {delay}s")
+                    await asyncio.sleep(delay)
+                    continue
+
+                raise
+
+        raise last_error  # type: ignore[misc]
+
+    async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
+        """Execute a single tool/agent-tool with timeout."""
+        tool_name = tool_call.function.name
+        is_agent = self._is_agent_tool(tool_name)
+        timeout = (
+            self._react_config.agent_tool_execution_timeout
+            if is_agent
+            else self._react_config.tool_execution_timeout
+        )
+
+        try:
+            return await asyncio.wait_for(
+                self._execute_single(tool_call, tenant_id),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            kind = "Agent-Tool" if is_agent else "Tool"
+            raise TimeoutError(f"{kind} '{tool_name}' timed out after {timeout}s")
+
+    async def _execute_single(self, tool_call: Any, tenant_id: str) -> Any:
+        """Dispatch to agent-tool or regular tool execution."""
+        tool_name = tool_call.function.name
+        try:
+            args = json.loads(tool_call.function.arguments)
+        except (json.JSONDecodeError, TypeError):
+            args = {}
+
+        if self._is_agent_tool(tool_name):
+            # Agent-Tool execution
+            task_instruction = args.pop("task_instruction", "")
+            return await execute_agent_tool(
+                self,
+                agent_type=tool_name,
+                tenant_id=tenant_id,
+                tool_call_args=args,
+                task_instruction=task_instruction,
+            )
+        else:
+            # Regular tool execution
+            if not self._agent_registry:
+                return f"Error: No tool registry available to execute '{tool_name}'"
+
+            tool_def = self._agent_registry.tool_registry.get_tool(tool_name)
+            if not tool_def:
+                return f"Error: Tool '{tool_name}' not found"
+
+            context = ToolExecutionContext(
+                user_id=tenant_id,
+                credentials=self.credential_store,
+            )
+            return await tool_def.executor(args, context)
+
+    def _is_agent_tool(self, tool_name: str) -> bool:
+        """Check if tool_name corresponds to a registered agent."""
+        if not self._agent_registry:
+            return False
+        return self._agent_registry.get_agent_class(tool_name) is not None
+
+    def _build_tool_result_message(
+        self,
+        tool_call_id: str,
+        content: str,
+        is_error: bool = False,
+    ) -> Dict[str, Any]:
+        """Build a tool result message for the LLM messages list."""
+        return {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+        }
+
+    @staticmethod
+    def _assistant_message_from_response(resp_message: Any) -> Dict[str, Any]:
+        """Convert LLM response message to dict for the messages list."""
+        msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": getattr(resp_message, "content", None),
+        }
+        tool_calls = getattr(resp_message, "tool_calls", None)
+        if tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in tool_calls
+            ]
+        return msg
+
+    # ==========================================================================
+    # MESSAGE BUILDING
+    # ==========================================================================
+
+    async def _check_pending_agents(
+        self,
+        tenant_id: str,
+        message: str,
+        context: Dict[str, Any],
+    ) -> Optional[AgentResult]:
+        """Check Pool for WAITING agents and route message to them.
+
+        If there's an agent in WAITING_FOR_INPUT or WAITING_FOR_APPROVAL state,
+        route the user's message to that agent.
+
+        Returns:
+            AgentResult if a pending agent handled the message, None otherwise.
+        """
+        agents = await self.agent_pool.list_agents(tenant_id)
+        for agent in agents:
+            if agent.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
+                try:
+                    metadata = context.get("metadata", {})
+                    msg = Message(
+                        name=metadata.get("sender_name", ""),
+                        content=message,
+                        role=metadata.get("sender_role", "user"),
+                        metadata=metadata,
+                    )
+                    result = await agent.reply(msg)
+                    agent.status = result.status
+
+                    # Update or remove from pool
+                    if agent.status in AgentStatus.terminal_states():
+                        await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
+                    else:
+                        await self.agent_pool.update_agent(agent)
+
+                    return result
+                except Exception as e:
+                    logger.error(f"Failed to route to pending agent {agent.agent_id}: {e}")
+                    return AgentResult(
+                        agent_type=agent.agent_type,
+                        status=AgentStatus.ERROR,
+                        error_message=str(e),
+                        agent_id=agent.agent_id,
+                    )
+        return None
+
+    def _build_llm_messages(
+        self,
+        context: Dict[str, Any],
+        user_message: str,
+    ) -> List[Dict[str, Any]]:
+        """Build the initial LLM message list.
+
+        Contains:
+        - System prompt + recalled memories
+        - Conversation history (from Momex short-term memory)
+        - Current user message
+        """
+        messages: List[Dict[str, Any]] = []
+
+        # System prompt + recalled memories
+        system_parts = []
+        if self.system_prompt:
+            system_parts.append(self.system_prompt)
+
+        recalled = context.get("recalled_memories", [])
+        if recalled:
+            memory_lines = []
+            for m in recalled:
+                if isinstance(m, dict):
+                    memory_lines.append(m.get("memory", m.get("text", str(m))))
+                else:
+                    memory_lines.append(str(m))
+            if memory_lines:
+                system_parts.append(
+                    "\n[Recalled user context]\n" + "\n".join(memory_lines)
+                )
+
+        if system_parts:
+            messages.append({
+                "role": "system",
+                "content": "\n\n".join(system_parts),
+            })
+
+        # Conversation history (from Momex short-term memory)
+        history = context.get("conversation_history", [])
+        if history:
+            messages.extend(history)
+
+        # Current user message
+        messages.append({
+            "role": "user",
+            "content": user_message,
+        })
+
+        return messages
+
+    def _build_tool_schemas(self) -> List[Dict[str, Any]]:
+        """Build combined tool schemas: regular tools + agent-tools."""
+        schemas: List[Dict[str, Any]] = []
+
+        if not self._agent_registry:
+            return schemas
+
+        # Regular tools
+        all_tools = self._agent_registry.tool_registry.get_all_tools()
+        for tool in all_tools:
+            schemas.append(tool.to_openai_schema())
+
+        # Agent-tools
+        agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
+        schemas.extend(agent_tool_schemas)
+
+        return schemas
 
     # ==========================================================================
     # EXTENSION POINTS - Override these in subclasses
@@ -336,12 +1074,13 @@ class Orchestrator:
         metadata: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Prepare context for routing and execution.
+        Prepare context for processing.
+
+        Automatically loads conversation history and recalls relevant
+        long-term memories from Momex.
 
         Override to add:
-        - User memories from vector DB
         - User preferences/tier info
-        - Chat history
         - Custom metadata
 
         Args:
@@ -360,12 +1099,35 @@ class Orchestrator:
         # Get active agents
         active_agents = await self.agent_pool.list_agents(tenant_id)
 
-        return {
+        meta = metadata or {}
+        session_id = meta.get("session_id", tenant_id)
+
+        context: Dict[str, Any] = {
             "tenant_id": tenant_id,
+            "session_id": session_id,
             "message": message,
-            "metadata": metadata or {},
+            "metadata": meta,
             "active_agents": active_agents,
         }
+
+        # Load conversation history (short-term memory)
+        history = await self.momex.get_history(
+            tenant_id=tenant_id,
+            session_id=session_id,
+        )
+        if history:
+            context["conversation_history"] = history
+
+        # Recall relevant long-term memories
+        recalled = await self.momex.search(
+            tenant_id=tenant_id,
+            query=message,
+            limit=10,
+        )
+        if recalled:
+            context["recalled_memories"] = recalled
+
+        return context
 
     async def should_process(
         self,
@@ -375,9 +1137,11 @@ class Orchestrator:
         """
         Check if message should be processed.
 
+        Built-in checks (when configured via __init__):
+        - guardrails_checker: safety/content filter
+        - rate_limiter: per-tenant rate limiting
+
         Override to add:
-        - Guardrails/safety checks
-        - Rate limiting
         - Tier access control
         - Feature flags
         - Input validation
@@ -389,6 +1153,31 @@ class Orchestrator:
         Returns:
             True to continue processing, False to reject
         """
+        # Guardrails check
+        if self.guardrails_checker:
+            try:
+                safety_result = await self.guardrails_checker.check_input(message)
+                if safety_result.get("blocked"):
+                    context["rejection_reason"] = "blocked"
+                    context["rejection_detail"] = safety_result.get("reason", "")
+                    logger.warning(f"Input blocked by guardrails: {safety_result.get('reason')}")
+                    return False
+            except Exception as e:
+                logger.error(f"Guardrails check failed: {e}")
+
+        # Rate limiter check
+        if self.rate_limiter:
+            try:
+                tenant_id = context["tenant_id"]
+                limit_result = await self.rate_limiter(tenant_id, context)
+                if not limit_result.get("allowed", True):
+                    context["rejection_reason"] = "rate_limited"
+                    context["rate_limit_info"] = limit_result
+                    logger.warning(f"Rate limited: tenant={tenant_id}")
+                    return False
+            except Exception as e:
+                logger.error(f"Rate limiter check failed: {e}")
+
         return True
 
     async def reject_message(
@@ -413,77 +1202,6 @@ class Orchestrator:
             status=AgentStatus.COMPLETED,
         )
 
-    async def route_message(
-        self,
-        message: str,
-        context: Dict[str, Any]
-    ) -> RoutingDecision:
-        """
-        Route message to appropriate agent.
-
-        Override for custom routing logic, e.g.:
-        - Custom LLM prompt with memories
-        - Rule-based routing
-        - ML-based intent classification
-
-        Args:
-            message: User message
-            context: Context from prepare_context()
-
-        Returns:
-            RoutingDecision specifying what to do
-        """
-        if self._router:
-            return await self._router.route(
-                tenant_id=context["tenant_id"],
-                message=message,
-                active_agents=context.get("active_agents", []),
-                metadata=context.get("metadata", {})
-            )
-
-        # No router available - route to default agent
-        return RoutingDecision(
-            action=RoutingAction.ROUTE_TO_DEFAULT,
-            agent_type=self.config.default_agent_type,
-            confidence=0.0,
-            reason=RoutingReason.NO_ROUTER
-        )
-
-    async def get_or_create_agent(
-        self,
-        tenant_id: str,
-        decision: RoutingDecision,
-        context: Dict[str, Any]
-    ) -> Optional[StandardAgent]:
-        """
-        Get existing agent or create new one based on routing decision.
-
-        Override to customize agent creation, e.g.:
-        - Inject custom dependencies
-        - Add tenant-specific configuration
-        - Modify context_hints
-
-        Args:
-            tenant_id: Tenant identifier
-            decision: Routing decision
-            context: Context from prepare_context()
-
-        Returns:
-            Agent instance or None if creation failed
-        """
-        if decision.action == RoutingAction.ROUTE_TO_EXISTING:
-            return await self.agent_pool.get_agent(tenant_id, decision.agent_id)
-
-        if decision.action in (RoutingAction.CREATE_NEW, RoutingAction.ROUTE_TO_DEFAULT):
-            return await self.create_agent(
-                tenant_id=tenant_id,
-                agent_type=decision.agent_type,
-                context_hints=decision.context_hints,
-                context=context
-            )
-
-        return None
-
     async def create_agent(
         self,
         tenant_id: str,
@@ -502,7 +1220,7 @@ class Orchestrator:
         Args:
             tenant_id: Tenant identifier
             agent_type: Type of agent to create
-            context_hints: Hints extracted from message
+            context_hints: Hints extracted from message (pre-populates fields)
             context: Full context dict
 
         Returns:
@@ -513,8 +1231,6 @@ class Orchestrator:
             return None
 
         try:
-            # Use AgentRegistry.create_agent() to respect agent's LLM setting
-            # Priority: 1. agent's llm, 2. default llm, 3. orchestrator's llm
             agent = self._agent_registry.create_agent(
                 name=agent_type,
                 tenant_id=tenant_id,
@@ -542,202 +1258,6 @@ class Orchestrator:
             logger.error(f"Failed to create agent {agent_type}: {e}")
             return None
 
-    async def execute_agent(
-        self,
-        agent: StandardAgent,
-        message: str,
-        context: Dict[str, Any]
-    ) -> AgentResult:
-        """
-        Execute agent with message.
-
-        Override to customize execution:
-        - Add pre/post execution hooks
-        - Modify message before sending
-        - Add execution metrics
-
-        Args:
-            agent: Agent to execute
-            message: User message
-            context: Context dict (may contain "sender_name" and "sender_role")
-
-        Returns:
-            AgentResult from agent
-        """
-        try:
-            # Pre-execution: inject recalled memories if enable_memory is set
-            await self._inject_memories(agent, message, context)
-
-            metadata = context.get("metadata", {})
-            msg = Message(
-                name=metadata.get("sender_name", ""),
-                content=message,
-                role=metadata.get("sender_role", ""),
-                metadata=metadata
-            )
-
-            result = await agent.reply(msg)
-
-            # Post-execution: store memories if enable_memory is set
-            await self._store_memories(agent, message, result, context)
-
-            # Update agent status
-            agent.status = result.status
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Agent execution failed: {e}")
-            return AgentResult(
-                agent_type=agent.agent_type,
-                status=AgentStatus.ERROR,
-                error_message=str(e),
-                agent_id=agent.agent_id
-            )
-
-    async def _inject_memories(
-        self,
-        agent: StandardAgent,
-        message: str,
-        context: Dict[str, Any]
-    ) -> None:
-        """
-        Inject recalled memories into agent if enable_memory is set.
-
-        Override to customize memory recall logic.
-
-        Args:
-            agent: The agent to inject memories into
-            message: User message (used for memory search)
-            context: Context dict
-        """
-        # Check if agent has enable_memory set in config
-        if not self._agent_registry:
-            return
-
-        agent_config = self._agent_registry.get_agent_config(agent.__class__.__name__)
-        if not agent_config or not agent_config.enable_memory:
-            return
-
-        # Memory manager must be provided by subclass
-        memory_manager = getattr(self, 'memory_manager', None)
-        if not memory_manager:
-            logger.debug(f"Memory enabled for {agent.__class__.__name__} but no memory_manager available")
-            return
-
-        # Recall memories
-        try:
-            tenant_id = context.get("tenant_id", agent.tenant_id)
-            memories = await memory_manager.search(
-                query=message,
-                user_id=tenant_id,
-                limit=10
-            )
-
-            if memories:
-                agent.set_recalled_memories(memories)
-                logger.debug(f"Injected {len(memories)} memories into {agent.agent_id}")
-
-        except Exception as e:
-            logger.warning(f"Failed to recall memories for {agent.agent_id}: {e}")
-
-    async def _store_memories(
-        self,
-        agent: StandardAgent,
-        message: str,
-        result: AgentResult,
-        context: Dict[str, Any]
-    ) -> None:
-        """
-        Store memories after agent execution if enable_memory is set.
-
-        Override to customize memory storage logic.
-
-        Args:
-            agent: The executed agent
-            message: Original user message
-            result: Agent execution result
-            context: Context dict
-        """
-        # Check if agent has enable_memory set in config
-        if not self._agent_registry:
-            return
-
-        agent_config = self._agent_registry.get_agent_config(agent.__class__.__name__)
-        if not agent_config or not agent_config.enable_memory:
-            return
-
-        # Memory manager must be provided by subclass
-        memory_manager = getattr(self, 'memory_manager', None)
-        if not memory_manager:
-            return
-
-        # Only store if agent completed successfully
-        if result.status not in (AgentStatus.COMPLETED,):
-            return
-
-        # Store the interaction
-        try:
-            tenant_id = context.get("tenant_id", agent.tenant_id)
-
-            # Create memory content from conversation
-            memory_content = f"User: {message}\nAssistant: {result.raw_message}"
-
-            await memory_manager.add(
-                messages=memory_content,
-                user_id=tenant_id
-            )
-            logger.debug(f"Stored memory for {agent.agent_id}")
-
-        except Exception as e:
-            logger.warning(f"Failed to store memory for {agent.agent_id}: {e}")
-
-    async def handle_agent_error(
-        self,
-        decision: RoutingDecision,
-        context: Dict[str, Any]
-    ) -> AgentResult:
-        """
-        Handle agent creation/retrieval failure.
-
-        Override to customize error handling.
-
-        Args:
-            decision: The routing decision that failed
-            context: Context dict
-
-        Returns:
-            AgentResult - subclasses define the response
-        """
-        return AgentResult(
-            agent_type=self.__class__.__name__,
-            status=AgentStatus.ERROR,
-        )
-
-    async def update_pool_after_execution(
-        self,
-        tenant_id: str,
-        agent: StandardAgent,
-        result: AgentResult
-    ) -> None:
-        """
-        Update agent pool after execution.
-
-        Override to customize pool management:
-        - Custom cleanup logic
-        - Metrics tracking
-        - State persistence
-
-        Args:
-            tenant_id: Tenant identifier
-            agent: The executed agent
-            result: Execution result
-        """
-        if agent.status in AgentStatus.terminal_states():
-            await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
-        else:
-            await self.agent_pool.update_agent(agent)
-
     async def post_process(
         self,
         result: AgentResult,
@@ -746,12 +1266,20 @@ class Orchestrator:
         """
         Post-process result before returning to user.
 
+        Automatically saves conversation history and extracts long-term
+        knowledge via Momex.  Then runs guardrails output check and
+        any registered post_process_hooks.
+
         Override to add:
-        - Save to memory/database
         - Send notifications (SMS, push, email)
         - Wrap with personality/style
         - Add analytics/logging
         - Record API usage
+
+        Or use post_process_hooks (passed at __init__) to avoid subclassing:
+        - Profile detection as background task
+        - Usage recording
+        - Response wrapping / personality layer
 
         Args:
             result: Agent result
@@ -760,137 +1288,55 @@ class Orchestrator:
         Returns:
             Modified result
         """
+        tenant_id = context["tenant_id"]
+        session_id = context.get("session_id", tenant_id)
+        user_message = context.get("message", "")
+
+        # Build conversation messages for storage
+        messages = []
+        if user_message:
+            messages.append({"role": "user", "content": user_message})
+        if result.raw_message:
+            messages.append({"role": "assistant", "content": result.raw_message})
+
+        if messages:
+            # Save conversation history (short-term)
+            await self.momex.save_history(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                messages=messages,
+            )
+
+            # Long-term knowledge extraction
+            await self.momex.add(
+                tenant_id=tenant_id,
+                messages=messages,
+                infer=True,
+            )
+
+        # Guardrails output check
+        if self.guardrails_checker and result.raw_message:
+            try:
+                safety_result = await self.guardrails_checker.check_output(
+                    result.raw_message, tenant_id,
+                )
+                if safety_result.get("modified"):
+                    result.raw_message = safety_result.get("output", result.raw_message)
+            except Exception as e:
+                logger.error(f"Guardrails output check failed: {e}")
+
+        # Run registered post-process hooks
+        for hook in self._post_process_hooks:
+            try:
+                result = await hook(result, context)
+            except Exception as e:
+                logger.error(f"Post-process hook {hook.__name__} failed: {e}")
+
         return result
 
     # ==========================================================================
-    # STREAMING - Uses same extension points
+    # CALLBACK SYSTEM
     # ==========================================================================
-
-    async def stream_message(
-        self,
-        tenant_id: str,
-        message: str,
-        mode: StreamMode = StreamMode.EVENTS,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> AsyncIterator[AgentEvent]:
-        """
-        Stream agent execution events.
-
-        Uses the same extension points as handle_message().
-
-        Args:
-            tenant_id: Tenant identifier
-            message: User message text
-            mode: Stream mode
-            metadata: Optional message metadata
-
-        Yields:
-            AgentEvent objects
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # Prepare context (uses extension point)
-        context = await self.prepare_context(tenant_id, message, metadata)
-
-        # Check if should process (uses extension point)
-        if not await self.should_process(message, context):
-            result = await self.reject_message(message, context)
-            yield AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": result.raw_message}
-            )
-            return
-
-        # Route message (uses extension point)
-        decision = await self.route_message(message, context)
-
-        # Yield routing event
-        yield AgentEvent(
-            type=EventType.STATE_CHANGE,
-            data={
-                "routing_action": decision.action.value,
-                "agent_type": decision.agent_type,
-                "agent_id": decision.agent_id,
-                "reason": decision.reason,
-            }
-        )
-
-        # Handle workflow execution
-        if decision.action == RoutingAction.EXECUTE_WORKFLOW:
-            result = await self._execute_workflow(tenant_id, decision, context)
-            result = await self.post_process(result, context)
-            yield AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": result.raw_message}
-            )
-            return
-
-        # Get or create agent (handles ROUTE_TO_EXISTING, CREATE_NEW, ROUTE_TO_DEFAULT)
-        agent = await self.get_or_create_agent(tenant_id, decision, context)
-
-        if not agent:
-            result = await self.handle_agent_error(decision, context)
-            result = await self.post_process(result, context)
-            yield AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": result.raw_message}
-            )
-            return
-
-        # Stream agent execution
-        metadata = context.get("metadata", {})
-        msg = Message(
-            name=metadata.get("sender_name", ""),
-            content=message,
-            role=metadata.get("sender_role", ""),
-            metadata=metadata
-        )
-        async for event in agent.stream(msg, mode=mode):
-            yield event
-
-        # After streaming, construct result for pool update
-        result = AgentResult(
-            agent_type=agent.agent_type,
-            status=agent.status,
-            raw_message="",
-            agent_id=agent.agent_id
-        )
-
-        # Update agent pool
-        await self.update_pool_after_execution(tenant_id, agent, result)
-
-    # ==========================================================================
-    # INTERNAL METHODS
-    # ==========================================================================
-
-    async def _execute_workflow(
-        self,
-        tenant_id: str,
-        decision: RoutingDecision,
-        context: Dict[str, Any]
-    ) -> AgentResult:
-        """Execute a workflow."""
-        if not self.workflow_executor:
-            return AgentResult(
-                agent_type=self.__class__.__name__,
-                status=AgentStatus.ERROR,
-            )
-
-        try:
-            result = await self.workflow_executor.execute(
-                workflow_id=decision.workflow_id,
-                tenant_id=tenant_id,
-                inputs=decision.context_hints or {}
-            )
-            return result
-        except Exception as e:
-            logger.error(f"Workflow execution failed: {e}")
-            return AgentResult(
-                agent_type=self.__class__.__name__,
-                status=AgentStatus.ERROR,
-                error_message=str(e),
-            )
 
     def _create_callback_invoker(self, tenant_id: str) -> Callable:
         """
@@ -906,16 +1352,6 @@ class Orchestrator:
             name: str,
             data: Optional[Dict[str, Any]] = None
         ) -> Any:
-            """
-            Invoke a registered callback handler.
-
-            Args:
-                name: Name of the callback handler (registered via @callback_handler)
-                data: Callback parameters
-
-            Returns:
-                Result from the callback handler, or None if not found
-            """
             callback = AgentCallback(
                 event=name,
                 tenant_id=tenant_id,
@@ -931,20 +1367,12 @@ class Orchestrator:
 
         Looks up the registered handler by callback.event name and executes it.
         Override this method to add custom pre/post processing or fallback logic.
-
-        Args:
-            callback: The callback request from an agent
-
-        Returns:
-            Result from the handler, or None if no handler found
         """
-        # Look up method name from class-level handler map
         method_name = self._callback_handler_map.get(callback.event)
         if method_name is None:
             logger.warning(f"No callback handler registered for '{callback.event}'")
             return None
 
-        # Get bound method from instance
         handler = getattr(self, method_name, None)
         if handler is None:
             logger.error(f"Callback handler method '{method_name}' not found")
@@ -970,21 +1398,18 @@ class Orchestrator:
         Built-in callback: List all registered agents.
 
         Returns:
-            List of agent info dicts with name, description, group, etc.
-
-        Usage in agent:
-            agents = await self.orchestrator_callback("list_agents")
+            List of agent info dicts with name, description, etc.
         """
         if not self._agent_registry:
             return []
 
         result = []
-        for name, config in self._agent_registry.get_all_agents().items():
+        for name, metadata in self._agent_registry.get_all_agent_metadata().items():
             result.append({
                 "name": name,
-                "description": config.description,
-                "triggers": config.triggers,
-                "capabilities": config.capabilities,
+                "description": metadata.description,
+                "triggers": metadata.triggers,
+                "capabilities": getattr(metadata, "capabilities", []),
             })
         return result
 
@@ -995,12 +1420,6 @@ class Orchestrator:
 
         Args (in callback.data):
             agent_name: Name of the agent to look up
-
-        Returns:
-            Agent config dict or None if not found
-
-        Usage in agent:
-            config = await self.orchestrator_callback("get_agent_config", {"agent_name": "WeatherAgent"})
         """
         if not self._agent_registry:
             return None
@@ -1017,7 +1436,7 @@ class Orchestrator:
             "name": config.name,
             "description": config.description,
             "triggers": config.triggers,
-            "capabilities": config.capabilities,
+            "capabilities": getattr(config, "capabilities", []),
             "inputs": [{"name": i.name, "type": i.type} for i in config.inputs],
             "outputs": [{"name": o.name, "type": o.type} for o in config.outputs],
         }
@@ -1034,7 +1453,8 @@ class Orchestrator:
 
         try:
             count = await self.agent_pool.restore_all_sessions(
-                self._create_agent_from_entry
+                self._create_agent_from_entry,
+                agent_registry=self._agent_registry,
             )
             logger.info(f"Restored {count} agent sessions")
         except Exception as e:
@@ -1048,7 +1468,8 @@ class Orchestrator:
         try:
             await self.agent_pool.restore_tenant_session(
                 tenant_id,
-                self._create_agent_from_entry
+                self._create_agent_from_entry,
+                agent_registry=self._agent_registry,
             )
         except Exception as e:
             logger.error(f"Failed to restore session for tenant {tenant_id}: {e}")
@@ -1058,7 +1479,6 @@ class Orchestrator:
         if not self._agent_registry:
             raise RuntimeError("Cannot restore agent: no registry available")
 
-        # Use AgentRegistry.create_agent() to respect agent's LLM setting
         agent = self._agent_registry.create_agent(
             name=entry.agent_type,
             tenant_id=entry.tenant_id,
@@ -1082,6 +1502,40 @@ class Orchestrator:
     # ==========================================================================
     # AGENT MANAGEMENT API
     # ==========================================================================
+
+    async def list_pending_approvals(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """List all pending approvals for a tenant.
+
+        Queries the agent pool for WAITING_FOR_APPROVAL agents and
+        the trigger engine for PENDING_APPROVAL tasks.
+
+        Returns:
+            List of approval info dicts with agent_name, action_summary, source, etc.
+        """
+        results: List[Dict[str, Any]] = []
+
+        # Pool: agents waiting for approval
+        agents = await self.agent_pool.list_agents(tenant_id)
+        for agent in agents:
+            if agent.status == AgentStatus.WAITING_FOR_APPROVAL:
+                results.append({
+                    "agent_id": agent.agent_id,
+                    "agent_type": agent.agent_type,
+                    "source": "user",
+                })
+
+        # TriggerEngine: tasks pending approval
+        if self.trigger_engine:
+            pending_tasks = await self.trigger_engine.list_pending_approvals(tenant_id)
+            for task in pending_tasks:
+                results.append({
+                    "task_id": task.id,
+                    "task_name": task.name,
+                    "source": "trigger",
+                    "trigger_type": task.trigger.type.value,
+                })
+
+        return results
 
     async def list_agents(self, tenant_id: str) -> List[Dict[str, Any]]:
         """List all active agents for a tenant."""
@@ -1159,12 +1613,23 @@ class Orchestrator:
             logger.warning(f"Cannot resume agent {agent_id}: not paused (status: {agent.status})")
             return None
 
-        context = {"tenant_id": tenant_id}
-
         if message:
-            result = await self.execute_agent(agent, message, context)
+            metadata = {"tenant_id": tenant_id}
+            msg = Message(
+                name="",
+                content=message,
+                role="user",
+                metadata=metadata,
+            )
+            result = await agent.reply(msg)
+            agent.status = result.status
         else:
             result = await agent.resume()
 
-        await self.update_pool_after_execution(tenant_id, agent, result)
+        # Update or remove from pool
+        if agent.status in AgentStatus.terminal_states():
+            await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
+        else:
+            await self.agent_pool.update_agent(agent)
+
         return result

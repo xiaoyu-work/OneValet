@@ -47,3 +47,6 @@ Thumbs.db
 
 # MkDocs
 site/
+
+uv.lock
+py.typed

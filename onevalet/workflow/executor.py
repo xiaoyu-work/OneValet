@@ -782,7 +782,7 @@ class SimpleAgentFactory:
     Simple agent factory implementation for testing.
 
     In production, this would be replaced by the actual
-    AgentRegistry or ConfigLoader.
+    AgentRegistry.
     """
 
     def __init__(self, agent_classes: Optional[Dict[str, type]] = None):

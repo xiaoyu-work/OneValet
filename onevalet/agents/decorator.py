@@ -30,6 +30,7 @@ Usage:
             )
 """
 
+import hashlib
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Type, Callable, Union
@@ -48,6 +49,7 @@ class InputSpec:
     required: bool = True
     default: Any = None
     validator: Optional[Callable] = None
+    validator_description: Optional[str] = None
 
 
 @dataclass
@@ -94,6 +96,9 @@ class AgentMetadata:
     # Memory - if enabled, orchestrator will auto recall/store memories
     enable_memory: bool = False
 
+    # Whether this agent should be exposed as a tool in the ReAct loop
+    expose_as_tool: bool = True
+
     # Extra config (for app-specific extensions like required_tier)
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -127,6 +132,7 @@ def _extract_fields(cls: Type) -> tuple[List[InputSpec], List[OutputSpec]]:
                 required=value.required,
                 default=value.default,
                 validator=value.validator,
+                validator_description=getattr(value, 'validator_description', None),
             ))
 
         elif isinstance(value, OutputField):
@@ -147,6 +153,7 @@ def valet(
     llm: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
     enable_memory: bool = False,
+    expose_as_tool: bool = True,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Union[Type, Callable[[Type], Type]]:
     """
@@ -164,6 +171,7 @@ def valet(
         llm: LLM provider name (optional, uses default if not specified)
         capabilities: What this agent can do (for routing decisions)
         enable_memory: If True, orchestrator will auto recall/store memories
+        expose_as_tool: If True, agent is exposed as a tool in the ReAct loop (default: True)
         extra: App-specific extensions (e.g., required_tier)
 
     The decorator automatically extracts:
@@ -193,6 +201,7 @@ def valet(
             outputs=outputs,
             module=cls.__module__,
             enable_memory=enable_memory,
+            expose_as_tool=expose_as_tool,
             extra=extra or {},
         )
 
@@ -239,3 +248,121 @@ def is_valet(cls: Type) -> bool:
         True if decorated with @valet
     """
     return hasattr(cls, "_valet_metadata")
+
+
+# ===== Tool Schema Generation =====
+
+# Map Python type names to JSON Schema types
+_TYPE_MAP = {
+    "str": "string",
+    "int": "integer",
+    "float": "number",
+    "bool": "boolean",
+}
+
+
+def generate_tool_schema(agent_cls: Type) -> Dict[str, Any]:
+    """Generate OpenAI function-calling tool schema from a @valet decorated agent class.
+
+    Maps:
+    - Agent docstring -> tool description
+    - InputField list -> JSON Schema properties (name, type, description, required)
+    - Adds task_instruction parameter for natural language instructions
+    """
+    metadata: AgentMetadata = getattr(agent_cls, "_valet_metadata", None)
+    if metadata is None:
+        raise ValueError(f"{agent_cls.__name__} is not decorated with @valet")
+
+    properties: Dict[str, Any] = {}
+    required: List[str] = []
+
+    for inp in metadata.inputs:
+        # Determine JSON Schema type from the default value or fallback to string
+        type_name = type(inp.default).__name__ if inp.default is not None else "str"
+        json_type = _TYPE_MAP.get(type_name, "string")
+
+        prop: Dict[str, Any] = {
+            "type": json_type,
+            "description": inp.description,
+        }
+        properties[inp.name] = prop
+
+        if inp.required:
+            required.append(inp.name)
+
+    # Add task_instruction parameter
+    properties["task_instruction"] = {
+        "type": "string",
+        "description": (
+            "Natural language instructions for the agent. "
+            "Use this to pass context that doesn't map to specific input fields."
+        ),
+    }
+
+    return {
+        "type": "function",
+        "function": {
+            "name": metadata.name,
+            "description": metadata.description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+def enhance_agent_tool_schema(agent_cls: Type, schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Enhance auto-generated schema before exposing to LLM.
+
+    1. Inject validator constraints into parameter descriptions
+    2. Surface approval requirement in tool description
+    3. Add task_instruction usage guidance
+    """
+    from ..standard_agent import StandardAgent
+
+    metadata: AgentMetadata = getattr(agent_cls, "_valet_metadata", None)
+    if metadata is None:
+        return schema
+
+    func = schema.get("function", {})
+    props = func.get("parameters", {}).get("properties", {})
+
+    # 1. Inject validator constraints into parameter descriptions
+    for inp in metadata.inputs:
+        if inp.validator_description and inp.name in props:
+            existing = props[inp.name].get("description", "")
+            props[inp.name]["description"] = f"{existing} ({inp.validator_description})"
+
+    # 2. Surface approval requirement in tool description
+    # Check if the agent class overrides needs_approval from StandardAgent
+    if (
+        hasattr(agent_cls, "needs_approval")
+        and agent_cls.needs_approval is not StandardAgent.needs_approval
+    ):
+        existing_desc = func.get("description", "")
+        func["description"] = f"{existing_desc} [Requires user confirmation before execution]"
+
+    return schema
+
+
+def get_schema_version(agent_cls: Type) -> int:
+    """Compute schema version from InputField definitions.
+
+    Hash of InputField names, types, and required flags.
+    Changes when fields are added/removed/retyped.
+    """
+    metadata: AgentMetadata = getattr(agent_cls, "_valet_metadata", None)
+    if metadata is None:
+        return 0
+
+    parts: List[str] = []
+    for inp in sorted(metadata.inputs, key=lambda i: i.name):
+        type_name = type(inp.default).__name__ if inp.default is not None else "str"
+        parts.append(f"{inp.name}:{type_name}:{inp.required}")
+
+    hash_input = "|".join(parts)
+    digest = hashlib.sha256(hash_input.encode()).hexdigest()
+    # Return a stable integer from the first 8 hex chars
+    return int(digest[:8], 16)

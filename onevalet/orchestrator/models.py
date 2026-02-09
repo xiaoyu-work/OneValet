@@ -225,6 +225,7 @@ class AgentPoolEntry:
         execution_state: Runtime execution state
         context: User context
         checkpoint_id: Last checkpoint ID (if checkpointing enabled)
+        schema_version: Schema version derived from InputField definitions (default: 0)
     """
     agent_id: str
     agent_type: str
@@ -236,6 +237,7 @@ class AgentPoolEntry:
     execution_state: Dict[str, Any] = field(default_factory=dict)
     context: Dict[str, Any] = field(default_factory=dict)
     checkpoint_id: Optional[str] = None
+    schema_version: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
@@ -250,6 +252,7 @@ class AgentPoolEntry:
             "execution_state": self.execution_state,
             "context": self.context,
             "checkpoint_id": self.checkpoint_id,
+            "schema_version": self.schema_version,
         }
 
     @classmethod
@@ -268,6 +271,7 @@ class AgentPoolEntry:
             execution_state=data.get("execution_state", {}),
             context=data.get("context", {}),
             checkpoint_id=data.get("checkpoint_id"),
+            schema_version=data.get("schema_version", 0),
         )
 
 

@@ -76,12 +76,14 @@ class InputField:
         required: bool = True,
         default: Any = None,
         validator: Optional[Callable[[Any], Optional[str]]] = None,
+        validator_description: Optional[str] = None,
     ):
         self.prompt = prompt
         self.description = description or prompt
         self.required = required
         self.default = default
         self.validator = validator
+        self.validator_description = validator_description
         self.name: Optional[str] = None
 
     def __set_name__(self, owner: Type, name: str) -> None:

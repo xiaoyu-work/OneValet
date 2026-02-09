@@ -10,8 +10,6 @@ import asyncio
 from datetime import datetime
 from functools import wraps
 from typing import Dict, Any, List, Optional, Callable, Awaitable, TypeVar, Union
-import yaml
-
 from .models import (
     HookType,
     HookPhase,
@@ -182,6 +180,7 @@ class HookManager:
 
     def load_from_yaml(self, yaml_path: str) -> None:
         """Load hooks configuration from YAML file"""
+        import yaml
         with open(yaml_path, 'r') as f:
             config = yaml.safe_load(f)
 

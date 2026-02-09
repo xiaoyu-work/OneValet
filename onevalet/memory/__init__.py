@@ -60,14 +60,18 @@ from .manager import (
     configure_memory,
 )
 
+from .momex import MomexMemory
+
 __all__ = [
     # Models
     "MemoryConfig",
     "RecallResult",
     "StoreResult",
-    # Manager
+    # Manager (deprecated - use MomexMemory)
     "MemoryManager",
     "MemoryMixin",
     "get_memory_manager",
     "configure_memory",
+    # Momex (recommended)
+    "MomexMemory",
 ]

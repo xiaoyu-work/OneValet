@@ -190,6 +190,28 @@ class AgentRegistry:
 
         return None
 
+    def get_all_agent_tool_schemas(self) -> List[Dict[str, Any]]:
+        """Return enhanced tool schemas for all agents with expose_as_tool=True."""
+        from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
+
+        schemas = []
+        for name, metadata in self._get_agent_registry().items():
+            if not getattr(metadata, 'expose_as_tool', True):
+                continue
+            schema = generate_tool_schema(metadata.agent_class)
+            schema = enhance_agent_tool_schema(metadata.agent_class, schema)
+            schemas.append(schema)
+        return schemas
+
+    def get_schema_version(self, agent_type: str) -> Optional[int]:
+        """Return schema version for a registered agent type."""
+        from ..agents.decorator import get_schema_version
+
+        agent_class = self.get_agent_class(agent_type)
+        if agent_class is None:
+            return None
+        return get_schema_version(agent_class)
+
     def get_agent_descriptions(self) -> str:
         """
         Get formatted agent descriptions for LLM routing prompt.

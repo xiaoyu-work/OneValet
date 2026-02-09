@@ -126,6 +126,7 @@ class ToolExecutionContext:
     user_id: str
     account_spec: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    credentials: Optional[Any] = None  # CredentialStore instance, if available
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a value from metadata"""

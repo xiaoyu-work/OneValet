@@ -158,11 +158,18 @@ from .orchestrator import (
     Orchestrator,
     OrchestratorConfig,
     SessionConfig,
-    RoutingAction,
-    RoutingDecision,
     AgentPoolManager,
-    MessageRouter,
+    ReactLoopConfig,
+    ReactLoopResult,
+    ToolCallRecord,
+    TokenUsage,
 )
+
+# Credentials
+from .credentials import CredentialStore
+
+# Memory
+from .memory import MomexMemory
 
 # Formatter (Multi-model support)
 from .formatter import (
@@ -265,10 +272,15 @@ __all__ = [
     "Orchestrator",
     "OrchestratorConfig",
     "SessionConfig",
-    "RoutingAction",
-    "RoutingDecision",
     "AgentPoolManager",
-    "MessageRouter",
+    "ReactLoopConfig",
+    "ReactLoopResult",
+    "ToolCallRecord",
+    "TokenUsage",
+    # Credentials
+    "CredentialStore",
+    # Memory
+    "MomexMemory",
     # Formatter
     "Provider",
     "FormatterConfig",

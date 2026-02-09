@@ -1,6 +1,11 @@
 """
 OneValet Message Router - Routes messages to appropriate agents
 
+.. deprecated::
+    MessageRouter is deprecated. The Orchestrator now uses a ReAct loop
+    for message handling. This module is kept for backward compatibility
+    but will be removed in a future release.
+
 This module provides:
 - MessageRouter: Routes messages to agents based on triggers and context
 - Trigger matching for workflows and agents
@@ -10,7 +15,16 @@ This module provides:
 import json
 import re
 import logging
+import warnings
 from typing import List, Optional, Dict, Any, TYPE_CHECKING
+
+warnings.warn(
+    "onevalet.orchestrator.router is deprecated. "
+    "The Orchestrator now uses a ReAct loop for message handling. "
+    "MessageRouter will be removed in a future release.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from .models import RoutingAction, RoutingReason, RoutingDecision
 
