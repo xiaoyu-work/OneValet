@@ -68,3 +68,15 @@ model: llama2
 base_url: http://localhost:11434
 database: ${DATABASE_URL}
 ```
+
+### OpenAI-Compatible Endpoints
+
+For self-deployed models (Azure AI Foundry, vLLM, LiteLLM, etc.) that expose an OpenAI-compatible API, use `provider: openai` with a custom `base_url`:
+
+```yaml
+provider: openai
+model: your-deployment-name
+base_url: ${YOUR_ENDPOINT}
+api_key: ${YOUR_API_KEY}
+database: ${DATABASE_URL}
+```

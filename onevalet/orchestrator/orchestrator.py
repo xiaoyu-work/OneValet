@@ -1161,7 +1161,7 @@ class Orchestrator:
         }
 
         # Load conversation history (short-term memory)
-        history = await self.momex.get_history(
+        history = self.momex.get_history(
             tenant_id=tenant_id,
             session_id=session_id,
         )
@@ -1350,14 +1350,16 @@ class Orchestrator:
             messages.append({"role": "assistant", "content": result.raw_message})
 
         if messages:
-            # Save conversation history (short-term)
-            await self.momex.save_history(
-                tenant_id=tenant_id,
-                session_id=session_id,
-                messages=messages,
-            )
+            # Save conversation history (short-term, sync)
+            for msg in messages:
+                self.momex.save_message(
+                    tenant_id=tenant_id,
+                    session_id=session_id,
+                    content=msg["content"],
+                    role=msg["role"],
+                )
 
-            # Long-term knowledge extraction
+            # Long-term knowledge extraction (async)
             await self.momex.add(
                 tenant_id=tenant_id,
                 messages=messages,

@@ -150,9 +150,35 @@ class OneValet:
         self._credential_store = CredentialStore(db=self._database)
         await self._credential_store.ensure_table()
 
-        # 4. MomexMemory
+        # 4. MomexMemory — reuse LLM config from OneValet
         from .memory.momex import MomexMemory
-        self._momex = MomexMemory()
+        momex_provider = provider
+        # Map OneValet provider names to momex provider names
+        if momex_provider in ("gemini", "ollama"):
+            momex_provider = "openai"  # fallback: momex only supports openai/azure/anthropic/deepseek/qwen
+
+        # Embedding: reuse same key for openai/azure, otherwise require OPENAI_API_KEY
+        if provider in ("openai", "azure"):
+            embedding_api_key = api_key or ""
+            embedding_api_base = cfg.get("base_url", "") if provider == "azure" else ""
+        else:
+            embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
+            embedding_api_base = ""
+            if not embedding_api_key:
+                logger.warning(
+                    "OPENAI_API_KEY not set — memory embedding will not work. "
+                    "Set OPENAI_API_KEY for embedding support."
+                )
+
+        self._momex = MomexMemory(
+            llm_provider=momex_provider,
+            llm_model=model,
+            llm_api_key=api_key or "",
+            llm_api_base=cfg.get("base_url", ""),
+            database_url=cfg["database"],
+            embedding_api_key=embedding_api_key,
+            embedding_api_base=embedding_api_base,
+        )
 
         # 5. Agent discovery — scan builtin_agents
         from .agents.discovery import AgentDiscovery
