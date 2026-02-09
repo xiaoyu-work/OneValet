@@ -1,0 +1,98 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "flowagents"
+version = "0.1.1"
+description = "A zero-code AI workflow orchestration framework with state-driven agents"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [
+    { name = "FlowAgents Contributors" }
+]
+keywords = [
+    "agent",
+    "llm",
+    "ai",
+    "workflow",
+    "orchestration",
+    "state-machine",
+    "multi-agent",
+    "framework",
+    "zero-code",
+    "yaml",
+    "openai",
+    "anthropic",
+    "claude",
+    "gpt",
+    "streaming"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+# Core dependencies
+dependencies = [
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.18"]
+dashscope = ["dashscope>=1.14"]
+gemini = ["google-generativeai>=0.3"]
+ollama = ["httpx>=0.25"]
+mcp = ["mcp>=0.9"]
+all = [
+    "openai>=1.0",
+    "anthropic>=0.18",
+    "dashscope>=1.14",
+    "google-generativeai>=0.3",
+    "httpx>=0.25",
+    "mcp>=0.9",
+    "aiosqlite>=0.19",
+]
+
+[project.urls]
+Homepage = "https://github.com/xiaoyu-work/flowagents"
+Documentation = "https://xiaoyu-work.github.io/flowagents"
+Repository = "https://github.com/xiaoyu-work/flowagents"
+Issues = "https://github.com/xiaoyu-work/flowagents/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["flowagents"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

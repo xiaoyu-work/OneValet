@@ -1,0 +1,107 @@
+# FlowAgents Configuration Example
+# Agents are registered via @flowagent decorator, not YAML
+# This file configures: LLM providers, tools, MCP servers
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+llm:
+  default: main      # Default LLM for agents
+  routing: quick     # LLM for Orchestrator routing
+
+  providers:
+    main:
+      provider: openai
+      model: gpt-4o
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.7
+
+    quick:
+      provider: openai
+      model: gpt-4o-mini
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.3
+
+# =============================================================================
+# Tools - Define custom tools here
+# =============================================================================
+tools:
+  send_email:
+    description: Send an email via SMTP/API
+    module: myapp.tools.email
+    function: send_email
+    category: email
+    parameters:
+      type: object
+      properties:
+        to:
+          type: string
+          description: Recipient email address
+        subject:
+          type: string
+          description: Email subject
+        body:
+          type: string
+          description: Email body content
+      required:
+        - to
+        - subject
+        - body
+
+  search_contacts:
+    description: Search contacts by name or email
+    module: myapp.tools.contacts
+    function: search_contacts
+    category: utility
+    parameters:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Search query
+        limit:
+          type: integer
+          description: Maximum results
+          default: 10
+      required:
+        - query
+
+# =============================================================================
+# MCP Servers - Define MCP server connections here
+# =============================================================================
+mcp_servers:
+  gmail:
+    transport: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-gmail"
+    env:
+      GMAIL_CREDENTIALS: "${HOME}/.config/gmail/credentials.json"
+    enabled: true
+
+  google_calendar:
+    transport: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-google-calendar"
+    env:
+      GOOGLE_CREDENTIALS: "${HOME}/.config/google/credentials.json"
+    enabled: true
+
+  filesystem:
+    transport: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@anthropic/mcp-server-filesystem"
+      - "/allowed/directory"
+    enabled: false
+
+# =============================================================================
+# Settings
+# =============================================================================
+settings:
+  max_tool_iterations: 10
+  log_level: INFO

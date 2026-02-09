@@ -1,0 +1,62 @@
+site_name: FlowAgents
+site_description: Zero-code AI workflow orchestration framework
+site_url: https://xiaoyu-work.github.io/flowagents
+repo_url: https://github.com/xiaoyu-work/flowagents
+repo_name: xiaoyu-work/flowagents
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Core Concepts:
+    - Agents: agents.md
+    - Tools: tools.md
+    - LLM Providers: llm-providers.md
+  - Advanced:
+    - Orchestrator: orchestrator.md
+    - Workflow: workflow.md
+    - Streaming: streaming.md
+    - Memory: memory.md
+    - MCP: mcp.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/xiaoyu-work/flowagents
