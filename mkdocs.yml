@@ -1,8 +1,8 @@
-site_name: FlowAgents
-site_description: Zero-code AI workflow orchestration framework
-site_url: https://xiaoyu-work.github.io/flowagents
-repo_url: https://github.com/xiaoyu-work/flowagents
-repo_name: xiaoyu-work/flowagents
+site_name: OneValet
+site_description: Personal AI agent framework
+site_url: https://xiaoyu-work.github.io/onevalet
+repo_url: https://github.com/xiaoyu-work/onevalet
+repo_name: xiaoyu-work/onevalet
 
 theme:
   name: material
@@ -59,4 +59,4 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/xiaoyu-work/flowagents
+      link: https://github.com/xiaoyu-work/onevalet

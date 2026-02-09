@@ -1,17 +1,17 @@
 # MCP Integration
 
-FlowAgents natively supports the Model Context Protocol (MCP) for tool extensibility.
+OneValet natively supports the Model Context Protocol (MCP) for tool extensibility.
 
 ## What is MCP?
 
-MCP (Model Context Protocol) is an open protocol that enables AI models to securely access external tools and data sources. FlowAgents can connect to any MCP-compatible server.
+MCP (Model Context Protocol) is an open protocol that enables AI models to securely access external tools and data sources. OneValet can connect to any MCP-compatible server.
 
 ## Quick Start
 
 ### Connect to MCP Server
 
 ```python
-from flowagents import MCPClient
+from onevalet import MCPClient
 
 # Connect via stdio
 client = MCPClient(
@@ -33,9 +33,9 @@ result = await client.call_tool("read_file", {"path": "/path/to/file.txt"})
 ### Use with Agent
 
 ```python
-from flowagents import StandardAgent, flowagent
+from onevalet import StandardAgent, valet
 
-@flowagent(mcp_servers=["filesystem"])
+@valet(mcp_servers=["filesystem"])
 class FileAgent(StandardAgent):
     """Agent that can read and write files via MCP"""
 
@@ -82,7 +82,7 @@ client = MCPClient(
 ## Configuration via YAML
 
 ```yaml
-# flowagents.yaml
+# onevalet.yaml
 mcp_servers:
   filesystem:
     transport: stdio
@@ -106,7 +106,7 @@ mcp_servers:
 Register MCP servers as tool providers:
 
 ```python
-from flowagents import MCPToolProvider, ToolRegistry
+from onevalet import MCPToolProvider, ToolRegistry
 
 # Create provider from client
 provider = MCPToolProvider(client)

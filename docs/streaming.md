@@ -1,11 +1,11 @@
 # Streaming
 
-FlowAgents supports real-time streaming for better user experience.
+OneValet supports real-time streaming for better user experience.
 
 ## Quick Start
 
 ```python
-from flowagents import StreamEngine, StreamMode, EventType
+from onevalet import StreamEngine, StreamMode, EventType
 
 engine = StreamEngine(mode=StreamMode.INCREMENTAL)
 
@@ -40,7 +40,7 @@ async for event in engine.stream(agent, message):
 ## Handling Events
 
 ```python
-from flowagents import EventType
+from onevalet import EventType
 
 async for event in engine.stream(agent, message):
     match event.type:
@@ -80,7 +80,7 @@ async for event in orchestrator.process_stream(
 All built-in LLM clients support streaming:
 
 ```python
-from flowagents import OpenAIClient
+from onevalet import OpenAIClient
 
 client = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
 

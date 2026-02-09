@@ -3,9 +3,9 @@
 ## Basic Agent
 
 ```python
-from flowagents import flowagent, StandardAgent, InputField, AgentStatus
+from onevalet import valet, StandardAgent, InputField, AgentStatus
 
-@flowagent
+@valet
 class BookingAgent(StandardAgent):
     guests = InputField("How many guests?")
     date = InputField("What date?")
@@ -39,7 +39,7 @@ def validate_guests(value):
         raise ValueError("1-20 guests only")
     return True
 
-@flowagent
+@valet
 class BookingAgent(StandardAgent):
     guests = InputField("How many guests?", validator=validate_guests)
 ```
@@ -49,7 +49,7 @@ class BookingAgent(StandardAgent):
 Override to customize behavior at each state:
 
 ```python
-@flowagent
+@valet
 class MyAgent(StandardAgent):
     name = InputField("Name?")
 
@@ -82,7 +82,7 @@ Most handlers have good defaults. You usually only need to override `on_running`
 ## Approval Flow
 
 ```python
-@flowagent(requires_approval=True)
+@valet(requires_approval=True)
 class DeleteAgent(StandardAgent):
     item = InputField("What to delete?")
 
@@ -99,9 +99,9 @@ class DeleteAgent(StandardAgent):
 ## Output Fields
 
 ```python
-from flowagents import flowagent, StandardAgent, InputField, OutputField, AgentStatus
+from onevalet import valet, StandardAgent, InputField, OutputField, AgentStatus
 
-@flowagent
+@valet
 class BookingAgent(StandardAgent):
     guests = InputField("How many?")
 

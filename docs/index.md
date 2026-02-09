@@ -1,6 +1,6 @@
-# FlowAgents Documentation
+# OneValet Documentation
 
-Welcome to FlowAgents - a zero-code AI workflow orchestration framework.
+Welcome to OneValet - a personal AI agent framework.
 
 ## Getting Started
 

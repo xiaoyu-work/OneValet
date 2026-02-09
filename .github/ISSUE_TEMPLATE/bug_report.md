@@ -27,7 +27,7 @@ What actually happened.
 ## Environment
 
 - Python version:
-- FlowAgents version:
+- OneValet version:
 - OS:
 
 ## Additional Context

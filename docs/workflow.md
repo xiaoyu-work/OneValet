@@ -190,7 +190,7 @@ stages:
 
 ## Loading Workflows
 
-Configure workflow directory in `flowagents.yaml`:
+Configure workflow directory in `onevalet.yaml`:
 
 ```yaml
 workflows:

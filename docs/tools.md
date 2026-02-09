@@ -1,13 +1,13 @@
 # Tool System
 
-FlowAgents provides a tool system for LLM function calling.
+OneValet provides a tool system for LLM function calling.
 
 ## Quick Start
 
 ### Define a Tool
 
 ```python
-from flowagents import tool, ToolCategory, ToolExecutionContext
+from onevalet import tool, ToolCategory, ToolExecutionContext
 
 @tool(category=ToolCategory.UTILITY)
 async def check_availability(
@@ -35,7 +35,7 @@ The `@tool` decorator automatically:
 ### Execute Tools
 
 ```python
-from flowagents import ToolExecutor, ToolExecutionContext
+from onevalet import ToolExecutor, ToolExecutionContext
 
 executor = ToolExecutor(llm_client=my_llm_client)
 
@@ -49,7 +49,7 @@ result = await executor.run_with_tools(
 ## Tool Categories
 
 ```python
-from flowagents import ToolCategory
+from onevalet import ToolCategory
 
 @tool(category=ToolCategory.DATABASE)
 async def query_reservations(...): ...
@@ -67,7 +67,7 @@ async def calculate_total(...): ...
 ## Manual Registration
 
 ```python
-from flowagents import ToolRegistry, ToolDefinition
+from onevalet import ToolRegistry, ToolDefinition
 
 registry = ToolRegistry.get_instance()
 
@@ -110,7 +110,7 @@ async def book_table(
 ## Using Tools in Agents
 
 ```python
-@flowagent(tools=["check_availability", "book_table"])
+@valet(tools=["check_availability", "book_table"])
 class BookingAgent(StandardAgent):
     """Agent with tool access"""
 

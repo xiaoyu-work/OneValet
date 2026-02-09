@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "flowagents"
+name = "onevalet"
 version = "0.1.1"
-description = "A zero-code AI workflow orchestration framework with state-driven agents"
+description = "A personal AI agent framework with state-driven agents and ReAct orchestration"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 authors = [
-    { name = "FlowAgents Contributors" }
+    { name = "OneValet Contributors" }
 ]
 keywords = [
     "agent",
@@ -45,7 +45,6 @@ classifiers = [
 
 # Core dependencies
 dependencies = [
-    "pyyaml>=6.0",
     "pydantic>=2.0",
 ]
 
@@ -67,13 +66,13 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/xiaoyu-work/flowagents"
-Documentation = "https://xiaoyu-work.github.io/flowagents"
-Repository = "https://github.com/xiaoyu-work/flowagents"
-Issues = "https://github.com/xiaoyu-work/flowagents/issues"
+Homepage = "https://github.com/xiaoyu-work/onevalet"
+Documentation = "https://xiaoyu-work.github.io/onevalet"
+Repository = "https://github.com/xiaoyu-work/onevalet"
+Issues = "https://github.com/xiaoyu-work/onevalet/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["flowagents"]
+packages = ["onevalet"]
 
 [tool.black]
 line-length = 100

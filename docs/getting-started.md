@@ -1,26 +1,26 @@
 # Getting Started
 
-Build your first AI agent with FlowAgents in 5 minutes.
+Build your first AI agent with OneValet in 5 minutes.
 
 ## Installation
 
 ```bash
-pip install flowagents
+pip install onevalet
 
 # With a specific LLM provider
-pip install flowagents[openai]
+pip install onevalet[openai]
 
 # With all providers
-pip install flowagents[all]
+pip install onevalet[all]
 ```
 
 ## Your First Agent
 
 ```python
 import asyncio
-from flowagents import flowagent, StandardAgent, InputField, AgentStatus, Orchestrator
+from onevalet import valet, StandardAgent, InputField, AgentStatus, Orchestrator
 
-@flowagent(triggers=["greet", "hello"])
+@valet(triggers=["greet", "hello"])
 class GreetingAgent(StandardAgent):
     name = InputField("What's your name?")
 
@@ -31,7 +31,7 @@ class GreetingAgent(StandardAgent):
         )
 
 async def main():
-    from flowagents import OpenAIClient
+    from onevalet import OpenAIClient
     llm = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
 
     orchestrator = Orchestrator(llm_client=llm)
@@ -71,7 +71,7 @@ INITIALIZING → WAITING_FOR_INPUT → RUNNING → COMPLETED
 ## Adding Validation
 
 ```python
-from flowagents import flowagent, StandardAgent, InputField, AgentStatus
+from onevalet import valet, StandardAgent, InputField, AgentStatus
 
 def validate_guests(value):
     if not value.isdigit():
@@ -80,7 +80,7 @@ def validate_guests(value):
         raise ValueError("We can accommodate 1-20 guests")
     return True
 
-@flowagent
+@valet
 class BookingAgent(StandardAgent):
     guests = InputField("How many guests?", validator=validate_guests)
     date = InputField("What date?")
@@ -98,7 +98,7 @@ class BookingAgent(StandardAgent):
 For sensitive actions, require user confirmation:
 
 ```python
-@flowagent(requires_approval=True)
+@valet(requires_approval=True)
 class DeleteAgent(StandardAgent):
     item = InputField("What to delete?")
 
@@ -118,13 +118,13 @@ class DeleteAgent(StandardAgent):
 Add an LLM for smart field extraction:
 
 ```python
-from flowagents import OpenAIClient
+from onevalet import OpenAIClient
 
 llm = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
 agent = BookingAgent(llm_client=llm)
 ```
 
-Or configure via YAML (`config/flowagents.yaml`):
+Or configure via YAML (`config/onevalet.yaml`):
 
 ```yaml
 llm:

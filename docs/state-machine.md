@@ -1,6 +1,6 @@
 # State Machine
 
-FlowAgents uses a state machine to manage agent lifecycle. This document explains the default states, transitions, and how to customize behavior.
+OneValet uses a state machine to manage agent lifecycle. This document explains the default states, transitions, and how to customize behavior.
 
 ## Default States
 
@@ -108,7 +108,7 @@ Each state has a corresponding handler method. Override these to customize behav
 The most common customization is overriding `on_running()`:
 
 ```python
-@flowagent(triggers=["order"])
+@valet(triggers=["order"])
 class OrderAgent(StandardAgent):
     item = InputField("What would you like to order?")
 
@@ -127,7 +127,7 @@ class OrderAgent(StandardAgent):
 Customize the approval prompt and logic:
 
 ```python
-@flowagent(triggers=["delete"], requires_approval=True)
+@valet(triggers=["delete"], requires_approval=True)
 class DeleteAgent(StandardAgent):
     target = InputField("What to delete?")
 
@@ -153,7 +153,7 @@ class DeleteAgent(StandardAgent):
 Customize how fields are collected:
 
 ```python
-@flowagent(triggers=["survey"])
+@valet(triggers=["survey"])
 class SurveyAgent(StandardAgent):
     rating = InputField("Rate 1-5")
     comment = InputField("Any comments?")

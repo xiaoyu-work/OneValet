@@ -1,6 +1,6 @@
-# FlowAgents ReAct Orchestrator Design
+# OneValet ReAct Orchestrator Design
 
-> Goal: Build FlowAgents into an extensible personal assistant agent framework.
+> Goal: Build OneValet into an extensible personal assistant agent framework.
 > Core change: Replace the Orchestrator's single-shot routing with a ReAct loop.
 
 ---
@@ -161,10 +161,21 @@ if turns >= max_turns:
 class ReactLoopResult:
     response: str                    # Final answer
     turns: int                       # Actual loop iterations
-    tool_calls: list[ToolCallRecord] # Record of each tool call (name, args, duration, success)
+    tool_calls: list[ToolCallRecord] # Detailed per-call telemetry (see below)
     token_usage: TokenUsage          # input_tokens, output_tokens, total
     duration_ms: int                 # Total duration
     pending_approvals: list          # Pending approval requests (if any)
+
+@dataclass
+class ToolCallRecord:
+    """Per-call telemetry, auto-recorded by react_loop() for every Tool and Agent-Tool invocation."""
+    name: str                        # Tool or Agent-Tool name
+    args_summary: dict               # Truncated argument snapshot (for debugging, not full payload)
+    duration_ms: int                 # Wall-clock execution time
+    success: bool                    # Completed without exception
+    result_status: str | None        # For Agent-Tools: "COMPLETED" / "WAITING_FOR_INPUT" / "WAITING_FOR_APPROVAL" / "ERROR"
+    result_chars: int                # Result size before truncation (for context budget attribution)
+    token_attribution: TokenUsage | None  # Tokens consumed by this call's LLM turn (input + output)
 ```
 
 ### 3.2 Interruption and Resumption
@@ -228,7 +239,7 @@ This is more appropriate for personal agent scenarios than hard framework interr
 
 ### 4.1 Concept
 
-Agent-Tool is not a new type. It is simply a perspective: **automatically map @flowagent registered Agent's InputFields to a Tool parameter schema**, allowing the LLM to trigger Agents via function calling.
+Agent-Tool is not a new type. It is simply a perspective: **automatically map @valet registered Agent's InputFields to a Tool parameter schema**, allowing the LLM to trigger Agents via function calling.
 
 The framework performs this conversion automatically when building tool schemas:
 - Agent's `description` (docstring) -> Tool's description
@@ -251,9 +262,38 @@ For example, the tool list the LLM sees:
 
 The LLM selects as needed; the framework differentiates internally.
 
-### 4.3 Configuration Control
+### 4.3 Schema Enhancement
 
-Not all Agents need to be exposed as Agent-Tools. Controlled via configuration (agent_registry.yaml or @flowagent parameters):
+The framework automatically enhances Agent-Tool schemas before passing them to the LLM, improving parameter extraction accuracy:
+
+1. **Inject validator constraints into parameter descriptions.** If an InputField has a validator (e.g., `lambda x: None if "@" in x else "Invalid email"`), the constraint is appended to the parameter's description: `"Recipient email address (must contain @)"`. This gives the LLM validation hints upfront, reducing invalid extractions.
+
+2. **Surface approval requirement in tool description.** If an Agent's `needs_approval()` returns True, the auto-generated tool description appends: `"[Requires user confirmation before execution]"`. This helps the LLM understand that calling this Agent-Tool will not immediately produce a final result.
+
+3. **Add `task_instruction` usage guidance.** The `task_instruction` parameter's description includes an example showing how the LLM should pass natural language context that doesn't map to any specific InputField.
+
+```python
+def enhance_agent_tool_schema(agent_cls, schema: dict) -> dict:
+    """Enhance auto-generated schema before exposing to LLM"""
+
+    # 1. Inject validator constraints
+    for spec in agent_cls._input_specs:
+        if spec.validator and spec.name in schema["parameters"]["properties"]:
+            prop = schema["parameters"]["properties"][spec.name]
+            constraint = spec.validator_description or ""
+            if constraint:
+                prop["description"] = f"{prop['description']} ({constraint})"
+
+    # 2. Surface approval requirement
+    if agent_cls.needs_approval != StandardAgent.needs_approval:
+        schema["description"] += " [Requires user confirmation before execution]"
+
+    return schema
+```
+
+### 4.4 Configuration Control
+
+Not all Agents need to be exposed as Agent-Tools. Controlled via configuration (agent_registry.yaml or @valet parameters):
 - `expose_as_tool: true/false` — Whether to participate in the ReAct loop
 - Unexposed Agents can still be triggered via explicit workflows
 
@@ -273,7 +313,36 @@ The Pool's responsibility remains: **store Agent instances in non-terminal state
 | How Agents are found | Matched during next message routing | Pool checked first on next incoming message |
 | How Agents exit Pool | Execution complete / TTL expired / Manual cancel | Same |
 
-### 5.3 All Preserved Features
+### 5.3 Schema Version Guard
+
+`AgentPoolEntry` includes a `schema_version` field. When an Agent's InputField definition changes (fields added, removed, or type changed), the registered schema version increments.
+
+On restoration from Pool (Redis deserialization or session restore), the framework compares the entry's `schema_version` against the currently registered Agent class's schema version:
+
+- **Match** -> Restore normally
+- **Mismatch** -> Discard the entry (remove from Pool, TTL cleanup). Do not attempt to run an Agent with stale field definitions.
+
+This prevents a scenario where a developer updates an Agent's InputFields, but the Pool still holds old Agent instances serialized with the previous schema — which would cause field extraction errors or missing required fields at runtime.
+
+```python
+@dataclass
+class AgentPoolEntry:
+    agent_id: str
+    agent_type: str
+    tenant_id: str
+    status: str
+    schema_version: int              # New: matches AgentRegistry schema version
+    collected_fields: Dict[str, Any]
+    # ...
+
+# During restoration:
+if entry.schema_version != registry.get_schema_version(entry.agent_type):
+    await pool.remove_agent(entry.tenant_id, entry.agent_id)
+    logger.warning(f"Discarded stale agent {entry.agent_id}: schema version mismatch")
+    continue
+```
+
+### 5.4 All Preserved Features
 
 - Isolation by tenant_id
 - TTL auto-expiration
@@ -335,11 +404,11 @@ Turn 3:
 
 ### 8.1 Design Principle
 
-The memory system is a component that **users must explicitly configure**. The framework provides no default implementation and no degradation. Whichever provider the user chooses, they get that provider's full capabilities.
+OneValet uses Momex directly as its memory system. No abstract interface, no provider selection. One implementation, written directly.
 
-### 8.2 Recommended Memory Provider: Momex
+### 8.2 Momex
 
-Momex (typeagent-py) is this framework's recommended memory system, natively covering all memory capabilities needed for a personal agent:
+Momex (typeagent-py) is OneValet's memory system, covering all memory capabilities needed for a personal agent:
 
 **Long-term Memory (Structured RAG):**
 - Structured knowledge extraction: entities (with facets/attributes), actions (subject-verb-object relations), topics
@@ -359,14 +428,9 @@ Momex (typeagent-py) is this framework's recommended memory system, natively cov
 **Storage Backends:**
 - SQLite (zero-config) / PostgreSQL (production-grade, supports pgvector)
 
-### 8.3 Other Optional Providers
+### 8.3 Integration Points
 
-- **mem0**: Vector storage + simple retrieval, suitable for lightweight scenarios
-- **Custom implementation**: Users implement the MemoryProvider interface
-
-### 8.4 Integration Points
-
-The memory system integrates through existing Extension Points without changing core logic:
+Momex integrates through the existing handle_message lifecycle without changing core logic:
 
 **Before request — prepare_context():**
 1. Call `memory.get_history(tenant_id)` to load conversation history (short-term memory)
@@ -378,29 +442,28 @@ The memory system integrates through existing Extension Points without changing 
 2. Call `memory.add(messages, infer=True)` for long-term knowledge extraction
 3. Momex internally auto-completes entity extraction, contradiction detection, and index updates
 
-**Conversation history is managed by the MemoryProvider, not by the framework or application layer separately.** This means:
+**Conversation history is managed by Momex, not by the application layer separately.** This means:
 - One system (Momex) handles both short-term history and long-term knowledge
 - No need for a separate `chat_history` database table (KoiAI's current dual-system pattern is unified)
-- If no MemoryProvider is configured, there is no conversation history (stateless). The application layer can still manage history themselves via `prepare_context()`/`post_process()` extension points if desired.
 
 **Collaboration with Context Management:**
 - History messages discarded by context trimming are not lost — important information was already stored in Momex long-term memory during `post_process()`
 - On the next conversation, recalled via `prepare_context()`, achieving "discard history but retain knowledge"
 
-### 8.5 Configuration
+### 8.4 Configuration
 
 ```python
 orchestrator = Orchestrator(
     llm_client=llm,
     system_prompt="You are Koi. You're a person, not an AI...",
-    memory_provider=MomexMemoryProvider(
+    momex=Momex(
         collection="user:xiaoyuzhang",
         config=MomexConfig.from_env(),
     ),
 )
 ```
 
-If `memory_provider` is not provided, there is no memory capability and no conversation history (stateless). The framework does not error — it simply operates without recall or storage. Applications can still manage history manually via the `prepare_context()`/`post_process()` extension points.
+Momex is initialized at Orchestrator startup. The Orchestrator calls Momex directly in prepare_context() and post_process() — no wrapper class needed.
 
 ---
 
@@ -408,115 +471,75 @@ If `memory_provider` is not provided, there is no memory capability and no conve
 
 ### 9.1 Design Principle
 
-The framework has built-in per-user credential storage and retrieval — **no need for users to inject query logic**. Just as Django has built-in `auth.User`, FlowAgents has built-in `CredentialStore`.
+OneValet has built-in per-user credential storage and retrieval. One class, one Postgres backend. No abstract interface, no multiple backends.
 
-The framework is only responsible for **storing and retrieving**. OAuth flows, token refresh, and Provider selection are business logic, belonging in specific Agent/Tool implementations.
+The framework is responsible for **storing and retrieving credentials**. OAuth flows, token refresh, and Provider selection are business logic, belonging in specific Agent/Tool implementations.
 
 ### 9.2 CredentialStore
 
 ```python
 class CredentialStore:
     """
-    Per-user credential storage and retrieval. Built into the framework, works out of the box.
+    Per-user credential storage and retrieval. Postgres backend, direct implementation.
     Data is isolated by tenant_id, naturally supporting multi-tenancy.
     """
 
-    async def save(
-        self,
-        tenant_id: str,
-        service: str,
-        credentials: dict,
-        account_name: str = "primary"
-    ):
+    async def save(self, tenant_id: str, service: str, credentials: dict,
+                   account_name: str = "primary"):
         """
-        Save credentials
+        Save credentials.
 
         Args:
             tenant_id: User ID
             service: Service name ("google", "microsoft", "amadeus")
             account_name: Account name ("primary", "work", "personal")
-            credentials: Credential data, format determined by service, e.g.:
-                {
-                    "access_token": "ya29...",
-                    "refresh_token": "1//0g...",
-                    "token_expiry": "2025-01-01T00:00:00",
-                    "email": "user@gmail.com",
-                    "scopes": ["gmail.send", "gmail.modify"]
-                }
+            credentials: Credential data, format determined by service (dict).
+                The agent knows what's inside — the framework just stores it.
         """
 
-    async def get(
-        self,
-        tenant_id: str,
-        service: str,
-        account_name: str = "primary"
-    ) -> dict | None:
-        """Retrieve credentials. Returns None if not found."""
+    async def get(self, tenant_id: str, service: str,
+                  account_name: str = "primary") -> dict | None:
+        """Retrieve credentials dict. Returns None if not found."""
 
-    async def list(
-        self,
-        tenant_id: str,
-        service: str | None = None
-    ) -> list[dict]:
+    async def list(self, tenant_id: str,
+                   service: str | None = None) -> list[dict]:
         """List all connected accounts for a user, optionally filtered by service."""
 
-    async def delete(
-        self,
-        tenant_id: str,
-        service: str,
-        account_name: str = "primary"
-    ):
+    async def delete(self, tenant_id: str, service: str,
+                     account_name: str = "primary"):
         """Delete credentials."""
 ```
 
-### 9.3 Storage Backend
+### 9.3 No CredentialScheme
 
-Credentials must be persisted (OAuth tokens cannot be lost on restart). SQLite is the default:
+The framework does not distinguish oauth2 vs api_key vs bearer vs basic. Each agent/provider knows what credential format it expects. The framework just stores and retrieves `dict`.
 
-```yaml
-# flowagents.yaml
-orchestrator:
-  session_backend: "memory"       # Sessions can use memory
-  credential_backend: "sqlite"    # Credentials must be persisted
-```
+### 9.4 Storage Backend
 
-Supported backends:
-- **sqlite** (default): Zero-config, suitable for single-machine / personal assistant
-- **redis**: Suitable for distributed deployments
-- Extensible to other backends
+Postgres. One backend, directly implemented. Credentials must be persisted (OAuth tokens cannot be lost on restart).
 
-### 9.4 Data Model
-
-Internal storage structure (transparent to users):
+### 9.5 Data Model
 
 ```
-Key: (tenant_id, service, account_name)
-Value: {
-    "credentials": { ... },      # The credential dict stored by the user
-    "created_at": "...",
-    "updated_at": "..."
-}
+Table: credentials
+Primary key: (tenant_id, service, account_name)
+Columns: tenant_id, service, account_name, credentials_json, created_at, updated_at
 ```
 
 Multi-tenant isolation relies on `tenant_id`, which is already pervasive throughout the framework.
 
-### 9.5 Usage in Tools / Agents
+### 9.6 Usage in Tools / Agents
 
 Accessed via `ToolExecutionContext` — retrieve credentials in one line:
 
 ```python
 @tool(name="send_email", description="Send an email")
-async def send_email(
-    to: str,
-    subject: str,
-    body: str,
-    context: ToolExecutionContext
-) -> str:
+async def send_email(to: str, subject: str, body: str, context: ToolExecutionContext) -> str:
     creds = await context.credentials.get(context.tenant_id, "google")
     if not creds:
         return "Please connect your Google account first"
 
-    # Business logic: send email using credentials
+    # Business logic: agent knows creds is an OAuth2 dict
     provider = GmailProvider(creds)
     await provider.send_email(to, subject, body)
     return "Email sent"
@@ -525,14 +548,16 @@ async def send_email(
 Same in Agents:
 
 ```python
-@flowagent(name="SendEmailAgent")
+@valet(name="SendEmailAgent")
 class SendEmailAgent(StandardAgent):
     async def on_running(self, msg):
         creds = await self.context.credentials.get(self.tenant_id, "google", "work")
-        # ...
+        if not creds:
+            return self.make_result(status=AgentStatus.ERROR, raw_message="Google account not connected")
+        # Agent knows what's in creds — no framework-level scheme check needed
 ```
 
-### 9.6 Application Layer Responsibilities
+### 9.7 Application Layer Responsibilities
 
 The framework handles storage and retrieval. The application layer handles:
 
@@ -540,7 +565,7 @@ The framework handles storage and retrieval. The application layer handles:
 2. **Token refresh**: Tool/Agent detects expired token -> refreshes -> calls `credential_store.save()` to update
 3. **Multi-account management**: Application provides UI for users to connect multiple accounts (primary/work/personal)
 
-### 9.7 KoiAI Migration
+### 9.8 KoiAI Migration
 
 KoiAI's current credential flow:
 
@@ -551,10 +576,10 @@ Supabase oauth_accounts table -> AccountResolver -> ProviderFactory -> API call
 After migration:
 
 ```
-CredentialStore (SQLite/Redis) -> context.credentials.get() -> Provider -> API call
+CredentialStore (Postgres) -> context.credentials.get() -> Provider -> API call
 ```
 
-KoiAI's OAuth flow, AccountResolver, and ProviderFactory remain unchanged. Only the underlying storage changes from direct Supabase queries to the CredentialStore interface.
+KoiAI's OAuth flow, AccountResolver, and ProviderFactory remain unchanged. Only the underlying storage changes from direct Supabase queries to CredentialStore.
 
 ---
 
@@ -747,7 +772,10 @@ class ReactLoopConfig:
     max_turns: int = 10                          # Maximum loop iterations
 
     # Tool execution
-    tool_execution_timeout: int = 30             # Single tool timeout (seconds)
+    tool_execution_timeout: int = 30             # Regular Tool timeout (seconds)
+    agent_tool_execution_timeout: int = 120      # Agent-Tool timeout (seconds) — longer because
+                                                 # Agent-Tools may involve multi-step internal logic
+                                                 # (field validation, LLM extraction, external API calls)
     max_tool_result_share: float = 0.3           # Single tool result max 30% of context
     max_tool_result_chars: int = 400_000         # Single tool result hard limit (chars)
 
@@ -762,6 +790,16 @@ class ReactLoopConfig:
 
     # Approval
     approval_timeout_minutes: int = 30           # Approval auto-cancel timeout
+```
+
+In `execute_with_timeout()`, the framework selects the appropriate timeout based on whether the call is a regular Tool or an Agent-Tool:
+
+```python
+timeout = (
+    config.agent_tool_execution_timeout
+    if is_agent_tool(tool_call)
+    else config.tool_execution_timeout
+)
 ```
 
 ---
@@ -779,7 +817,7 @@ A personal agent cannot only passively respond to user messages. Proactive servi
 | "Alert me when flight prices drop" | Condition trigger (polling + condition check) |
 | "Remind me about the meeting at 3 PM" | One-time timer |
 
-KoiAI has already implemented a complete TriggerEngine at the application layer. Moving it down to the framework allows all FlowAgents-based applications to use it out of the box.
+KoiAI has already implemented a complete TriggerEngine at the application layer. Moving it down to the framework allows all OneValet-based applications to use it out of the box.
 
 ### 15.2 Architecture: Migration from KoiAI
 
@@ -910,48 +948,38 @@ await trigger_engine.create_task(
 | EventTrigger | `koiai/core/triggers/trigger_types/event.py` | Unchanged (source+type+filter matching) |
 | ConditionTrigger | `koiai/core/triggers/trigger_types/condition.py` | Complete implementation (placeholder in KoiAI) |
 | Task model | `koiai/core/triggers/models.py` | Unchanged (ACTIVE/PAUSED/DISABLED/COMPLETED) |
-| EventBus | `koiai/core/events/bus.py` | Extract as pluggable interface (Redis / In-Memory) |
+| EventBus | `koiai/core/events/bus.py` | Redis Streams, direct implementation (no ABC) |
 | NotifyExecutor | KoiAI-specific | **Not migrated**, application layer implements as custom ActionExecutor |
 | AgentExecutor | KoiAI-specific | **Replaced by** OrchestratorExecutor |
 | EmailPipelineExecutor | KoiAI `email_handler.py` | Application layer implements as custom ActionExecutor (deterministic pipeline) |
 
 ### 15.6 NotificationChannel
 
-Trigger results need to be pushed to users (user may be offline or not in a conversation). The framework defines the interface; the application layer implements:
+Trigger results need to be pushed to users (user may be offline or not in a conversation). Written directly as concrete classes — no abstract interface:
 
 ```python
-class NotificationChannel(ABC):
-    """Push channel for trigger results"""
+class SMSNotification:
+    """Send via Twilio/SignalWire"""
+    async def send(self, tenant_id: str, message: str, metadata: dict) -> bool: ...
 
-    @abstractmethod
-    async def send(self, tenant_id: str, message: str, metadata: dict) -> bool:
-        ...
-
-# Application layer implementation examples
-class SMSNotification(NotificationChannel): ...
-class PushNotification(NotificationChannel): ...
-class EmailNotification(NotificationChannel): ...
-class WebSocketNotification(NotificationChannel): ...
+class PushNotification:
+    """Send via push service"""
+    async def send(self, tenant_id: str, message: str, metadata: dict) -> bool: ...
 ```
 
-### 15.7 EventBus Interface
+The TriggerEngine holds a list of notification channels and calls them directly.
 
-Extracted from KoiAI's Redis Streams implementation as a pluggable interface:
+### 15.7 EventBus
+
+Redis Streams directly. One class, migrated from KoiAI:
 
 ```python
-class EventBus(ABC):
-    @abstractmethod
+class EventBus:
+    """Redis Streams pub/sub. Direct implementation, no abstract interface."""
+
     async def publish(self, event: Event) -> None: ...
-
-    @abstractmethod
     async def subscribe(self, pattern: str, callback: Callable) -> None: ...
-
-    @abstractmethod
     async def unsubscribe(self, pattern: str) -> None: ...
-
-# Framework provides two implementations
-class InMemoryEventBus(EventBus): ...      # For development/testing
-class RedisStreamEventBus(EventBus): ...   # For production (migrated from KoiAI)
 ```
 
 ### 15.8 Configuration and Initialization
@@ -959,11 +987,11 @@ class RedisStreamEventBus(EventBus): ...   # For production (migrated from KoiAI
 ```python
 orchestrator = Orchestrator(
     llm_client=llm,
-    memory_provider=MomexMemoryProvider(config),
+    momex=Momex(collection="user:xiaoyuzhang", config=MomexConfig.from_env()),
     trigger_engine=TriggerEngine(
-        event_bus=RedisStreamEventBus(redis_url),
+        event_bus=EventBus(redis_url),
         executor=OrchestratorExecutor(orchestrator),
-        notification_channels=[SMSNotification(), PushNotification()],
+        notifications=[SMSNotification(), PushNotification()],
     ),
 )
 
@@ -1033,20 +1061,17 @@ pending = await orchestrator.list_pending_approvals(tenant_id="user_123")
 
 ---
 
-## 16. Extension Points
+## 16. Lifecycle Methods
 
-All existing extension points are preserved. Developers customize behavior by subclassing Orchestrator:
+The handle_message flow has clear lifecycle methods. These are not "framework extension points for subclassing" — they are just the steps in the request pipeline, and they can be customized when needed:
 
-| Extension Point | Purpose | Change |
-|-----------------|---------|--------|
-| `prepare_context()` | Load memories, user profile, permissions, conversation history | Unchanged |
+| Method | Purpose | Change |
+|--------|---------|--------|
+| `prepare_context()` | Load memories (Momex), user profile, conversation history | Unchanged |
 | `should_process()` | Safety checks, rate limiting, tier control | Unchanged |
-| `post_process()` | Store memories, send notifications, persona wrapping, record usage | Unchanged |
-| `reject_message()` | Custom response for rejected messages | Unchanged |
-| `@callback_handler` | Agent access to external services (send SMS, read cache) | Unchanged |
-| `create_agent()` | Custom Agent instantiation | Preserved, called within ReAct loop |
-| `execute_agent()` | Custom Agent execution logic | Preserved, called within ReAct loop |
-| `route_message()` | Custom routing logic | **Removed** |
+| `post_process()` | Store memories (Momex), record usage, profile detection | Unchanged |
+| `create_agent()` | Agent instantiation | Preserved, called within ReAct loop |
+| `route_message()` | Routing logic | **Removed** (replaced by ReAct loop) |
 
 ---
 
@@ -1054,7 +1079,7 @@ All existing extension points are preserved. Developers customize behavior by su
 
 ### Adding New Capabilities
 
-Write a `@tool` function or a `@flowagent` Agent, register it, and the Orchestrator can use it automatically.
+Write a `@tool` function or a `@valet` Agent, register it, and the Orchestrator can use it automatically.
 
 No need to:
 - Configure trigger keywords
@@ -1068,9 +1093,6 @@ The LLM autonomously understands when to use it through the tool's description.
 Orchestrator-level configuration:
 - `system_prompt` — **Persona injection point.** The ReAct loop's LLM uses this as its personality. All responses are generated in this voice natively, eliminating the need for a separate persona wrapping layer. If not provided, the LLM uses its default behavior.
 - `max_turns` — Maximum loop iterations
-- `max_tokens_budget` — Total token budget (optional)
-- `tool_names` — Regular Tools exposed to the LLM
-- `agent_tool_filter` — Agent-Tools exposed to the LLM
 
 ---
 
@@ -1091,7 +1113,7 @@ Orchestrator-level configuration:
 - `KoiOrchestrator`'s `handle_message` internal logic (routing -> ReAct loop)
 - Remove `MessageRouter`, LLM routing related code, and `routing_llm_provider` (routing is eliminated; the ReAct LLM handles both intent understanding and response generation in one call)
 - `agent_registry.yaml` triggers field becomes optional (LLM understands intent via description)
-- **KoiAgent persona wrapping eliminated**: Koi's personality prompt (`PERSONALITY_PROMPT`) becomes the Orchestrator's `system_prompt`. The ReAct LLM natively speaks as Koi. KoiAgent's 6 response wrapping methods (`_wrap_completed_result`, `_generate_input_request`, `_generate_approval_request`, `_generate_tier_upgrade_message`, `_generate_error_response`, `_generate_clarification`) are all removed — the ReAct LLM handles all response formatting in Koi's voice. KoiAgent remains only as a registered `@flowagent` for its `on_running` chat capability (google_search, important_dates tools).
+- **KoiAgent persona wrapping eliminated**: Koi's personality prompt (`PERSONALITY_PROMPT`) becomes the Orchestrator's `system_prompt`. The ReAct LLM natively speaks as Koi. KoiAgent's 6 response wrapping methods (`_wrap_completed_result`, `_generate_input_request`, `_generate_approval_request`, `_generate_tier_upgrade_message`, `_generate_error_response`, `_generate_clarification`) are all removed — the ReAct LLM handles all response formatting in Koi's voice. KoiAgent remains only as a registered `@valet` for its `on_running` chat capability (google_search, important_dates tools).
 - **Chat history unified into Momex**: Remove separate `chat_history` Supabase table. Conversation history is managed by MomexMemoryProvider's short-term memory. `prepare_context()` loads history via `memory.get_history()`, `post_process()` saves via `memory.save_history()`.
 - **Auto profile detection stays in post_process()**: KoiAgent's `_detect_and_update_profile()` moves to `KoiOrchestrator.post_process()` as a background task.
 - TriggerEngine replaced with framework built-in version (interface-compatible, ActionExecutor -> OrchestratorExecutor). KoiAI's `email_handler.py` pipeline can either use OrchestratorExecutor (LLM-driven) or be reimplemented as a custom ActionExecutor (deterministic, for high-frequency triggers).
@@ -1296,21 +1318,23 @@ class ReactLoopConfig:
 | Orchestrator.handle_message | route+execute -> ReAct loop | **Medium** |
 | Orchestrator.system_prompt | New persona injection point (replaces KoiAgent wrapping) | **New parameter** |
 | Orchestrator.react_loop | New (with concurrent execution, error recovery) | **New method** |
-| ReactLoopConfig | New centralized config | **New file** |
+| ReactLoopConfig | New centralized config (includes separate agent_tool_execution_timeout) | **New file** |
 | ContextManager | New (truncation + trimming + force trim) | **New file** |
 | ApprovalRequest | New structured approval | **New file** |
-| Agent-Tool schema generation | New | **Small** |
+| Agent-Tool schema generation | New, with schema enhancement (validator hints, approval surfacing) | **Small** |
 | MessageRouter | **Removed** | Deleted |
-| Agent Pool | Entry path changed, interface unchanged | **None** |
+| Agent Pool | Entry path changed; new schema_version guard on restore | **Small** |
+| AgentPoolEntry | New schema_version field | **Small** |
 | StandardAgent | Unchanged | **None** |
 | Tool system | Unchanged | **None** |
-| @flowagent decorator | Optional new expose_as_tool parameter | **Minimal** |
+| @valet decorator | Optional new expose_as_tool parameter | **Minimal** |
 | Streaming | Unchanged | **None** |
 | Extension Points | route_message removed, others unchanged | **Minimal** |
-| CredentialStore | New (SQLite/Redis backends) | **New file** |
+| ToolCallRecord | New: detailed per-call telemetry (result_status, token_attribution) | **Small** |
+| CredentialStore | New (Postgres, direct implementation, no scheme/status enums) | **New file** |
 | ToolExecutionContext | New credentials field | **Small** |
-| MemoryProvider | New interface + MomexMemoryProvider implementation | **New file** |
-| TriggerEngine | Migrated from KoiAI to framework | **Migration** |
-| EventBus | New interface + InMemory/Redis implementations | **New file** |
+| Momex integration | Direct usage in prepare_context/post_process (no MemoryProvider ABC) | **Small** |
+| TriggerEngine | Migrated from KoiAI | **Migration** |
+| EventBus | Redis Streams, direct implementation (no ABC) | **New file** |
 | OrchestratorExecutor | New (trigger event -> ReAct loop) | **New file** |
-| NotificationChannel | New interface (application layer implements) | **New file** |
+| SMSNotification / PushNotification | Direct implementations (no NotificationChannel ABC) | **New files** |

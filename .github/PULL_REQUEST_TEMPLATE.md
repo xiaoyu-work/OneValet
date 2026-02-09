@@ -12,8 +12,8 @@ Brief description of changes.
 ## Checklist
 
 - [ ] Tests pass (`pytest`)
-- [ ] Code formatted (`black flowagent tests`)
-- [ ] Linting passes (`ruff check flowagent tests`)
+- [ ] Code formatted (`black onevalet tests`)
+- [ ] Linting passes (`ruff check onevalet tests`)
 - [ ] Documentation updated (if needed)
 
 ## Related Issues

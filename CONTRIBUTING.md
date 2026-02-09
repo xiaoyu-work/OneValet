@@ -1,13 +1,13 @@
-# Contributing to FlowAgents
+# Contributing to OneValet
 
-Thanks for your interest in contributing to FlowAgents!
+Thanks for your interest in contributing to OneValet!
 
 ## Development Setup
 
 ```bash
 # Clone the repo
-git clone https://github.com/xiaoyu-work/flowagents.git
-cd flowagents
+git clone https://github.com/xiaoyu-work/onevalet.git
+cd onevalet
 
 # Install in development mode
 pip install -e ".[all]"
@@ -28,13 +28,13 @@ We use [Black](https://github.com/psf/black) for formatting and [Ruff](https://g
 
 ```bash
 # Format code
-black flowagents tests
+black onevalet tests
 
 # Lint
-ruff check flowagents tests
+ruff check onevalet tests
 
 # Type check
-mypy flowagents
+mypy onevalet
 ```
 
 ## Pull Request Process

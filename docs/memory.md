@@ -1,6 +1,6 @@
 # Memory System
 
-FlowAgents provides long-term memory capabilities powered by [mem0](https://mem0.ai/).
+OneValet provides long-term memory capabilities powered by [mem0](https://mem0.ai/).
 
 ## Overview
 

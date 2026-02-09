@@ -5,15 +5,15 @@ The Orchestrator routes messages to the appropriate agent and manages multi-agen
 ## Quick Start
 
 ```python
-from flowagents import Orchestrator, OpenAIClient, StandardAgent, flowagent, InputField, AgentStatus
+from onevalet import Orchestrator, OpenAIClient, StandardAgent, valet, InputField, AgentStatus
 
-@flowagent(triggers=["book table", "reservation"])
+@valet(triggers=["book table", "reservation"])
 class BookingAgent(StandardAgent):
     guests = InputField("How many guests?")
     async def on_running(self, msg):
         return self.make_result(status=AgentStatus.COMPLETED, raw_message="Booked!")
 
-@flowagent(triggers=["leave request", "time off"])
+@valet(triggers=["leave request", "time off"])
 class LeaveAgent(StandardAgent):
     start_date = InputField("Start date?")
     async def on_running(self, msg):
@@ -33,10 +33,10 @@ result = await orchestrator.handle_message("user_1", "Request time off")        
 
 ### Trigger-based (Default)
 
-Routes based on `triggers` in `@flowagent`:
+Routes based on `triggers` in `@valet`:
 
 ```python
-@flowagent(triggers=["book", "reserve", "reservation"])
+@valet(triggers=["book", "reserve", "reservation"])
 class BookingAgent(StandardAgent):
     ...
 ```

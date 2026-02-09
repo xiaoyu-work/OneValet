@@ -1,22 +1,22 @@
 # LLM Providers
 
-FlowAgents supports multiple LLM providers out of the box.
+OneValet supports multiple LLM providers out of the box.
 
 ## Supported Providers
 
 | Provider | Install | Models |
 |----------|---------|--------|
-| OpenAI | `pip install flowagents[openai]` | GPT-4, GPT-3.5 |
-| Anthropic | `pip install flowagents[anthropic]` | Claude 3 Opus/Sonnet/Haiku |
-| Azure OpenAI | `pip install flowagents[openai]` | GPT-4, GPT-3.5 |
-| DashScope | `pip install flowagents[dashscope]` | Qwen |
-| Google Gemini | `pip install flowagents[gemini]` | Gemini Pro |
-| Ollama | `pip install flowagents[ollama]` | Llama, Mistral, etc. |
+| OpenAI | `pip install onevalet[openai]` | GPT-4, GPT-3.5 |
+| Anthropic | `pip install onevalet[anthropic]` | Claude 3 Opus/Sonnet/Haiku |
+| Azure OpenAI | `pip install onevalet[openai]` | GPT-4, GPT-3.5 |
+| DashScope | `pip install onevalet[dashscope]` | Qwen |
+| Google Gemini | `pip install onevalet[gemini]` | Gemini Pro |
+| Ollama | `pip install onevalet[ollama]` | Llama, Mistral, etc. |
 
 ## OpenAI
 
 ```python
-from flowagents import OpenAIClient
+from onevalet import OpenAIClient
 
 client = OpenAIClient(
     api_key="sk-...",           # Or set OPENAI_API_KEY env var
@@ -31,7 +31,7 @@ agent = MyAgent(llm_client=client)
 ## Anthropic (Claude)
 
 ```python
-from flowagents import AnthropicClient
+from onevalet import AnthropicClient
 
 client = AnthropicClient(
     api_key="sk-ant-...",       # Or set ANTHROPIC_API_KEY env var
@@ -45,7 +45,7 @@ agent = MyAgent(llm_client=client)
 ## Azure OpenAI
 
 ```python
-from flowagents import AzureOpenAIClient
+from onevalet import AzureOpenAIClient
 
 client = AzureOpenAIClient(
     api_key="...",
@@ -60,7 +60,7 @@ agent = MyAgent(llm_client=client)
 ## DashScope (Alibaba Cloud)
 
 ```python
-from flowagents import DashScopeClient
+from onevalet import DashScopeClient
 
 client = DashScopeClient(
     api_key="sk-...",           # Or set DASHSCOPE_API_KEY env var
@@ -73,7 +73,7 @@ agent = MyAgent(llm_client=client)
 ## Google Gemini
 
 ```python
-from flowagents import GeminiClient
+from onevalet import GeminiClient
 
 client = GeminiClient(
     api_key="...",              # Or set GOOGLE_API_KEY env var
@@ -86,7 +86,7 @@ agent = MyAgent(llm_client=client)
 ## Ollama (Local)
 
 ```python
-from flowagents import OllamaClient
+from onevalet import OllamaClient
 
 client = OllamaClient(
     base_url="http://localhost:11434",  # Default Ollama URL
@@ -110,7 +110,7 @@ async for chunk in client.stream_completion(messages):
 Implement the `LLMClientProtocol` for custom providers:
 
 ```python
-from flowagents import LLMClientProtocol, LLMResponse
+from onevalet import LLMClientProtocol, LLMResponse
 from typing import List, Dict, Optional, AsyncIterator
 
 class MyCustomClient(LLMClientProtocol):
@@ -145,7 +145,7 @@ class MyCustomClient(LLMClientProtocol):
 Register and retrieve clients by name:
 
 ```python
-from flowagents import LLMRegistry
+from onevalet import LLMRegistry
 
 registry = LLMRegistry.get_instance()
 
@@ -159,7 +159,7 @@ client = registry.get("my-gpt4")
 
 ## Configuration via YAML
 
-Create `config/flowagents.yaml`:
+Create `config/onevalet.yaml`:
 
 ```yaml
 llm:
@@ -213,7 +213,7 @@ llm:
 ### Loading Configuration
 
 ```python
-from flowagents import Orchestrator
+from onevalet import Orchestrator
 
 # Load from config directory
 orchestrator = Orchestrator(config_dir="./config")
@@ -223,11 +223,11 @@ await orchestrator.initialize()
 ### Agent-specific LLM
 
 ```python
-@flowagent(llm="claude")  # Uses claude provider
+@valet(llm="claude")  # Uses claude provider
 class MyAgent(StandardAgent):
     ...
 
-@flowagent  # Uses default
+@valet  # Uses default
 class OtherAgent(StandardAgent):
     ...
 ```
