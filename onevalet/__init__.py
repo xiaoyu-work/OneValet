@@ -165,6 +165,9 @@ from .orchestrator import (
     TokenUsage,
 )
 
+# Database
+from .db import Database, Repository
+
 # Credentials
 from .credentials import CredentialStore
 
@@ -277,6 +280,9 @@ __all__ = [
     "ReactLoopResult",
     "ToolCallRecord",
     "TokenUsage",
+    # Database
+    "Database",
+    "Repository",
     # Credentials
     "CredentialStore",
     # Memory

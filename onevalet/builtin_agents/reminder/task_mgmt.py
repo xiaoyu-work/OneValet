@@ -19,6 +19,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
+from .task_repo import TaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +47,14 @@ class TaskManagementAgent(StandardAgent):
             return f"Delete '{task_name}'? (yes/no)"
         return "Are you sure you want to delete this? (yes/no)"
 
-    def _get_db_client(self):
-        """Get database client from context_hints"""
-        return self.context_hints.get("db_client")
+    def _get_repo(self):
+        """Get TaskRepository from context_hints"""
+        db = self.context_hints.get("db")
+        if not db:
+            return None
+        if not hasattr(self, '_task_repo'):
+            self._task_repo = TaskRepository(db)
+        return self._task_repo
 
     async def extract_fields(self, user_input: str) -> Dict[str, Any]:
         """Extract action and details from user input."""
@@ -133,14 +139,14 @@ Examples:
         if self.action == "delete":
             task_hint = self.collected_fields.get("task_hint", "")
             if task_hint:
-                db_client = self._get_db_client()
-                if not db_client:
+                repo = self._get_repo()
+                if not repo:
                     return self.make_result(
                         status=AgentStatus.COMPLETED,
                         raw_message="Task storage is not available right now."
                     )
 
-                tasks = db_client.get_user_tasks(self.tenant_id)
+                tasks = await repo.get_user_tasks(self.tenant_id)
                 matched = self._match_tasks(tasks, task_hint)
 
                 if not matched:
@@ -214,13 +220,13 @@ Examples:
 
     async def _list_tasks(self, fields: Dict[str, Any]) -> str:
         """List all user's reminders/automations"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         status_filter = fields.get("status_filter", "all")
         status_param = None if status_filter == "all" else status_filter
-        tasks = db_client.get_user_tasks(self.tenant_id, status=status_param)
+        tasks = await repo.get_user_tasks(self.tenant_id, status=status_param)
 
         if not tasks:
             if status_filter != "all":
@@ -249,8 +255,8 @@ Examples:
 
     async def _show_task(self, fields: Dict[str, Any]) -> str:
         """Show details of a specific task"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         task_hint = fields.get("task_hint", "")
@@ -258,7 +264,7 @@ Examples:
         if not task_hint:
             return "Which reminder or automation would you like to see?"
 
-        tasks = db_client.get_user_tasks(self.tenant_id)
+        tasks = await repo.get_user_tasks(self.tenant_id)
         matched = self._match_tasks(tasks, task_hint)
 
         if not matched:
@@ -272,8 +278,8 @@ Examples:
 
     async def _update_task(self, fields: Dict[str, Any]) -> str:
         """Update a task's schedule or message"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         task_hint = fields.get("task_hint", "")
@@ -282,7 +288,7 @@ Examples:
         if not task_hint:
             return "Which reminder or automation would you like to update?"
 
-        tasks = db_client.get_user_tasks(self.tenant_id)
+        tasks = await repo.get_user_tasks(self.tenant_id)
         matched = self._match_tasks(tasks, task_hint)
 
         if not matched:
@@ -323,7 +329,7 @@ Examples:
             if not update_data:
                 return "What would you like to change? (time, message, or both)"
 
-            updated_task = db_client.update_task(task_id, update_data)
+            updated_task = await repo.update_task(task_id, update_data)
 
             if "trigger_config" in update_data and self.trigger_engine:
                 await self.trigger_engine._teardown_task_trigger_by_id(task_id)
@@ -344,8 +350,8 @@ Examples:
 
     async def _pause_task(self, fields: Dict[str, Any]) -> str:
         """Pause a task"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         task_hint = fields.get("task_hint", "")
@@ -356,7 +362,7 @@ Examples:
         if not task_hint:
             return "Which reminder or automation would you like to pause?"
 
-        tasks = db_client.get_user_tasks(self.tenant_id, status="active")
+        tasks = await repo.get_user_tasks(self.tenant_id, status="active")
         matched = self._match_tasks(tasks, task_hint)
 
         if not matched:
@@ -370,7 +376,7 @@ Examples:
         task_name = task.get("name", "item")
 
         try:
-            db_client.update_task(task_id, {"status": "paused"})
+            await repo.update_task(task_id, {"status": "paused"})
 
             if self.trigger_engine:
                 await self.trigger_engine._teardown_task_trigger_by_id(task_id)
@@ -383,11 +389,11 @@ Examples:
 
     async def _pause_all_tasks(self) -> str:
         """Pause all active tasks"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
-        tasks = db_client.get_user_tasks(self.tenant_id, status="active")
+        tasks = await repo.get_user_tasks(self.tenant_id, status="active")
 
         if not tasks:
             return "You don't have any active reminders or automations to pause."
@@ -396,7 +402,7 @@ Examples:
         for task in tasks:
             task_id = task.get("id")
             try:
-                db_client.update_task(task_id, {"status": "paused"})
+                await repo.update_task(task_id, {"status": "paused"})
                 if self.trigger_engine:
                     await self.trigger_engine._teardown_task_trigger_by_id(task_id)
                 paused_count += 1
@@ -407,8 +413,8 @@ Examples:
 
     async def _resume_task(self, fields: Dict[str, Any]) -> str:
         """Resume a paused task"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         task_hint = fields.get("task_hint", "")
@@ -419,7 +425,7 @@ Examples:
         if not task_hint:
             return "Which reminder or automation would you like to resume?"
 
-        tasks = db_client.get_user_tasks(self.tenant_id, status="paused")
+        tasks = await repo.get_user_tasks(self.tenant_id, status="paused")
         matched = self._match_tasks(tasks, task_hint)
 
         if not matched:
@@ -433,7 +439,7 @@ Examples:
         task_name = task.get("name", "item")
 
         try:
-            updated_task = db_client.update_task(task_id, {"status": "active"})
+            updated_task = await repo.update_task(task_id, {"status": "active"})
 
             if self.trigger_engine and updated_task:
                 from onevalet.triggers.models import Task
@@ -448,11 +454,11 @@ Examples:
 
     async def _resume_all_tasks(self) -> str:
         """Resume all paused tasks"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
-        tasks = db_client.get_user_tasks(self.tenant_id, status="paused")
+        tasks = await repo.get_user_tasks(self.tenant_id, status="paused")
 
         if not tasks:
             return "You don't have any paused items to resume."
@@ -461,7 +467,7 @@ Examples:
         for task in tasks:
             task_id = task.get("id")
             try:
-                updated_task = db_client.update_task(task_id, {"status": "active"})
+                updated_task = await repo.update_task(task_id, {"status": "active"})
                 if self.trigger_engine and updated_task:
                     from onevalet.triggers.models import Task
                     task_obj = Task.from_dict(updated_task)
@@ -474,8 +480,8 @@ Examples:
 
     async def _delete_task(self, fields: Dict[str, Any]) -> str:
         """Delete a task"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return "Task storage is not available right now."
 
         task = self.matched_task
@@ -485,7 +491,7 @@ Examples:
             if not task_hint:
                 return "Which reminder or automation would you like to delete?"
 
-            tasks = db_client.get_user_tasks(self.tenant_id)
+            tasks = await repo.get_user_tasks(self.tenant_id)
             matched = self._match_tasks(tasks, task_hint)
 
             if not matched:
@@ -506,7 +512,7 @@ Examples:
                 except Exception as e:
                     logger.warning(f"Failed to delete from trigger engine: {e}")
 
-            db_client.delete_task(task_id)
+            await repo.delete_task(task_id)
 
             return f"Deleted '{task_name}'."
 

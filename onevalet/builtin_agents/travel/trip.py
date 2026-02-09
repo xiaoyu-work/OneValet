@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
 from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult, Message
+from .trip_repo import TripRepository
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +37,14 @@ class TripAgent(StandardAgent):
     def needs_approval(self) -> bool:
         return False
 
-    def _get_db_client(self):
-        """Get database client from context_hints"""
-        return self.context_hints.get("db_client")
+    def _get_repo(self):
+        """Get TripRepository from context_hints['db']"""
+        db = self.context_hints.get("db")
+        if not db:
+            return None
+        if not hasattr(self, '_trip_repo'):
+            self._trip_repo = TripRepository(db)
+        return self._trip_repo
 
     async def extract_fields(self, user_input: str) -> Dict[str, Any]:
         """Extract trip action from user input"""
@@ -126,8 +132,8 @@ Return ONLY JSON:"""
 
     async def _query_trips(self, fields: Dict[str, Any]) -> AgentResult:
         """Query user's trips"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Trip storage is not available right now."
@@ -135,7 +141,7 @@ Return ONLY JSON:"""
 
         search_term = fields.get("search_term")
 
-        trips = db_client.get_user_trips(
+        trips = await repo.get_user_trips(
             user_id=self.tenant_id,
             status="upcoming",
             search_term=search_term,
@@ -161,8 +167,8 @@ Return ONLY JSON:"""
 
     async def _delete_trip(self, fields: Dict[str, Any]) -> AgentResult:
         """Delete/cancel a trip"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Trip storage is not available right now."
@@ -176,7 +182,7 @@ Return ONLY JSON:"""
                 raw_message="Which trip would you like to cancel? Tell me the destination or flight number."
             )
 
-        trips = db_client.get_user_trips(
+        trips = await repo.get_user_trips(
             user_id=self.tenant_id,
             status="upcoming",
             search_term=search_term
@@ -198,9 +204,7 @@ Return ONLY JSON:"""
             )
 
         trip = trips[0]
-        db_client.client.table("trips").update(
-            {"status": "cancelled"}
-        ).eq("id", trip["id"]).execute()
+        await repo.soft_delete_trip(trip["id"])
 
         return self.make_result(
             status=AgentStatus.COMPLETED,
@@ -238,7 +242,7 @@ Return ONLY JSON:"""
             trip_data["source_account"] = source_account
             trip_data["raw_data"] = {"original_text": text[:2000]}
 
-            return self._save_trip_with_dedup(user_id, trip_data)
+            return await self._save_trip_with_dedup(user_id, trip_data)
 
         except Exception as e:
             logger.error(f"Trip extraction failed: {e}", exc_info=True)
@@ -320,63 +324,57 @@ Return ONLY JSON:"""
             logger.error(f"LLM trip extraction failed: {e}")
             return {"has_trip": False}
 
-    def _save_trip_with_dedup(
+    async def _save_trip_with_dedup(
         self,
         user_id: str,
         trip_data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Save trip with deduplication."""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             logger.error("No database client available for saving trip")
             return None
 
         try:
-            existing = self._find_existing_trip(user_id, trip_data)
+            existing = await self._find_existing_trip(user_id, trip_data)
 
             if existing:
                 logger.info(f"Trip exists: {existing.get('id')}, updating")
-                return self._update_existing_trip(existing["id"], trip_data)
+                return await self._update_existing_trip(existing["id"], trip_data)
 
             insert_data = self._prepare_insert_data(trip_data)
-            result = db_client.client.table("trips").insert(insert_data).execute()
+            row = await repo.insert_trip(insert_data)
 
-            if result.data:
-                logger.info(f"Created trip: {result.data[0].get('id')}")
-                return result.data[0]
-
-            return None
+            if row:
+                logger.info(f"Created trip: {row.get('id')}")
+            return row
 
         except Exception as e:
             logger.error(f"Save trip failed: {e}", exc_info=True)
             return None
 
-    def _find_existing_trip(
+    async def _find_existing_trip(
         self,
         user_id: str,
         trip_data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Find existing trip for deduplication."""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return None
 
         try:
             source_id = trip_data.get("source_id")
             if source_id:
-                result = db_client.client.table("trips").select("*").eq(
-                    "user_id", user_id
-                ).eq("source_id", source_id).execute()
-                if result.data:
-                    return result.data[0]
+                found = await repo.find_by_source_id(user_id, source_id)
+                if found:
+                    return found
 
             booking_ref = trip_data.get("booking_reference")
             if booking_ref:
-                result = db_client.client.table("trips").select("*").eq(
-                    "user_id", user_id
-                ).eq("booking_reference", booking_ref).execute()
-                if result.data:
-                    return result.data[0]
+                found = await repo.find_by_booking_reference(user_id, booking_ref)
+                if found:
+                    return found
 
             trip_number = trip_data.get("trip_number")
             departure_time = trip_data.get("departure_time")
@@ -384,21 +382,9 @@ Return ONLY JSON:"""
             if trip_number and departure_time:
                 try:
                     dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
-                    date_start = dt.replace(hour=0, minute=0, second=0)
-                    date_end = date_start + timedelta(days=1)
-
-                    result = db_client.client.table("trips").select("*").eq(
-                        "user_id", user_id
-                    ).eq(
-                        "trip_number", trip_number
-                    ).gte(
-                        "departure_time", date_start.isoformat()
-                    ).lt(
-                        "departure_time", date_end.isoformat()
-                    ).execute()
-
-                    if result.data:
-                        return result.data[0]
+                    found = await repo.find_by_trip_number_and_date(user_id, trip_number, dt)
+                    if found:
+                        return found
                 except Exception:
                     pass
 
@@ -408,23 +394,9 @@ Return ONLY JSON:"""
             if origin_code and dest_code and departure_time:
                 try:
                     dt = datetime.fromisoformat(departure_time.replace("Z", "+00:00"))
-                    date_start = dt.replace(hour=0, minute=0, second=0)
-                    date_end = date_start + timedelta(days=1)
-
-                    result = db_client.client.table("trips").select("*").eq(
-                        "user_id", user_id
-                    ).eq(
-                        "origin_code", origin_code
-                    ).eq(
-                        "destination_code", dest_code
-                    ).gte(
-                        "departure_time", date_start.isoformat()
-                    ).lt(
-                        "departure_time", date_end.isoformat()
-                    ).execute()
-
-                    if result.data:
-                        return result.data[0]
+                    found = await repo.find_by_route_and_date(user_id, origin_code, dest_code, dt)
+                    if found:
+                        return found
                 except Exception:
                     pass
 
@@ -432,16 +404,9 @@ Return ONLY JSON:"""
             check_in_date = trip_data.get("check_in_date")
 
             if hotel_name and check_in_date:
-                result = db_client.client.table("trips").select("*").eq(
-                    "user_id", user_id
-                ).eq(
-                    "hotel_name", hotel_name
-                ).eq(
-                    "check_in_date", check_in_date
-                ).execute()
-
-                if result.data:
-                    return result.data[0]
+                found = await repo.find_by_hotel(user_id, hotel_name, check_in_date)
+                if found:
+                    return found
 
             return None
 
@@ -449,14 +414,14 @@ Return ONLY JSON:"""
             logger.error(f"Find existing trip error: {e}")
             return None
 
-    def _update_existing_trip(
+    async def _update_existing_trip(
         self,
         trip_id: str,
         trip_data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Update existing trip with new info."""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return None
 
         try:
@@ -472,11 +437,7 @@ Return ONLY JSON:"""
             update_data = {k: v for k, v in trip_data.items() if k in update_fields and v}
 
             if update_data:
-                result = db_client.client.table("trips").update(
-                    update_data
-                ).eq("id", trip_id).execute()
-                if result.data:
-                    return result.data[0]
+                return await repo.update_trip(trip_id, update_data)
 
             return None
 
@@ -494,6 +455,9 @@ Return ONLY JSON:"""
 
         if "title" not in data:
             data["title"] = self._generate_title(trip_data)
+
+        if "raw_data" in data and not isinstance(data["raw_data"], str):
+            data["raw_data"] = json.dumps(data["raw_data"])
 
         return data
 

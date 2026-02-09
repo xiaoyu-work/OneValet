@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, List
 
 from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
+from .important_dates_repo import ImportantDatesRepository
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +27,26 @@ class ImportantDateDigestAgent(StandardAgent):
     def needs_approval(self) -> bool:
         return False
 
-    def _get_db_client(self):
-        """Get database client from context_hints"""
-        return self.context_hints.get("db_client")
+    def _get_repo(self):
+        """Get ImportantDatesRepository from context_hints"""
+        db = self.context_hints.get("db")
+        if not db:
+            return None
+        if not hasattr(self, '_dates_repo'):
+            self._dates_repo = ImportantDatesRepository(db)
+        return self._dates_repo
 
     async def on_running(self, msg: Message) -> AgentResult:
         """Get important dates that need reminding today"""
         try:
-            db_client = self._get_db_client()
-            if not db_client:
+            repo = self._get_repo()
+            if not repo:
                 return self.make_result(
                     status=AgentStatus.COMPLETED,
                     raw_message=""
                 )
 
-            dates = db_client.get_today_important_dates(self.tenant_id)
+            dates = await repo.get_today_important_dates(self.tenant_id)
 
             if not dates:
                 return self.make_result(

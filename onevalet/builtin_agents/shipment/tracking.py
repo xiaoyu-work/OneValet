@@ -20,6 +20,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 
 from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult, Message
+from .shipment_repo import ShipmentRepository
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +63,14 @@ class ShipmentAgent(StandardAgent):
         except ImportError:
             logger.warning("Shipment tracking provider not available")
 
-    def _get_db_client(self):
-        """Get database client from context_hints"""
-        return self.context_hints.get("db_client")
+    def _get_repo(self):
+        """Get shipment repository from context_hints"""
+        db = self.context_hints.get("db")
+        if not db:
+            return None
+        if not hasattr(self, '_shipment_repo'):
+            self._shipment_repo = ShipmentRepository(db)
+        return self._shipment_repo
 
     def needs_approval(self) -> bool:
         return False
@@ -229,7 +235,7 @@ class ShipmentAgent(StandardAgent):
 
     async def _query_one(self, tracking_number: str, carrier: str = None, description: str = None) -> AgentResult:
         """Query a specific shipment"""
-        db_client = self._get_db_client()
+        repo = self._get_repo()
 
         if not tracking_number:
             return self.make_result(
@@ -267,9 +273,9 @@ class ShipmentAgent(StandardAgent):
 
         status = result.get("status", "unknown")
 
-        if db_client:
+        if repo:
             delivered_notified = True if status == "delivered" else None
-            db_client.upsert_shipment(
+            await repo.upsert_shipment(
                 user_id=self.tenant_id,
                 tracking_number=tracking_number,
                 carrier=carrier,
@@ -283,7 +289,7 @@ class ShipmentAgent(StandardAgent):
             )
 
             if status == "delivered":
-                db_client.archive_shipment_by_tracking(self.tenant_id, tracking_number)
+                await repo.archive_shipment_by_tracking(self.tenant_id, tracking_number)
                 logger.info(f"Archived {tracking_number} after delivery")
 
         response = self._format_shipment_status(result, description)
@@ -332,14 +338,14 @@ class ShipmentAgent(StandardAgent):
 
     async def _query_all(self) -> AgentResult:
         """Query all active shipments"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Shipment storage is not available right now."
             )
 
-        shipments = db_client.get_user_shipments(self.tenant_id, is_active=True)
+        shipments = await repo.get_user_shipments(self.tenant_id, is_active=True)
 
         if not shipments:
             return self.make_result(
@@ -375,7 +381,7 @@ class ShipmentAgent(StandardAgent):
             result = await self.tracking_provider.track(tracking_number, carrier)
 
             if result.get("success"):
-                db_client.upsert_shipment(
+                await repo.upsert_shipment(
                     user_id=self.tenant_id,
                     tracking_number=tracking_number,
                     carrier=carrier,
@@ -407,8 +413,8 @@ class ShipmentAgent(StandardAgent):
 
     async def _update_shipment(self, fields: Dict[str, Any]) -> AgentResult:
         """Update shipment info"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Shipment storage is not available right now."
@@ -419,7 +425,7 @@ class ShipmentAgent(StandardAgent):
         description = fields.get("description")
         description_pattern = fields.get("description_pattern")
 
-        shipments = db_client.get_user_shipments(self.tenant_id, is_active=True)
+        shipments = await repo.get_user_shipments(self.tenant_id, is_active=True)
 
         if not shipments:
             return self.make_result(
@@ -448,7 +454,7 @@ class ShipmentAgent(StandardAgent):
             update_data["description"] = description
 
         if update_data:
-            db_client.update_shipment(shipment["id"], update_data)
+            await repo.update_shipment(shipment["id"], update_data)
 
         return self.make_result(
             status=AgentStatus.COMPLETED,
@@ -457,8 +463,8 @@ class ShipmentAgent(StandardAgent):
 
     async def _delete_shipment(self, fields: Dict[str, Any]) -> AgentResult:
         """Delete/stop tracking a shipment"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Shipment storage is not available right now."
@@ -466,7 +472,7 @@ class ShipmentAgent(StandardAgent):
 
         selected = fields.get("selected_shipment")
         if selected:
-            db_client.archive_shipment(selected["id"])
+            await repo.archive_shipment(selected["id"])
             desc = f" ({selected['description']})" if selected.get("description") else ""
             return self.make_result(
                 status=AgentStatus.COMPLETED,
@@ -477,7 +483,7 @@ class ShipmentAgent(StandardAgent):
         carrier = fields.get("carrier")
         description_pattern = fields.get("description_pattern")
 
-        shipments = db_client.get_user_shipments(self.tenant_id, is_active=True)
+        shipments = await repo.get_user_shipments(self.tenant_id, is_active=True)
 
         if not shipments:
             return self.make_result(
@@ -511,7 +517,7 @@ class ShipmentAgent(StandardAgent):
             )
 
         shipment = matches[0]
-        db_client.archive_shipment(shipment["id"])
+        await repo.archive_shipment(shipment["id"])
 
         desc = f" ({shipment['description']})" if shipment.get("description") else ""
         return self.make_result(
@@ -521,14 +527,14 @@ class ShipmentAgent(StandardAgent):
 
     async def _query_history(self) -> AgentResult:
         """Query archived/delivered shipments"""
-        db_client = self._get_db_client()
-        if not db_client:
+        repo = self._get_repo()
+        if not repo:
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Shipment storage is not available right now."
             )
 
-        shipments = db_client.get_user_shipments(self.tenant_id, is_active=False)
+        shipments = await repo.get_user_shipments(self.tenant_id, is_active=False)
 
         if not shipments:
             return self.make_result(

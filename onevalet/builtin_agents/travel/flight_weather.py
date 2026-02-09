@@ -8,6 +8,7 @@ import logging
 from typing import Dict, Any, List
 
 from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
+from .trip_repo import TripRepository
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +27,26 @@ class FlightWeatherAgent(StandardAgent):
     def needs_approval(self) -> bool:
         return False
 
-    def _get_db_client(self):
-        """Get database client from context_hints"""
-        return self.context_hints.get("db_client")
+    def _get_repo(self):
+        """Get TripRepository from context_hints['db']"""
+        db = self.context_hints.get("db")
+        if not db:
+            return None
+        if not hasattr(self, '_trip_repo'):
+            self._trip_repo = TripRepository(db)
+        return self._trip_repo
 
     async def on_running(self, msg: Message) -> AgentResult:
         """Get today's flights from trips and fetch destination weather"""
         try:
-            db_client = self._get_db_client()
-            if not db_client:
+            repo = self._get_repo()
+            if not repo:
                 return self.make_result(
                     status=AgentStatus.COMPLETED,
                     raw_message=""
                 )
 
-            trips = db_client.get_today_trips(self.tenant_id)
+            trips = await repo.get_today_trips(self.tenant_id)
             flights = [t for t in trips if t.get("trip_type") == "flight"]
 
             if not flights:
