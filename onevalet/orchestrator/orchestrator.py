@@ -49,6 +49,7 @@ import json
 import asyncio
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from ..message import Message
@@ -332,7 +333,11 @@ class Orchestrator:
         # Step 3: Check pending agents (WAITING_FOR_INPUT / WAITING_FOR_APPROVAL)
         agent_result = await self._check_pending_agents(tenant_id, message, context)
         if agent_result is not None:
-            return await self.post_process(agent_result, context)
+            # Agent still waiting -> return prompt directly, don't enter ReAct
+            if agent_result.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
+                return await self.post_process(agent_result, context)
+            # Agent completed -> feed result into ReAct loop as context
+            context["pending_agent_result"] = agent_result
 
         # Step 4: Build LLM messages
         messages = self._build_llm_messages(context, message)
@@ -494,6 +499,7 @@ class Orchestrator:
 
                 # Execute all tool calls concurrently
                 loop_broken = False
+                loop_broken_text = None
                 for tc in tool_calls:
                     yield AgentEvent(
                         type=EventType.TOOL_CALL_START,
@@ -547,6 +553,7 @@ class Orchestrator:
                             data={"agent_type": tc_name, "status": waiting_status},
                         )
                         loop_broken = True
+                        loop_broken_text = result.result_text
                     else:
                         # Regular tool or completed Agent-Tool
                         if isinstance(result, AgentToolResult):
@@ -565,6 +572,20 @@ class Orchestrator:
                         )
 
                 if loop_broken:
+                    # Yield the waiting agent's prompt to the user
+                    if loop_broken_text:
+                        yield AgentEvent(
+                            type=EventType.MESSAGE_START,
+                            data={"turn": turn},
+                        )
+                        yield AgentEvent(
+                            type=EventType.MESSAGE_CHUNK,
+                            data={"chunk": loop_broken_text},
+                        )
+                        yield AgentEvent(
+                            type=EventType.MESSAGE_END,
+                            data={},
+                        )
                     break
         else:
             # max_turns reached: ask LLM for summary without tools
@@ -667,16 +688,24 @@ class Orchestrator:
             messages.append(self._assistant_message_from_response(resp_message))
 
             # Execute all tool calls concurrently
-            tc_start = time.monotonic()
+            tc_batch_start = time.monotonic()
             results = await asyncio.gather(
                 *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
                 return_exceptions=True,
             )
+            tc_batch_duration = int((time.monotonic() - tc_batch_start) * 1000)
+
+            # Capture token attribution for this turn's tool calls
+            turn_tokens = None
+            if usage:
+                turn_tokens = TokenUsage(
+                    input_tokens=getattr(usage, "prompt_tokens", 0),
+                    output_tokens=getattr(usage, "completion_tokens", 0),
+                )
 
             loop_broken = False
             for tc, result in zip(tool_calls, results):
                 tc_name = tc.function.name
-                tc_duration = int((time.monotonic() - tc_start) * 1000)
 
                 try:
                     args_summary = json.loads(tc.function.arguments)
@@ -692,9 +721,10 @@ class Orchestrator:
                     all_tool_records.append(ToolCallRecord(
                         name=tc_name,
                         args_summary=args_summary,
-                        duration_ms=tc_duration,
+                        duration_ms=tc_batch_duration,
                         success=False,
                         result_chars=len(error_text),
+                        token_attribution=turn_tokens,
                     ))
 
                 elif isinstance(result, AgentToolResult) and not result.completed:
@@ -709,11 +739,13 @@ class Orchestrator:
                     all_tool_records.append(ToolCallRecord(
                         name=tc_name,
                         args_summary=args_summary,
-                        duration_ms=tc_duration,
+                        duration_ms=tc_batch_duration,
                         success=True,
                         result_status="WAITING_FOR_APPROVAL" if result.approval_request else "WAITING_FOR_INPUT",
                         result_chars=len(waiting_text),
+                        token_attribution=turn_tokens,
                     ))
+                    final_response = waiting_text
                     loop_broken = True
 
                 else:
@@ -723,6 +755,8 @@ class Orchestrator:
                     else:
                         result_text = str(result) if result is not None else ""
 
+                    # Capture original length before truncation
+                    result_chars_original = len(result_text)
                     # Defense 1: truncate individual tool result
                     result_text = self._context_manager.truncate_tool_result(result_text)
                     messages.append(self._build_tool_result_message(tc.id, result_text))
@@ -730,26 +764,18 @@ class Orchestrator:
                     all_tool_records.append(ToolCallRecord(
                         name=tc_name,
                         args_summary=args_summary,
-                        duration_ms=tc_duration,
+                        duration_ms=tc_batch_duration,
                         success=True,
                         result_status="COMPLETED" if isinstance(result, AgentToolResult) else None,
-                        result_chars=len(result_text),
+                        result_chars=result_chars_original,
+                        token_attribution=turn_tokens,
                     ))
 
             if loop_broken:
-                # Collect batch approvals if any
                 if pending_approvals:
                     pending_approvals = collect_batch_approvals(pending_approvals)
-                # Do one more LLM call to get a response acknowledging the waiting state
-                messages.append({
-                    "role": "user",
-                    "content": "Some agent-tools are waiting for user input or approval. Summarize what has been done and what is pending.",
-                })
-                try:
-                    summary_resp = await self._llm_call_with_retry(messages, tool_schemas=None)
-                    final_response = getattr(summary_resp.choices[0].message, "content", "") or ""
-                except Exception:
-                    final_response = "Some actions require your approval before proceeding."
+                # Return the waiting agent's prompt directly — no extra LLM call
+                # final_response was already set when loop_broken was triggered
                 break
 
         else:
@@ -917,6 +943,8 @@ class Orchestrator:
         is_error: bool = False,
     ) -> Dict[str, Any]:
         """Build a tool result message for the LLM messages list."""
+        if is_error:
+            content = f"[ERROR] {content}"
         return {
             "role": "tool",
             "tool_call_id": tool_call_id,
@@ -1013,6 +1041,19 @@ class Orchestrator:
         if self.system_prompt:
             system_parts.append(self.system_prompt)
 
+        # Framework context (current time, capabilities list)
+        framework_parts = []
+        now = datetime.now(timezone.utc)
+        framework_parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+        if self._agent_registry:
+            agent_types = self._agent_registry.list_agent_types()
+            if agent_types:
+                framework_parts.append(f"Available agents: {', '.join(agent_types)}")
+
+        if framework_parts:
+            system_parts.append("\n[Context]\n" + "\n".join(framework_parts))
+
         recalled = context.get("recalled_memories", [])
         if recalled:
             memory_lines = []
@@ -1042,6 +1083,15 @@ class Orchestrator:
             "role": "user",
             "content": user_message,
         })
+
+        # If a pending agent just completed, include its result
+        pending_result = context.get("pending_agent_result")
+        if pending_result:
+            result_text = pending_result.raw_message or f"Agent {pending_result.agent_type} completed."
+            messages.append({
+                "role": "user",
+                "content": f"[Previous agent result: {pending_result.agent_type}]\n{result_text}\n\nBased on this result, determine if any follow-up actions are needed.",
+            })
 
         return messages
 
@@ -1521,7 +1571,10 @@ class Orchestrator:
                 results.append({
                     "agent_id": agent.agent_id,
                     "agent_type": agent.agent_type,
+                    "agent_name": agent.agent_type,
+                    "action_summary": getattr(agent, 'raw_message', '') or f"{agent.agent_type} awaiting approval",
                     "source": "user",
+                    "created_at": getattr(agent, 'created_at', None),
                 })
 
         # TriggerEngine: tasks pending approval
@@ -1531,6 +1584,8 @@ class Orchestrator:
                 results.append({
                     "task_id": task.id,
                     "task_name": task.name,
+                    "agent_name": task.name,
+                    "action_summary": getattr(task, 'description', '') or task.name,
                     "source": "trigger",
                     "trigger_type": task.trigger.type.value,
                 })

@@ -171,6 +171,9 @@ from .db import Database, Repository
 # Credentials
 from .credentials import CredentialStore
 
+# Application Entry Point
+from .app import OneValet
+
 # Memory
 from .memory import MomexMemory
 
@@ -285,6 +288,8 @@ __all__ = [
     "Repository",
     # Credentials
     "CredentialStore",
+    # Application Entry Point
+    "OneValet",
     # Memory
     "MomexMemory",
     # Formatter

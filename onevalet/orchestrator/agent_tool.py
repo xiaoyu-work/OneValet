@@ -49,8 +49,8 @@ async def execute_agent_tool(
 
     # 1. Create agent instance with tool_call_args as context_hints
     agent = await orchestrator.create_agent(
-        agent_type,
         tenant_id=tenant_id,
+        agent_type=agent_type,
         context_hints=tool_call_args,
     )
     if agent is None:

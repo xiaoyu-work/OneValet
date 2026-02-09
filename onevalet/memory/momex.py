@@ -61,16 +61,16 @@ class MomexMemory:
         self._short_term = None  # Lazy-initialized ShortTermMemory
 
     def _ensure_initialized(self) -> None:
-        """Lazy-initialize typeagent-py clients."""
+        """Lazy-initialize momex clients."""
         if self._memory is not None:
             return
 
         try:
-            from typeagent import Memory, ShortTermMemory
+            from momex import Memory, ShortTermMemory
         except ImportError:
             raise ImportError(
-                "typeagent-py is required for Momex memory. "
-                "Install with: pip install typeagent"
+                "momex is required for memory. "
+                "Install with: pip install momex"
             )
 
         if self._config:

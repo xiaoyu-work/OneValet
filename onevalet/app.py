@@ -1,0 +1,260 @@
+"""
+OneValet Application - Single entry point for the AI agent system.
+
+Usage:
+    from onevalet import OneValet
+
+    app = OneValet("config.yaml")
+
+    # Personal deployment
+    result = await app.chat("What's the weather in Tokyo?")
+
+    # Multi-tenant
+    result = await app.chat("user1", "What's the weather in Tokyo?")
+"""
+
+import logging
+import os
+import re
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from .result import AgentResult
+from .streaming.models import AgentEvent
+
+logger = logging.getLogger(__name__)
+
+# Provider -> default env var name for API key
+_PROVIDER_ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "azure": "AZURE_OPENAI_API_KEY",
+    "dashscope": "DASHSCOPE_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "ollama": None,  # No API key needed
+}
+
+# Provider -> LLM client class import path
+_PROVIDER_CLIENTS = {
+    "openai": ("onevalet.llm.openai_client", "OpenAIClient"),
+    "anthropic": ("onevalet.llm.anthropic_client", "AnthropicClient"),
+    "azure": ("onevalet.llm.azure_client", "AzureOpenAIClient"),
+    "dashscope": ("onevalet.llm.dashscope_client", "DashScopeClient"),
+    "gemini": ("onevalet.llm.gemini_client", "GeminiClient"),
+    "ollama": ("onevalet.llm.ollama_client", "OllamaClient"),
+}
+
+
+def _load_config(path: str) -> dict:
+    """Read YAML config file with ${VAR} environment variable substitution."""
+    try:
+        import yaml
+    except ImportError:
+        raise ImportError(
+            "pyyaml is required for config file loading. "
+            "Install with: pip install pyyaml"
+        )
+
+    with open(path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    # Replace ${VAR} with environment variable values
+    def _replace_env(match):
+        var_name = match.group(1)
+        value = os.environ.get(var_name)
+        if value is None:
+            raise ValueError(
+                f"Environment variable '{var_name}' not set "
+                f"(referenced in config file '{path}')"
+            )
+        return value
+
+    resolved = re.sub(r"\$\{(\w+)\}", _replace_env, raw)
+    return yaml.safe_load(resolved)
+
+
+class OneValet:
+    """
+    OneValet Application entry point.
+
+    Wraps the entire AI agent system behind a simple interface.
+    Sync constructor reads config; async initialization is deferred
+    to the first chat() or stream() call.
+
+    Args:
+        config: Path to YAML configuration file.
+
+    Example:
+        app = OneValet("config.yaml")
+        result = await app.chat("What's the weather in Tokyo?")
+    """
+
+    def __init__(self, config: str):
+        self._config = _load_config(config)
+        self._initialized = False
+
+        # Validate required fields
+        for field in ("provider", "model", "database"):
+            if field not in self._config:
+                raise ValueError(f"Missing required config field: '{field}'")
+
+        provider = self._config["provider"]
+        if provider not in _PROVIDER_CLIENTS:
+            raise ValueError(
+                f"Unsupported provider: '{provider}'. "
+                f"Supported: {', '.join(_PROVIDER_CLIENTS.keys())}"
+            )
+
+        # Will be set during lazy initialization
+        self._llm_client = None
+        self._database = None
+        self._credential_store = None
+        self._momex = None
+        self._agent_registry = None
+        self._orchestrator = None
+
+    async def _ensure_initialized(self) -> None:
+        """Lazy initialization — runs once on first chat()/stream() call."""
+        if self._initialized:
+            return
+
+        cfg = self._config
+        provider = cfg["provider"]
+        model = cfg["model"]
+
+        # 1. LLM client
+        api_key = cfg.get("api_key")
+        if api_key is None:
+            env_var = _PROVIDER_ENV_VARS.get(provider)
+            if env_var:
+                api_key = os.environ.get(env_var)
+
+        client_kwargs = {"model": model}
+        if api_key:
+            client_kwargs["api_key"] = api_key
+        if cfg.get("base_url"):
+            client_kwargs["base_url"] = cfg["base_url"]
+
+        module_path, class_name = _PROVIDER_CLIENTS[provider]
+        import importlib
+        mod = importlib.import_module(module_path)
+        ClientClass = getattr(mod, class_name)
+        self._llm_client = ClientClass(**client_kwargs)
+
+        # 2. Database
+        from .db import Database
+        self._database = Database(dsn=cfg["database"])
+        await self._database.initialize()
+
+        # 3. CredentialStore
+        from .credentials import CredentialStore
+        self._credential_store = CredentialStore(db=self._database)
+        await self._credential_store.ensure_table()
+
+        # 4. MomexMemory
+        from .memory.momex import MomexMemory
+        self._momex = MomexMemory()
+
+        # 5. Agent discovery — scan builtin_agents
+        from .agents.discovery import AgentDiscovery
+        discovery = AgentDiscovery()
+        discovery.scan_package("onevalet.builtin_agents")
+        discovery.sync_from_global_registry()
+        logger.info(
+            f"Discovered {len(discovery.get_discovered_agents())} builtin agents"
+        )
+
+        # 6. AgentRegistry
+        from .config import AgentRegistry
+        self._agent_registry = AgentRegistry()
+        await self._agent_registry.initialize()
+
+        # Register LLM as default in LLMRegistry
+        from .llm.registry import LLMRegistry
+        llm_registry = LLMRegistry.get_instance()
+        llm_registry.register("default", self._llm_client)
+        llm_registry.set_default("default")
+
+        # 7. Orchestrator
+        from .orchestrator import Orchestrator
+        self._orchestrator = Orchestrator(
+            momex=self._momex,
+            llm_client=self._llm_client,
+            agent_registry=self._agent_registry,
+            credential_store=self._credential_store,
+            system_prompt=cfg.get("system_prompt", ""),
+        )
+        await self._orchestrator.initialize()
+
+        self._initialized = True
+        logger.info("OneValet initialized")
+
+    async def chat(
+        self,
+        message_or_tenant_id: str,
+        message: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AgentResult:
+        """
+        Send a message and get a response.
+
+        Can be called two ways:
+            app.chat("Hello!")                    # personal (tenant_id="default")
+            app.chat("user1", "Hello!")           # multi-tenant
+
+        Args:
+            message_or_tenant_id: The message (single-arg) or tenant_id (two-arg).
+            message: The message when using multi-tenant mode.
+            metadata: Optional metadata dict passed to the orchestrator.
+
+        Returns:
+            AgentResult with the response.
+        """
+        if message is None:
+            tenant_id = "default"
+            actual_message = message_or_tenant_id
+        else:
+            tenant_id = message_or_tenant_id
+            actual_message = message
+
+        await self._ensure_initialized()
+        return await self._orchestrator.handle_message(
+            tenant_id=tenant_id,
+            message=actual_message,
+            metadata=metadata,
+        )
+
+    async def stream(
+        self,
+        message_or_tenant_id: str,
+        message: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """
+        Send a message and stream the response.
+
+        Can be called two ways:
+            async for event in app.stream("Hello!"): ...
+            async for event in app.stream("user1", "Hello!"): ...
+
+        Args:
+            message_or_tenant_id: The message (single-arg) or tenant_id (two-arg).
+            message: The message when using multi-tenant mode.
+            metadata: Optional metadata dict passed to the orchestrator.
+
+        Returns:
+            AsyncIterator of AgentEvent.
+        """
+        if message is None:
+            tenant_id = "default"
+            actual_message = message_or_tenant_id
+        else:
+            tenant_id = message_or_tenant_id
+            actual_message = message
+
+        await self._ensure_initialized()
+        async for event in self._orchestrator.handle_message_stream(
+            tenant_id=tenant_id,
+            message=actual_message,
+            metadata=metadata,
+        ):
+            yield event
