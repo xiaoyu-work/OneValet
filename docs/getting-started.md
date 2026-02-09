@@ -1,157 +1,95 @@
 # Getting Started
 
-Build your first AI agent with OneValet in 5 minutes.
+Deploy OneValet and send your first request in 5 minutes.
 
-## Installation
+## 1. Clone the repo
 
 ```bash
-pip install onevalet
-
-# With a specific LLM provider
-pip install onevalet[openai]
-
-# With all providers
-pip install onevalet[all]
+git clone https://github.com/xiaoyu-work/onevalet.git
+cd onevalet
 ```
 
-## Your First Agent
+## 2. Install dependencies
 
-```python
-import asyncio
-from onevalet import valet, StandardAgent, InputField, AgentStatus, Orchestrator
-
-@valet(triggers=["greet", "hello"])
-class GreetingAgent(StandardAgent):
-    name = InputField("What's your name?")
-
-    async def on_running(self, msg):
-        return self.make_result(
-            status=AgentStatus.COMPLETED,
-            raw_message=f"Hello, {self.name}!"
-        )
-
-async def main():
-    from onevalet import OpenAIClient
-    llm = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
-
-    orchestrator = Orchestrator(llm_client=llm)
-    await orchestrator.initialize()
-
-    result = await orchestrator.handle_message("user_1", "Hello!")
-    print(result.raw_message)  # "What's your name?"
-
-    result = await orchestrator.handle_message("user_1", "Alice")
-    print(result.raw_message)  # "Hello, Alice!"
-
-asyncio.run(main())
+```bash
+# Pick your LLM provider
+uv sync --extra openai
+# or
+uv sync --extra anthropic
+# or install everything
+uv sync --all-extras
 ```
 
-The Orchestrator:
-- Routes messages to agents based on triggers
-- Tracks conversation state per tenant
-- Handles field collection automatically
+## 3. Configure environment variables
 
-## Understanding Agent States
-
-```
-INITIALIZING → WAITING_FOR_INPUT → RUNNING → COMPLETED
-                      ↓
-              WAITING_FOR_APPROVAL
+```bash
+cp .env.example .env
 ```
 
-| State | Description |
-|-------|-------------|
-| `INITIALIZING` | Agent starts, extracts fields from first message |
-| `WAITING_FOR_INPUT` | Collecting required fields from user |
-| `WAITING_FOR_APPROVAL` | Waiting for user to confirm (if enabled) |
-| `RUNNING` | Executes `on_running()` - your business logic |
-| `COMPLETED` | Task finished |
-| `ERROR` | An error occurred |
+Edit `.env` and fill in the keys you need:
 
-## Adding Validation
-
-```python
-from onevalet import valet, StandardAgent, InputField, AgentStatus
-
-def validate_guests(value):
-    if not value.isdigit():
-        raise ValueError("Please enter a number")
-    if int(value) < 1 or int(value) > 20:
-        raise ValueError("We can accommodate 1-20 guests")
-    return True
-
-@valet
-class BookingAgent(StandardAgent):
-    guests = InputField("How many guests?", validator=validate_guests)
-    date = InputField("What date?")
-    name = InputField("Name for the reservation?")
-
-    async def on_running(self, msg):
-        return self.make_result(
-            status=AgentStatus.COMPLETED,
-            raw_message=f"Booked for {self.guests} on {self.date} under {self.name}!"
-        )
+```
+OPENAI_API_KEY=sk-...
+DATABASE_URL=postgresql://user:pass@localhost:5432/onevalet
 ```
 
-## Adding Approval
+See [Configuration](configuration.md) for the full list of environment variables.
 
-For sensitive actions, require user confirmation:
+## 4. Configure the server
 
-```python
-@valet(requires_approval=True)
-class DeleteAgent(StandardAgent):
-    item = InputField("What to delete?")
-
-    def get_approval_prompt(self):
-        return f"Delete '{self.item}'? (yes/no)"
-
-    async def on_running(self, msg):
-        # Only runs after user says "yes"
-        return self.make_result(
-            status=AgentStatus.COMPLETED,
-            raw_message=f"Deleted {self.item}!"
-        )
+```bash
+cp config.yaml.example config.yaml
 ```
 
-## Using with LLM
-
-Add an LLM for smart field extraction:
-
-```python
-from onevalet import OpenAIClient
-
-llm = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
-agent = BookingAgent(llm_client=llm)
-```
-
-Or configure via YAML (`config/onevalet.yaml`):
+Edit `config.yaml` to set your provider, model, and database:
 
 ```yaml
-llm:
-  default: main       # LLM for agents
-  routing: quick      # LLM for Orchestrator routing (optional)
-
-  providers:
-    main:
-      provider: openai          # openai, anthropic, azure, dashscope, gemini, ollama
-      model: gpt-4o
-      api_key: ${OPENAI_API_KEY}
-
-    quick:
-      provider: openai
-      model: gpt-4o-mini
-      api_key: ${OPENAI_API_KEY}
+provider: openai
+model: gpt-4o
+database: ${DATABASE_URL}
 ```
 
-```python
-orchestrator = Orchestrator(config_dir="./config")
-await orchestrator.initialize()  # Loads LLM from YAML
+## 5. Start the server
+
+```bash
+python -m onevalet
 ```
 
-Now the agent can extract fields from natural language like "Book a table for 4 on Friday under John".
+The server starts on `http://0.0.0.0:8000` by default.
 
-## Next Steps
+## 6. Send requests
 
-- [Agents](agents.md) - Deep dive into agent development
+### Health check
+
+```bash
+curl http://localhost:8000/health
+```
+
+### Chat
+
+```bash
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "user_1", "message": "Hello!"}'
+```
+
+### Streaming
+
+```bash
+curl -X POST http://localhost:8000/stream \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "user_1", "message": "Hello!"}'
+```
+
+The `/stream` endpoint returns server-sent events. See [Streaming](streaming.md) for details.
+
+## Custom agents
+
+OneValet ships with built-in agents, but you can create your own using `@valet`, `StandardAgent`, and `InputField`. See the [Agents](agents.md) guide.
+
+## Next steps
+
+- [Configuration](configuration.md) - Full config reference
+- [Agents](agents.md) - Create custom agents
 - [Tools](tools.md) - Add tools for LLM function calling
-- [LLM Providers](llm-providers.md) - Configure different LLM backends
+- [LLM Providers](llm-providers.md) - Switch between OpenAI, Anthropic, Azure, and more

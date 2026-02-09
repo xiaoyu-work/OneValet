@@ -163,7 +163,11 @@ class OneValet:
             f"Discovered {len(discovery.get_discovered_agents())} builtin agents"
         )
 
-        # 6. AgentRegistry
+        # 6. Register builtin tools
+        from .builtin_agents.tools import register_all_builtin_tools
+        register_all_builtin_tools()
+
+        # 7. AgentRegistry
         from .config import AgentRegistry
         self._agent_registry = AgentRegistry()
         await self._agent_registry.initialize()
@@ -252,7 +256,7 @@ class OneValet:
             actual_message = message
 
         await self._ensure_initialized()
-        async for event in self._orchestrator.handle_message_stream(
+        async for event in self._orchestrator.stream_message(
             tenant_id=tenant_id,
             message=actual_message,
             metadata=metadata,

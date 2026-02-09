@@ -1,137 +1,115 @@
 # Streaming
 
-OneValet supports real-time streaming for better user experience.
+OneValet streams responses in real time via Server-Sent Events (SSE).
 
-## Quick Start
+## Endpoint
 
-```python
-from onevalet import StreamEngine, StreamMode, EventType
-
-engine = StreamEngine(mode=StreamMode.INCREMENTAL)
-
-async for event in engine.stream(agent, message):
-    if event.type == EventType.MESSAGE_CHUNK:
-        print(event.data["chunk"], end="", flush=True)
-    elif event.type == EventType.STATE_CHANGE:
-        print(f"\n[State: {event.data['new_status']}]")
+```
+POST /stream
 ```
 
-## Stream Modes
+### Request Body
 
-| Mode | Description |
-|------|-------------|
-| `StreamMode.VALUES` | Complete state after each update |
-| `StreamMode.UPDATES` | Only incremental changes |
-| `StreamMode.MESSAGES` | LLM messages (token-by-token) |
-| `StreamMode.EVENTS` | All events (state changes, tool calls) |
+```json
+{
+  "message": "Book a flight to Paris",
+  "tenant_id": "user_123",
+  "metadata": {}
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `message` | Yes | The user message to process |
+| `tenant_id` | Yes | Identifies the tenant / conversation |
+| `metadata` | No | Arbitrary key-value pairs passed to the agent |
+
+### Response
+
+The response uses the `text/event-stream` content type. Each event is a line prefixed with `data: ` followed by a JSON object and a blank line:
+
+```
+data: {"type": "message_chunk", "data": "Hello"}\n\n
+data: {"type": "message_chunk", "data": ", how"}\n\n
+data: {"type": "message_end", "data": "Hello, how can I help?"}\n\n
+data: [DONE]\n\n
+```
+
+The final event is always `data: [DONE]\n\n`, signaling the stream is finished.
 
 ## Event Types
 
-| Event Type | Description |
-|------------|-------------|
-| `MESSAGE_CHUNK` | Partial message content |
-| `MESSAGE_COMPLETE` | Full message finished |
-| `STATE_CHANGE` | Agent state transition |
-| `TOOL_CALL_START` | Tool execution started |
-| `TOOL_CALL_END` | Tool execution completed |
-| `ERROR` | An error occurred |
-| `DONE` | Stream finished |
+| Type | Description |
+|------|-------------|
+| `message_start` | Message stream started |
+| `message_chunk` | Partial message content (token-by-token) |
+| `message_end` | Message stream finished |
+| `state_change` | Agent state transition |
+| `field_collected` | Input field collected from user |
+| `field_validated` | Input field validated |
+| `tool_call_start` | Tool execution started |
+| `tool_call_end` | Tool execution completed |
+| `tool_result` | Tool returned a result |
 
-## Handling Events
+## Examples
 
-```python
-from onevalet import EventType
+### curl
 
-async for event in engine.stream(agent, message):
-    match event.type:
-        case EventType.MESSAGE_CHUNK:
-            ui.append_text(event.data["chunk"])
-
-        case EventType.STATE_CHANGE:
-            ui.update_status(f"Status: {event.data['new_status']}")
-
-        case EventType.TOOL_CALL_START:
-            ui.show_spinner(f"Running {event.data['tool_name']}...")
-
-        case EventType.TOOL_CALL_END:
-            ui.hide_spinner()
-
-        case EventType.ERROR:
-            ui.show_error(event.data["error"])
-
-        case EventType.DONE:
-            ui.complete()
+```bash
+curl -N -X POST https://your-host/stream \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Book a flight to Paris",
+    "tenant_id": "user_123",
+    "metadata": {}
+  }'
 ```
 
-## Streaming with Orchestrator
+The `-N` flag disables output buffering so events appear as they arrive.
 
-```python
-orchestrator = Orchestrator(llm_client=client)
+### JavaScript (EventSource / fetch)
 
-async for event in orchestrator.process_stream(
-    message="Book a flight to Paris",
-    tenant_id="user_123"
-):
-    handle_event(event)
-```
+The `EventSource` API only supports GET requests, so use `fetch` with a readable stream instead:
 
-## Streaming with LLM Clients
+```javascript
+const response = await fetch("https://your-host/stream", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    message: "Book a flight to Paris",
+    tenant_id: "user_123",
+    metadata: {}
+  })
+});
 
-All built-in LLM clients support streaming:
+const reader = response.body.getReader();
+const decoder = new TextDecoder();
 
-```python
-from onevalet import OpenAIClient
+while (true) {
+  const { done, value } = await reader.read();
+  if (done) break;
 
-client = OpenAIClient(api_key="sk-xxx", model="gpt-4o-mini")
+  const text = decoder.decode(value, { stream: true });
 
-async for chunk in client.stream_completion(messages):
-    print(chunk.content, end="", flush=True)
-```
+  for (const line of text.split("\n")) {
+    if (!line.startsWith("data: ")) continue;
+    const payload = line.slice(6);
 
-## WebSocket Integration
+    if (payload === "[DONE]") {
+      console.log("Stream finished");
+      break;
+    }
 
-```python
-from fastapi import FastAPI, WebSocket
-
-app = FastAPI()
-
-@app.websocket("/chat")
-async def chat(websocket: WebSocket):
-    await websocket.accept()
-
-    while True:
-        message = await websocket.receive_text()
-
-        async for event in orchestrator.process_stream(message):
-            await websocket.send_json({
-                "type": event.type.value,
-                "data": event.data,
-            })
-```
-
-## Server-Sent Events (SSE)
-
-```python
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-
-app = FastAPI()
-
-@app.get("/chat/stream")
-async def chat_stream(message: str):
-    async def event_generator():
-        async for event in orchestrator.process_stream(message):
-            yield f"data: {json.dumps({'type': event.type.value, 'data': event.data})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream"
-    )
+    const event = JSON.parse(payload);
+    if (event.type === "message_chunk") {
+      process.stdout.write(event.data);
+    }
+  }
+}
 ```
 
 ## Best Practices
 
-1. **Use incremental mode** - Better UX for long responses
-2. **Handle all event types** - Don't ignore errors
-3. **Show progress** - Use state changes to show what's happening
-4. **Graceful degradation** - Fall back to non-streaming if needed
+1. **Always handle the `[DONE]` event** -- use it to finalize your UI or close the connection.
+2. **Handle errors gracefully** -- check for `error` events and display them to the user.
+3. **Show progress** -- use `state_change` and `tool_call_start` / `tool_call_end` events to indicate what the agent is doing.

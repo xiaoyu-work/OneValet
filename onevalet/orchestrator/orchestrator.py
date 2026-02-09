@@ -1047,7 +1047,7 @@ class Orchestrator:
         framework_parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
         if self._agent_registry:
-            agent_types = self._agent_registry.list_agent_types()
+            agent_types = self._agent_registry.get_all_agent_names()
             if agent_types:
                 framework_parts.append(f"Available agents: {', '.join(agent_types)}")
 
