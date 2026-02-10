@@ -461,7 +461,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         }
 
         # Save to both outlook and outlook_calendar (scopes cover both)
-        for svc in ("outlook", "outlook_calendar", "microsoft_todo"):
+        for svc in ("outlook", "outlook_calendar", "microsoft_todo", "onedrive"):
             await app._credential_store.save(
                 tenant_id=_TENANT_ID,
                 service=svc,
@@ -472,7 +472,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(
             f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             f"<h2>Connected!</h2>"
-            f"<p>Outlook, Calendar &amp; To Do connected as <b>{email}</b></p>"
+            f"<p>Outlook, Calendar, To Do &amp; OneDrive connected as <b>{email}</b></p>"
             f"<script>"
             f"window.opener&&window.opener.postMessage('oauth_complete','*');"
             f"setTimeout(()=>window.close(),1500);"
@@ -730,6 +730,82 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
         )
     except Exception as e:
         logger.error(f"Sonos OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
+# ─── Dropbox OAuth ───
+
+
+@api.get("/api/oauth/dropbox/authorize")
+async def dropbox_oauth_authorize(request: Request):
+    """Initiate Dropbox OAuth flow. Returns authorization URL."""
+    from .oauth.dropbox_oauth import DropboxOAuth
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state = _generate_state("dropbox")
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/dropbox/callback"
+
+    try:
+        url = DropboxOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.get("/api/oauth/dropbox/callback")
+async def dropbox_oauth_callback(request: Request, code: str, state: str):
+    """Dropbox OAuth callback — exchange code for tokens and store credentials."""
+    from .oauth.dropbox_oauth import DropboxOAuth
+
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/dropbox/callback"
+
+    try:
+        tokens = await DropboxOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+        email = await DropboxOAuth.fetch_user_email(tokens["access_token"])
+
+        credentials = {
+            "provider": "dropbox",
+            "email": email,
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_expiry": tokens["token_expiry"],
+        }
+
+        await app._credential_store.save(
+            tenant_id=_TENANT_ID,
+            service="dropbox",
+            credentials=credentials,
+            account_name="primary",
+        )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Dropbox connected as <b>{email}</b></p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Dropbox OAuth callback failed: {e}", exc_info=True)
         return HTMLResponse(
             f"<h2>OAuth Error</h2><p>{e}</p>",
             status_code=500,

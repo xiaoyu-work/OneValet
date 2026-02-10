@@ -39,6 +39,7 @@
       <a href="#sec-notion" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Notion</a>
       <a href="#sec-image" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Image Generation</a>
       <a href="#sec-smarthome" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Smart Home</a>
+      <a href="#sec-cloud-storage" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Cloud Storage</a>
     </nav>
 
     <!-- Content -->
@@ -192,6 +193,18 @@
           </div>
         </section>
 
+        <!-- Cloud Storage -->
+        <section id="sec-cloud-storage" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Cloud Storage</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Google Drive (via Google auth), OneDrive (via Microsoft auth), and Dropbox</p>
+          </div>
+          <div class="divide-y divide-gray-100">
+            <div class="px-6 py-5" id="svc-dropbox_oauth_app"></div>
+            <div class="px-6 py-5" id="svc-dropbox"></div>
+          </div>
+        </section>
+
         <div class="h-8"></div>
       </div>
     </main>
@@ -289,6 +302,11 @@ const SERVICES = {
     { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Sonos App Secret' },
   ]},
   sonos: { label: 'Sonos', type: 'oauth_single', provider: 'sonos', service: 'sonos' },
+  dropbox_oauth_app: { label: 'Dropbox OAuth App', type: 'apikey', fields: [
+    { key: 'client_id', label: 'App Key', placeholder: 'Your Dropbox App Key' },
+    { key: 'client_secret', label: 'App Secret', placeholder: 'Your Dropbox App Secret' },
+  ]},
+  dropbox: { label: 'Dropbox', type: 'oauth_single', provider: 'dropbox', service: 'dropbox' },
 };
 
 // ===============================================

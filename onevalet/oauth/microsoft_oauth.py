@@ -17,6 +17,7 @@ MICROSOFT_SCOPES = [
     "https://graph.microsoft.com/Calendars.ReadWrite",
     "https://graph.microsoft.com/Tasks.ReadWrite",
     "https://graph.microsoft.com/User.Read",
+    "https://graph.microsoft.com/Files.ReadWrite.All",
 ]
 
 

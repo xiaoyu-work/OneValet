@@ -14,4 +14,5 @@ Subpackages:
 - todo: Todo query, create, update, delete across Todoist/Google Tasks/Microsoft To Do
 - image: Image generation and editing across OpenAI/Azure/Gemini/Seedream
 - smarthome: Philips Hue light control, Sonos speaker control
+- cloud_storage: Unified file search across Google Drive, OneDrive, and Dropbox
 """
