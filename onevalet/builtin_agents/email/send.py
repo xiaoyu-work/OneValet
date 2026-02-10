@@ -24,22 +24,22 @@ class SendEmailAgent(StandardAgent):
     """Send email agent with field collection and approval"""
 
     from_account = InputField(
-        prompt="Which email account would you like to send from?",
+        prompt="Which account to send from?",
         description="Email account to send from",
         required=False,
     )
     recipients = InputField(
-        prompt="Who should I send this to?",
+        prompt="What's their email address?",
         description="Email recipient address(es)",
         validator=validate_email,
     )
     subject = InputField(
-        prompt="What should the email subject be?",
+        prompt="Subject?",
         description="Email subject",
         required=False,
     )
     body = InputField(
-        prompt="What would you like to say in the email?",
+        prompt="What's the message?",
         description="Email body content",
     )
 
@@ -363,22 +363,25 @@ Send this?"""
 
     async def extract_fields(self, user_input: str) -> Dict[str, Any]:
         """Extract email information from user input using LLM."""
-        extraction_prompt = f"""Extract email information from the user's message.
+        extraction_prompt = f"""Extract email information from the user's message. The user may speak in any language.
 
-User message: {user_input}
+User message: "{user_input}"
 
-Return JSON with these fields (leave empty if not mentioned):
+Return JSON with these fields (leave empty string if not mentioned):
 {{
   "from_account": "",
   "recipients": "",
+  "recipient_name": "",
   "subject": "",
   "body": ""
 }}
 
 Rules:
-- ONLY extract explicitly stated information
-- recipients: email address(es), comma-separated if multiple
-- body: the message content or intent (e.g., "telling him happy birthday")"""
+- recipients: email address if provided. Leave empty if only a name is given.
+- recipient_name: the person's name if mentioned (e.g., "Ella", "John"), even without email.
+- body: the actual message content or user's intent. Extract directly from what the user says.
+  Examples: "say happy birthday" -> body: "Happy birthday!", "tell her I'm hungry" -> body: "I'm hungry."
+- Do NOT add tone, formality, or any extra interpretation. Just extract what the user said."""
 
         try:
             result = await self.llm_client.chat_completion(
@@ -400,6 +403,16 @@ Rules:
                 value = extracted.get(field, "").strip()
                 if value:
                     result_dict[field] = value
+
+            # Store recipient name for prompt context
+            recipient_name = extracted.get("recipient_name", "").strip()
+            if recipient_name and "recipients" not in result_dict:
+                self._recipient_name = recipient_name
+                # Update prompt to include the name
+                for f in self.required_fields:
+                    if f.name == "recipients":
+                        f.prompt = f"What's {recipient_name}'s email address?"
+                        break
 
             logger.info(f"Extracted fields: {list(result_dict.keys())}")
             return result_dict
