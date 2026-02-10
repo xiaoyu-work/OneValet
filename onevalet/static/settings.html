@@ -38,6 +38,7 @@
       <a href="#sec-google-api" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Google API</a>
       <a href="#sec-notion" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Notion</a>
       <a href="#sec-image" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Image Generation</a>
+      <a href="#sec-smarthome" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Smart Home</a>
     </nav>
 
     <!-- Content -->
@@ -177,6 +178,20 @@
           </div>
         </section>
 
+        <!-- Smart Home -->
+        <section id="sec-smarthome" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Smart Home</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Philips Hue lights &amp; Sonos speakers</p>
+          </div>
+          <div class="divide-y divide-gray-100">
+            <div class="px-6 py-5" id="svc-hue_oauth_app"></div>
+            <div class="px-6 py-5" id="svc-philips_hue"></div>
+            <div class="px-6 py-5" id="svc-sonos_oauth_app"></div>
+            <div class="px-6 py-5" id="svc-sonos"></div>
+          </div>
+        </section>
+
         <div class="h-8"></div>
       </div>
     </main>
@@ -263,6 +278,17 @@ const SERVICES = {
     { key: 'api_key', label: 'API Key', placeholder: 'Your BytePlus API key' },
     { key: 'endpoint', label: 'API Endpoint', placeholder: 'https://ark.ap-southeast.bytepluses.com/api/v3' },
   ]},
+  hue_oauth_app: { label: 'Philips Hue OAuth App', type: 'apikey', fields: [
+    { key: 'client_id', label: 'Client ID', placeholder: 'Your Hue App Client ID' },
+    { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Hue App Client Secret' },
+    { key: 'app_id', label: 'App ID', placeholder: 'Your Hue App ID' },
+  ]},
+  philips_hue: { label: 'Philips Hue', type: 'oauth_single', provider: 'hue', service: 'philips_hue' },
+  sonos_oauth_app: { label: 'Sonos OAuth App', type: 'apikey', fields: [
+    { key: 'client_id', label: 'Client ID', placeholder: 'Your Sonos App Key' },
+    { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Sonos App Secret' },
+  ]},
+  sonos: { label: 'Sonos', type: 'oauth_single', provider: 'sonos', service: 'sonos' },
 };
 
 // ===============================================
@@ -377,6 +403,8 @@ function renderAllServices() {
       if (!el) continue;
       if (def.type === 'oauth_combined') {
         renderOAuthCombinedService(el, svc, def);
+      } else if (def.type === 'oauth_single') {
+        renderOAuthSingleService(el, svc, def);
       } else if (def.type === 'apikey') {
         renderApiKeyService(el, svc, def);
       }
@@ -471,6 +499,45 @@ function renderOAuthCombinedService(container, key, def) {
     html += `</div>`;
   }
 
+  container.innerHTML = html;
+}
+
+// ===============================================
+// OAuth Single Service Card (Hue / Sonos)
+// ===============================================
+
+function renderOAuthSingleService(container, key, def) {
+  const cred = getCredential(def.service);
+  const connected = !!cred;
+  const provider = def.provider;
+  const providerLabel = def.label;
+  const oauthAppConfigured = !!getCredential(`${provider}_oauth_app`);
+
+  let html = `
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2.5">
+        <span class="text-sm font-medium text-gray-900">${def.label}</span>
+        ${connected
+          ? '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">Connected</span>'
+          : '<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Not connected</span>'
+        }
+      </div>
+      ${connected ? `<button onclick="deleteCredential('${def.service}', 'primary')" class="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Remove</button>` : ''}
+    </div>
+  `;
+
+  if (connected) {
+    html += `<div class="bg-gray-50 rounded-lg px-3 py-2.5"><p class="text-sm text-gray-700">${escapeHtml(cred.account_name || 'Connected')}</p>${cred.email ? `<p class="text-xs text-gray-500">${escapeHtml(cred.email)}</p>` : ''}</div>`;
+  } else {
+    if (oauthAppConfigured) {
+      html += `<button onclick="startOAuthFlow('${provider}')" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+        Connect ${providerLabel}
+      </button>`;
+    } else {
+      html += `<p class="text-xs text-amber-600">Configure ${providerLabel} OAuth App credentials above first.</p>`;
+    }
+  }
   container.innerHTML = html;
 }
 

@@ -13,4 +13,5 @@ Subpackages:
 - google_workspace: Drive search, Docs read/create, Sheets read/write
 - todo: Todo query, create, update, delete across Todoist/Google Tasks/Microsoft To Do
 - image: Image generation and editing across OpenAI/Azure/Gemini/Seedream
+- smarthome: Philips Hue light control, Sonos speaker control
 """

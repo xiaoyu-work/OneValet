@@ -588,6 +588,154 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
         )
 
 
+# ─── Hue OAuth ───
+
+
+@api.get("/api/oauth/hue/authorize")
+async def hue_oauth_authorize(request: Request):
+    """Initiate Philips Hue OAuth flow. Returns authorization URL."""
+    from .oauth.hue_oauth import HueOAuth
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state = _generate_state("hue")
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/hue/callback"
+
+    try:
+        url = HueOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.get("/api/oauth/hue/callback")
+async def hue_oauth_callback(request: Request, code: str, state: str):
+    """Hue OAuth callback — exchange code for tokens and store credentials."""
+    from .oauth.hue_oauth import HueOAuth
+
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/hue/callback"
+
+    try:
+        tokens = await HueOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+
+        credentials = {
+            "provider": "philips_hue",
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_expiry": tokens["token_expiry"],
+        }
+
+        await app._credential_store.save(
+            tenant_id=_TENANT_ID,
+            service="philips_hue",
+            credentials=credentials,
+            account_name="primary",
+        )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Philips Hue connected.</p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Hue OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
+# ─── Sonos OAuth ───
+
+
+@api.get("/api/oauth/sonos/authorize")
+async def sonos_oauth_authorize(request: Request):
+    """Initiate Sonos OAuth flow. Returns authorization URL."""
+    from .oauth.sonos_oauth import SonosOAuth
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state = _generate_state("sonos")
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/sonos/callback"
+
+    try:
+        url = SonosOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.get("/api/oauth/sonos/callback")
+async def sonos_oauth_callback(request: Request, code: str, state: str):
+    """Sonos OAuth callback — exchange code for tokens and store credentials."""
+    from .oauth.sonos_oauth import SonosOAuth
+
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/sonos/callback"
+
+    try:
+        tokens = await SonosOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+
+        credentials = {
+            "provider": "sonos",
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_expiry": tokens["token_expiry"],
+        }
+
+        await app._credential_store.save(
+            tenant_id=_TENANT_ID,
+            service="sonos",
+            credentials=credentials,
+            account_name="primary",
+        )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Sonos connected.</p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Sonos OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
 # ─── Main ───
 
 def main():
