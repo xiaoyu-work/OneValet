@@ -68,6 +68,7 @@ from .react_config import ReactLoopConfig, ReactLoopResult, ToolCallRecord, Toke
 from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
+from .prompts import DEFAULT_SYSTEM_PROMPT
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -178,7 +179,8 @@ class Orchestrator:
             config: Full orchestrator configuration
             llm_client: LLM client for the ReAct loop
             agent_registry: Pre-configured agent registry
-            system_prompt: Persona / system prompt injected into every LLM call
+            system_prompt: Optional user-defined persona / custom instructions appended
+                after the built-in OneValet system prompt
             react_config: ReAct loop configuration (max_turns, timeouts, etc.)
             credential_store: CredentialStore for tool execution context
             trigger_engine: TriggerEngine for proactive trigger tasks
@@ -1034,8 +1036,8 @@ class Orchestrator:
         """
         messages: List[Dict[str, Any]] = []
 
-        # System prompt + recalled memories
-        system_parts = []
+        # System prompt: built-in base + optional user customization
+        system_parts = [DEFAULT_SYSTEM_PROMPT]
         if self.system_prompt:
             system_parts.append(self.system_prompt)
 

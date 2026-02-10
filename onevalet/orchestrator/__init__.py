@@ -16,7 +16,7 @@ Quick Start:
         config=OrchestratorConfig(),
         llm_client=llm_client,
         agent_registry=registry,
-        system_prompt="You are a helpful assistant.",
+        system_prompt="You are a cheerful assistant named Jarvis.",  # optional user persona
         react_config=ReactLoopConfig(max_turns=10),
     )
     await orchestrator.initialize()
