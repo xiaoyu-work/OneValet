@@ -37,6 +37,7 @@
       <a href="#sec-travel" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Travel</a>
       <a href="#sec-google-api" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Google API</a>
       <a href="#sec-notion" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Notion</a>
+      <a href="#sec-image" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Image Generation</a>
     </nav>
 
     <!-- Content -->
@@ -162,6 +163,20 @@
           <div class="px-6 py-5" id="svc-notion"></div>
         </section>
 
+        <!-- Image Generation -->
+        <section id="sec-image" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Image Generation</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Configure image generation providers — OpenAI, Azure, Gemini, or Seedream</p>
+          </div>
+          <div class="divide-y divide-gray-100">
+            <div class="px-6 py-5" id="svc-image_openai"></div>
+            <div class="px-6 py-5" id="svc-image_azure"></div>
+            <div class="px-6 py-5" id="svc-image_gemini"></div>
+            <div class="px-6 py-5" id="svc-image_seedream"></div>
+          </div>
+        </section>
+
         <div class="h-8"></div>
       </div>
     </main>
@@ -231,6 +246,22 @@ const SERVICES = {
   ]},
   notion: { label: 'Notion', type: 'apikey', fields: [
     { key: 'api_key', label: 'Integration Token', placeholder: 'ntn_...' },
+  ]},
+  image_openai: { label: 'OpenAI Image (gpt-image-1)', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'sk-...' },
+  ]},
+  image_azure: { label: 'Azure OpenAI Image', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Azure OpenAI key' },
+    { key: 'endpoint', label: 'Endpoint', placeholder: 'https://your-resource.openai.azure.com/' },
+    { key: 'deployment', label: 'Deployment', placeholder: 'gpt-image-1' },
+    { key: 'api_version', label: 'API Version', placeholder: '2025-04-01-preview' },
+  ]},
+  image_gemini: { label: 'Gemini Image (Nano Banana)', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Google AI API key' },
+  ]},
+  image_seedream: { label: 'Seedream (ByteDance)', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your BytePlus API key' },
+    { key: 'endpoint', label: 'API Endpoint', placeholder: 'https://ark.ap-southeast.bytepluses.com/api/v3' },
   ]},
 };
 
