@@ -206,6 +206,34 @@ class BaseLLMClient(ABC):
         self.config = config
         self._client = None  # Lazy-initialized SDK client
 
+    # Model prefixes that use restricted parameter sets (reasoning models).
+    # These models: use max_completion_tokens instead of max_tokens,
+    # and do NOT accept temperature or top_p overrides.
+    _RESTRICTED_PARAM_MODELS = {"o1", "o3", "o4", "gpt-5"}
+
+    def _is_restricted_model(self, model: Optional[str] = None) -> bool:
+        """Check if the model uses the restricted parameter set."""
+        model_name = (model or self.config.model).lower()
+        return any(model_name.startswith(p) for p in self._RESTRICTED_PARAM_MODELS)
+
+    def _model_params(self, model: Optional[str] = None, **kwargs) -> Dict[str, Any]:
+        """Build model-appropriate sampling parameters.
+
+        Newer models (o1, o3, gpt-5.x, etc.) require 'max_completion_tokens'
+        instead of 'max_tokens', and do not support custom temperature / top_p.
+        """
+        if self._is_restricted_model(model):
+            return {
+                "max_completion_tokens": kwargs.get(
+                    "max_tokens", self.config.max_tokens
+                ),
+            }
+        return {
+            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
+            "temperature": kwargs.get("temperature", self.config.temperature),
+            "top_p": kwargs.get("top_p", self.config.top_p),
+        }
+
     def _add_media_to_messages_openai(
         self,
         messages: List[Dict[str, Any]],

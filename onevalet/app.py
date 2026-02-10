@@ -93,11 +93,13 @@ class OneValet:
         self._initialized = False
 
         # Validate required fields
-        for field in ("provider", "model", "database"):
-            if field not in self._config:
-                raise ValueError(f"Missing required config field: '{field}'")
+        if "database" not in self._config:
+            raise ValueError("Missing required config field: 'database'")
+        llm_cfg = self._config.get("llm", {})
+        if not llm_cfg.get("provider") or not llm_cfg.get("model"):
+            raise ValueError("Missing required config fields: 'llm.provider' and 'llm.model'")
 
-        provider = self._config["provider"]
+        provider = llm_cfg["provider"]
         if provider not in _PROVIDER_CLIENTS:
             raise ValueError(
                 f"Unsupported provider: '{provider}'. "
@@ -118,11 +120,12 @@ class OneValet:
             return
 
         cfg = self._config
-        provider = cfg["provider"]
-        model = cfg["model"]
+        llm_cfg = cfg["llm"]
+        provider = llm_cfg["provider"]
+        model = llm_cfg["model"]
 
         # 1. LLM client
-        api_key = cfg.get("api_key")
+        api_key = llm_cfg.get("api_key")
         if api_key is None:
             env_var = _PROVIDER_ENV_VARS.get(provider)
             if env_var:
@@ -131,8 +134,8 @@ class OneValet:
         client_kwargs = {"model": model}
         if api_key:
             client_kwargs["api_key"] = api_key
-        if cfg.get("base_url"):
-            client_kwargs["base_url"] = cfg["base_url"]
+        if llm_cfg.get("base_url"):
+            client_kwargs["base_url"] = llm_cfg["base_url"]
 
         module_path, class_name = _PROVIDER_CLIENTS[provider]
         import importlib
@@ -154,34 +157,45 @@ class OneValet:
         from .providers.email.resolver import AccountResolver
         AccountResolver.set_default_store(self._credential_store)
 
-        # 4. MomexMemory — reuse LLM config from OneValet
+        # 4. MomexMemory
         from .memory.momex import MomexMemory
         momex_provider = provider
         # Map OneValet provider names to momex provider names
         if momex_provider in ("gemini", "ollama"):
             momex_provider = "openai"  # fallback: momex only supports openai/azure/anthropic/deepseek/qwen
 
-        # Embedding: reuse same key for openai/azure, otherwise require OPENAI_API_KEY
-        if provider in ("openai", "azure"):
-            embedding_api_key = api_key or ""
-            embedding_api_base = cfg.get("base_url", "") if provider == "azure" else ""
+        # Embedding config
+        embedding_cfg = cfg.get("embedding", {})
+        if embedding_cfg:
+            emb_provider = embedding_cfg.get("provider", "")
+            emb_model = embedding_cfg.get("model", "")
+            emb_api_key = embedding_cfg.get("api_key", "")
+            emb_api_base = embedding_cfg.get("base_url", "")
+            emb_api_version = embedding_cfg.get("api_version", "")
         else:
-            embedding_api_key = os.environ.get("OPENAI_API_KEY", "")
-            embedding_api_base = ""
-            if not embedding_api_key:
+            # No embedding config — try reusing LLM credentials
+            emb_provider = ""
+            emb_model = ""
+            emb_api_key = api_key or ""
+            emb_api_base = llm_cfg.get("base_url", "") if provider == "azure" else ""
+            emb_api_version = ""
+            if not emb_api_key:
                 logger.warning(
-                    "OPENAI_API_KEY not set — memory embedding will not work. "
-                    "Set OPENAI_API_KEY for embedding support."
+                    "No 'embedding' config provided and no LLM api_key available — "
+                    "memory embedding will not work."
                 )
 
         self._momex = MomexMemory(
             llm_provider=momex_provider,
             llm_model=model,
             llm_api_key=api_key or "",
-            llm_api_base=cfg.get("base_url", ""),
+            llm_api_base=llm_cfg.get("base_url", ""),
             database_url=cfg["database"],
-            embedding_api_key=embedding_api_key,
-            embedding_api_base=embedding_api_base,
+            embedding_provider=emb_provider,
+            embedding_model=emb_model,
+            embedding_api_key=emb_api_key,
+            embedding_api_base=emb_api_base,
+            embedding_api_version=emb_api_version,
         )
 
         # 5. Agent discovery — scan builtin_agents

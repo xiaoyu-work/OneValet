@@ -101,12 +101,11 @@ class AzureOpenAIClient(BaseLLMClient):
             messages = self._add_media_to_messages_openai(messages, media)
 
         # Build request params
+        model = kwargs.get("model", self.config.model)
         params = {
-            "model": kwargs.get("model", self.config.model),
+            "model": model,
             "messages": messages,
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
-            "top_p": kwargs.get("top_p", self.config.top_p),
+            **self._model_params(model, **kwargs),
         }
 
         # Add tools if provided
@@ -167,13 +166,12 @@ class AzureOpenAIClient(BaseLLMClient):
         client = self._get_client()
 
         # Build request params
+        model = kwargs.get("model", self.config.model)
         params = {
-            "model": kwargs.get("model", self.config.model),
+            "model": model,
             "messages": messages,
-            "temperature": kwargs.get("temperature", self.config.temperature),
-            "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
-            "top_p": kwargs.get("top_p", self.config.top_p),
             "stream": True,
+            **self._model_params(model, **kwargs),
         }
 
         # Add tools if provided

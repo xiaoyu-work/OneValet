@@ -318,15 +318,16 @@ async function loadCurrentConfig() {
     const resp = await fetch('/api/config');
     if (!resp.ok) return;
     const cfg = await resp.json();
-    if (cfg.provider) document.getElementById('cfg-provider').value = cfg.provider;
-    if (cfg.model) document.getElementById('cfg-model').value = cfg.model;
+    const llm = cfg.llm || {};
+    if (llm.provider) document.getElementById('cfg-provider').value = llm.provider;
+    if (llm.model) document.getElementById('cfg-model').value = llm.model;
     if (cfg.database) document.getElementById('cfg-database').value = cfg.database;
-    if (cfg.base_url) document.getElementById('cfg-baseurl').value = cfg.base_url;
+    if (llm.base_url) document.getElementById('cfg-baseurl').value = llm.base_url;
     if (cfg.system_prompt) document.getElementById('cfg-sysprompt').value = cfg.system_prompt;
 
     const statusEl = document.getElementById('cfg-apikey-status');
-    if (cfg.api_key_set) {
-      statusEl.textContent = `(current: ${cfg.api_key_display})`;
+    if (llm.api_key_set) {
+      statusEl.textContent = `(current: ${llm.api_key_display})`;
       statusEl.className = 'text-xs text-green-600 ml-1';
     } else {
       statusEl.textContent = '(not set)';
@@ -356,9 +357,10 @@ async function saveConfig() {
   btn.textContent = 'Saving...';
   statusEl.classList.add('hidden');
 
-  const body = { provider, model, database };
-  if (apiKey) body.api_key = apiKey;
-  if (baseUrl) body.base_url = baseUrl;
+  const llm = { provider, model };
+  if (apiKey) llm.api_key = apiKey;
+  if (baseUrl) llm.base_url = baseUrl;
+  const body = { llm, database };
   if (sysPrompt) body.system_prompt = sysPrompt;
 
   try {

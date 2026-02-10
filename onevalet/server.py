@@ -86,12 +86,25 @@ class CredentialSaveRequest(BaseModel):
     credentials: dict
 
 
-class ConfigRequest(BaseModel):
+class LLMConfigRequest(BaseModel):
     provider: str
     model: str
-    database: str
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+
+
+class EmbeddingConfigRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    api_version: Optional[str] = None
+
+
+class ConfigRequest(BaseModel):
+    llm: LLMConfigRequest
+    database: str
+    embedding: Optional[EmbeddingConfigRequest] = None
     system_prompt: Optional[str] = None
 
 
@@ -116,25 +129,37 @@ async def get_status():
     return {"configured": _app is not None}
 
 
+def _mask_api_key(key: str) -> dict:
+    """Mask an API key for display."""
+    if key and len(key) > 8:
+        return {"api_key_display": key[:4] + "..." + key[-4:], "api_key_set": True}
+    elif key:
+        return {"api_key_display": "****", "api_key_set": True}
+    return {"api_key_display": "", "api_key_set": False}
+
+
 def _mask_config(cfg: dict) -> dict:
     """Return config with api_key masked for display."""
+    llm_cfg = cfg.get("llm", {})
     result = {
-        "provider": cfg.get("provider", ""),
-        "model": cfg.get("model", ""),
+        "llm": {
+            "provider": llm_cfg.get("provider", ""),
+            "model": llm_cfg.get("model", ""),
+            "base_url": llm_cfg.get("base_url", ""),
+            **_mask_api_key(llm_cfg.get("api_key", "")),
+        },
         "database": cfg.get("database", ""),
-        "base_url": cfg.get("base_url", ""),
         "system_prompt": cfg.get("system_prompt", ""),
     }
-    api_key = cfg.get("api_key", "")
-    if api_key and len(api_key) > 8:
-        result["api_key_display"] = api_key[:4] + "..." + api_key[-4:]
-        result["api_key_set"] = True
-    elif api_key:
-        result["api_key_display"] = "****"
-        result["api_key_set"] = True
-    else:
-        result["api_key_display"] = ""
-        result["api_key_set"] = False
+    embedding_cfg = cfg.get("embedding")
+    if embedding_cfg:
+        result["embedding"] = {
+            "provider": embedding_cfg.get("provider", ""),
+            "model": embedding_cfg.get("model", ""),
+            "base_url": embedding_cfg.get("base_url", ""),
+            "api_version": embedding_cfg.get("api_version", ""),
+            **_mask_api_key(embedding_cfg.get("api_key", "")),
+        }
     return result
 
 
@@ -156,22 +181,32 @@ async def save_config(req: ConfigRequest):
     """Save configuration to config.yaml and reinitialize the app."""
     global _app
 
-    if req.provider not in _SUPPORTED_PROVIDERS:
-        raise HTTPException(400, f"Unsupported provider: {req.provider}")
+    if req.llm.provider not in _SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"Unsupported provider: {req.llm.provider}")
 
     # Build config dict
+    llm_config = {
+        "provider": req.llm.provider,
+        "model": req.llm.model,
+    }
+    if req.llm.api_key:
+        llm_config["api_key"] = req.llm.api_key
+    elif _app is not None:
+        old_llm = _app.config.get("llm", {})
+        if old_llm.get("api_key"):
+            llm_config["api_key"] = old_llm["api_key"]
+
+    if req.llm.base_url:
+        llm_config["base_url"] = req.llm.base_url
+
     config = {
-        "provider": req.provider,
-        "model": req.model,
+        "llm": llm_config,
         "database": req.database,
     }
-    if req.api_key:
-        config["api_key"] = req.api_key
-    elif _app is not None and _app.config.get("api_key"):
-        config["api_key"] = _app.config["api_key"]
-
-    if req.base_url:
-        config["base_url"] = req.base_url
+    if req.embedding:
+        emb = {k: v for k, v in req.embedding.model_dump().items() if v}
+        if emb:
+            config["embedding"] = emb
     if req.system_prompt:
         config["system_prompt"] = req.system_prompt
 
@@ -823,6 +858,11 @@ def main():
     parser.add_argument("--host", default=os.getenv("ONEVALET_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ONEVALET_PORT", "8000")))
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(name)s - %(message)s",
+    )
 
     if args.ui:
         _register_ui_routes(api)

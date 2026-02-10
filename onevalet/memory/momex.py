@@ -33,16 +33,22 @@ class MomexMemory:
         llm_api_key: str = "",
         llm_api_base: str = "",
         database_url: str = "",
+        embedding_provider: str = "",
+        embedding_model: str = "",
         embedding_api_key: str = "",
         embedding_api_base: str = "",
+        embedding_api_version: str = "",
     ):
         self._llm_provider = llm_provider
         self._llm_model = llm_model
         self._llm_api_key = llm_api_key
         self._llm_api_base = llm_api_base
         self._database_url = database_url
+        self._embedding_provider = embedding_provider
+        self._embedding_model = embedding_model
         self._embedding_api_key = embedding_api_key
         self._embedding_api_base = embedding_api_base
+        self._embedding_api_version = embedding_api_version
         self._config = None
 
         # Cache: tenant_id -> Memory instance
@@ -65,15 +71,21 @@ class MomexMemory:
             api_base=self._llm_api_base,
         )
 
-        # Embedding always uses OpenAI (or Azure OpenAI)
+        # Embedding config (independent provider/endpoint support)
         embedding = None
         if self._embedding_api_key:
-            embedding_provider = "azure" if self._embedding_api_base else "openai"
-            embedding = EmbeddingConfig(
-                provider=embedding_provider,
-                api_key=self._embedding_api_key,
-                api_base=self._embedding_api_base,
-            )
+            provider = self._embedding_provider or ("azure" if self._embedding_api_base else "openai")
+            embedding_kwargs = {
+                "provider": provider,
+                "api_key": self._embedding_api_key,
+            }
+            if self._embedding_api_base:
+                embedding_kwargs["api_base"] = self._embedding_api_base
+            if self._embedding_model:
+                embedding_kwargs["model"] = self._embedding_model
+            if self._embedding_api_version:
+                embedding_kwargs["api_version"] = self._embedding_api_version
+            embedding = EmbeddingConfig(**embedding_kwargs)
 
         storage = StorageConfig()
         if self._database_url:

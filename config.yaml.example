@@ -1,3 +1,19 @@
-provider: openai
-model: gpt-4o
 database: ${DATABASE_URL}
+
+llm:
+  provider: openai
+  model: gpt-4o
+  # api_key: ${OPENAI_API_KEY}
+  # base_url: https://your-endpoint.openai.azure.com/  # Azure only
+
+# Optional: separate embedding endpoint
+# embedding:
+#   provider: azure
+#   model: text-embedding-3-small
+#   api_key: ${EMBEDDING_API_KEY}
+#   base_url: https://your-embedding-endpoint.openai.azure.com/
+#   api_version: 2024-12-01-preview
+
+# Optional: custom persona (appended after built-in system prompt)
+# system_prompt: |
+#   Your name is Jarvis. You speak in a warm, butler-like tone.
