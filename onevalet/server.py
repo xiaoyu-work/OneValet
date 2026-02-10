@@ -13,6 +13,9 @@ import pathlib
 import secrets
 import time
 from typing import Optional
+from urllib.parse import urlencode
+
+import httpx
 
 import yaml
 from fastapi import FastAPI, HTTPException, Request
@@ -382,7 +385,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         }
 
         # Save to both gmail and google_calendar (scopes cover both)
-        for svc in ("gmail", "google_calendar"):
+        for svc in ("gmail", "google_calendar", "google_tasks"):
             await app._credential_store.save(
                 tenant_id=_TENANT_ID,
                 service=svc,
@@ -393,7 +396,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(
             f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             f"<h2>Connected!</h2>"
-            f"<p>Gmail &amp; Google Calendar connected as <b>{email}</b></p>"
+            f"<p>Gmail, Google Calendar &amp; Google Tasks connected as <b>{email}</b></p>"
             f"<script>"
             f"window.opener&&window.opener.postMessage('oauth_complete','*');"
             f"setTimeout(()=>window.close(),1500);"
@@ -458,7 +461,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         }
 
         # Save to both outlook and outlook_calendar (scopes cover both)
-        for svc in ("outlook", "outlook_calendar"):
+        for svc in ("outlook", "outlook_calendar", "microsoft_todo"):
             await app._credential_store.save(
                 tenant_id=_TENANT_ID,
                 service=svc,
@@ -469,7 +472,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(
             f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             f"<h2>Connected!</h2>"
-            f"<p>Outlook &amp; Outlook Calendar connected as <b>{email}</b></p>"
+            f"<p>Outlook, Calendar &amp; To Do connected as <b>{email}</b></p>"
             f"<script>"
             f"window.opener&&window.opener.postMessage('oauth_complete','*');"
             f"setTimeout(()=>window.close(),1500);"
@@ -477,6 +480,108 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         )
     except Exception as e:
         logger.error(f"Microsoft OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
+@api.get("/api/oauth/todoist/authorize")
+async def todoist_oauth_authorize(request: Request):
+    """Initiate Todoist OAuth flow. Returns authorization URL."""
+    app = _require_app()
+    await app._ensure_initialized()
+
+    client_id = os.getenv("TODOIST_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(400, "Todoist OAuth not configured. Set TODOIST_CLIENT_ID in Settings > OAuth Apps.")
+
+    state = _generate_state("todoist")
+    params = {
+        "client_id": client_id,
+        "scope": "data:read_write",
+        "state": state,
+    }
+    url = f"https://todoist.com/oauth/authorize?{urlencode(params)}"
+    return {"authorize_url": url}
+
+
+@api.get("/api/oauth/todoist/callback")
+async def todoist_oauth_callback(request: Request, code: str, state: str):
+    """Todoist OAuth callback — exchange code for token and store credentials."""
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    client_id = os.getenv("TODOIST_CLIENT_ID")
+    client_secret = os.getenv("TODOIST_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Todoist OAuth not configured.</p>",
+            status_code=500,
+        )
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://todoist.com/oauth/access_token",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                },
+                timeout=30.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        access_token = data["access_token"]
+
+        # Fetch user email from Todoist Sync API
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://api.todoist.com/sync/v9/sync",
+                headers={"Authorization": f"Bearer {access_token}"},
+                json={"sync_token": "*", "resource_types": ["user"]},
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            user_data = response.json()
+            email = user_data.get("user", {}).get("email", "")
+
+        credentials = {
+            "provider": "todoist",
+            "email": email,
+            "access_token": access_token,
+            "refresh_token": "",
+            "token_expiry": "",
+            "scopes": ["data:read_write"],
+        }
+
+        await app._credential_store.save(
+            tenant_id=_TENANT_ID,
+            service="todoist",
+            credentials=credentials,
+            account_name="primary",
+        )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Todoist connected as <b>{email}</b></p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Todoist OAuth callback failed: {e}", exc_info=True)
         return HTMLResponse(
             f"<h2>OAuth Error</h2><p>{e}</p>",
             status_code=500,
