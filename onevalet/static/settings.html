@@ -36,6 +36,7 @@
       <a href="#sec-microsoft" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Microsoft</a>
       <a href="#sec-travel" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Travel</a>
       <a href="#sec-google-api" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Google API</a>
+      <a href="#sec-notion" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Notion</a>
     </nav>
 
     <!-- Content -->
@@ -152,6 +153,15 @@
           <div class="px-6 py-5" id="svc-google_api"></div>
         </section>
 
+        <!-- Notion -->
+        <section id="sec-notion" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Notion</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Search, create, and manage Notion pages and databases</p>
+          </div>
+          <div class="px-6 py-5" id="svc-notion"></div>
+        </section>
+
         <div class="h-8"></div>
       </div>
     </main>
@@ -218,6 +228,9 @@ const SERVICES = {
     { key: 'client_id', label: 'Client ID', placeholder: 'Your Microsoft App Client ID' },
     { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Microsoft App Client Secret' },
     { key: 'tenant_id', label: 'Tenant ID', placeholder: 'common (or your Azure AD tenant)' },
+  ]},
+  notion: { label: 'Notion', type: 'apikey', fields: [
+    { key: 'api_key', label: 'Integration Token', placeholder: 'ntn_...' },
   ]},
 };
 

@@ -9,4 +9,5 @@ Subpackages:
 - reminder: Reminders, task management, automation planner
 - shipment: Package tracking and management
 - digest: Important date digests
+- notion: Notion search, create/update pages, query databases
 """
