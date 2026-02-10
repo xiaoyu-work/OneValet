@@ -92,16 +92,18 @@ class ConfigRequest(BaseModel):
     system_prompt: Optional[str] = None
 
 
-# ─── Pages ───
+# ─── Demo UI (registered only with --ui) ───
 
-@api.get("/")
-async def index():
-    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
+def _register_ui_routes(app: FastAPI):
+    """Register demo frontend routes. Only called when --ui flag is set."""
 
+    @app.get("/")
+    async def index():
+        return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
 
-@api.get("/settings")
-async def settings_page():
-    return FileResponse(_STATIC_DIR / "settings.html", media_type="text/html")
+    @app.get("/settings")
+    async def settings_page():
+        return FileResponse(_STATIC_DIR / "settings.html", media_type="text/html")
 
 
 # ─── Status & Config ───
@@ -484,8 +486,16 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
 # ─── Main ───
 
 def main():
+    import argparse
     import uvicorn
 
-    host = os.getenv("ONEVALET_HOST", "0.0.0.0")
-    port = int(os.getenv("ONEVALET_PORT", "8000"))
-    uvicorn.run(api, host=host, port=port)
+    parser = argparse.ArgumentParser(description="OneValet API Server")
+    parser.add_argument("--ui", action="store_true", help="Serve demo frontend (/ and /settings)")
+    parser.add_argument("--host", default=os.getenv("ONEVALET_HOST", "0.0.0.0"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("ONEVALET_PORT", "8000")))
+    args = parser.parse_args()
+
+    if args.ui:
+        _register_ui_routes(api)
+
+    uvicorn.run(api, host=args.host, port=args.port)
