@@ -4,6 +4,7 @@ DirectionsAgent - Get directions using Google Directions API
 import os
 import logging
 import json
+import re
 import httpx
 from typing import Dict, Any, List, Optional
 
@@ -207,51 +208,24 @@ Return ONLY valid JSON:"""
 
             maps_link = f"https://www.google.com/maps/dir/?api=1&origin={origin}&destination={destination}"
 
-            directions_data = {
-                "start": start_address,
-                "end": end_address,
-                "distance": distance,
-                "duration": duration,
-                "steps": steps[:5],
-                "maps_link": maps_link
-            }
-
             logger.info(f"Directions: {distance}, {duration}")
 
-            formatting_prompt = f"""Format these directions into a concise SMS message (max 250 chars).
-
-Directions data:
-- From: {directions_data['start']}
-- To: {directions_data['end']}
-- Distance: {directions_data['distance']}
-- Duration: {directions_data['duration']}
-- Google Maps link: {directions_data['maps_link']}
-
-First few steps:
-{json.dumps([s.get('html_instructions', '') for s in directions_data['steps'][:3]])}
-
-Requirements:
-1. Simplify addresses
-2. Show distance and duration
-3. Give 2-3 key initial steps (simplified, no HTML)
-4. Include Google Maps link at end
-5. Keep under 250 characters
-
-Format the message (ONLY return the formatted message, nothing else):"""
-
-            llm_result = await self.llm_client.chat_completion(
-                messages=[
-                    {"role": "system", "content": "You format driving directions for SMS. Be concise and natural."},
-                    {"role": "user", "content": formatting_prompt}
-                ],
-                enable_thinking=False
-            )
-
-            formatted_message = llm_result.content.strip()
+            result_lines = [
+                f"Directions from {start_address} to {end_address}:",
+                f"Distance: {distance}",
+                f"Duration: {duration}",
+                "",
+                "Steps:",
+            ]
+            for i, step in enumerate(steps[:5], 1):
+                instruction = step.get("html_instructions", "")
+                clean = re.sub(r'<[^>]+>', '', instruction).strip()
+                result_lines.append(f"{i}. {clean}")
+            result_lines.append(f"\nGoogle Maps: {maps_link}")
 
             return self.make_result(
                 status=AgentStatus.COMPLETED,
-                raw_message=formatted_message
+                raw_message="\n".join(result_lines)
             )
 
         except httpx.HTTPStatusError as e:

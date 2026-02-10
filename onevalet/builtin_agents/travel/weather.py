@@ -214,38 +214,9 @@ Return ONLY the JSON object, nothing else:"""
 - Humidity: {weather_data.get('humidity')}%
 - Chance of rain: {weather_data.get('chance_of_rain')}%"""
 
-            formatting_prompt = f"""Format this weather data into a concise, natural SMS message (max 100 chars).
-
-Weather data:
-{weather_info}
-
-Requirements:
-1. Simplify location name (remove country, use common short forms like "NYC", "SF", "LA")
-2. For current weather: include temp in both F and C
-3. For forecast: include high/low temps
-4. Keep it under 100 characters for SMS
-
-Examples:
-- "Kirkland: 55F (12C), Misty"
-- "NYC tomorrow: High 32F (0C), Snow"
-- "SF: 68F (20C), Sunny"
-
-Format the message (ONLY return the formatted message, nothing else):"""
-
-            llm_result = await self.llm_client.chat_completion(
-                messages=[
-                    {"role": "system", "content": "You are a concise weather reporter for SMS. Return only the formatted weather message."},
-                    {"role": "user", "content": formatting_prompt}
-                ],
-                tools=None,
-                enable_thinking=False
-            )
-
-            formatted_message = llm_result.content.strip()
-
             return self.make_result(
                 status=AgentStatus.COMPLETED,
-                raw_message=formatted_message
+                raw_message=weather_info
             )
 
         except httpx.HTTPStatusError as e:

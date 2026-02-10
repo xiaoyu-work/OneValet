@@ -177,37 +177,17 @@ Location:"""
 
             logger.info(f"Air quality fetched for {location}: AQI {aqi_value}, {category}")
 
-            formatting_prompt = f"""Format this air quality data into a concise SMS message (max 150 chars).
-
-Air quality data:
-- Location: {air_quality_data.get('location')}
-- AQI: {air_quality_data.get('aqi')}
-- Category: {air_quality_data.get('category')}
-- Dominant pollutant: {air_quality_data.get('dominant_pollutant')}
-- Health advice: {air_quality_data.get('health_advice')}
-
-Requirements:
-1. Start with emoji based on AQI category (good, moderate, unhealthy, hazardous)
-2. Simplify location name
-3. Show AQI number and category
-4. Brief health advice if not good
-5. Keep it under 150 characters
-
-Format the message (ONLY return the formatted message, nothing else):"""
-
-            llm_result = await self.llm_client.chat_completion(
-                messages=[
-                    {"role": "system", "content": "You are a concise air quality reporter for SMS. Return only the formatted message."},
-                    {"role": "user", "content": formatting_prompt}
-                ],
-                enable_thinking=False
-            )
-
-            formatted_message = llm_result.content.strip()
+            result_lines = [
+                f"Air Quality: {air_quality_data['location']}",
+                f"AQI: {air_quality_data['aqi']}",
+                f"Category: {air_quality_data['category']}",
+                f"Dominant Pollutant: {air_quality_data['dominant_pollutant']}",
+                f"Health Advice: {air_quality_data['health_advice']}",
+            ]
 
             return self.make_result(
                 status=AgentStatus.COMPLETED,
-                raw_message=formatted_message
+                raw_message="\n".join(result_lines)
             )
 
         except httpx.HTTPStatusError as e:

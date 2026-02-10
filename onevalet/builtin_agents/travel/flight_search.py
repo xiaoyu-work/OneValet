@@ -286,11 +286,44 @@ Return ONLY valid JSON:"""
                 )
 
             logger.info(f"Found {len(offers)} flight offers")
-            formatted = await self._format_results(offers, origin_code, dest_code, departure_date, return_date)
+
+            trip_type = f"return {return_date}" if return_date else "one-way"
+            result_lines = [f"Flights {origin_code} → {dest_code} on {departure_date} ({trip_type}):\n"]
+            for i, offer in enumerate(offers[:5], 1):
+                price = offer.get("price", {}).get("total", "N/A")
+                currency = offer.get("price", {}).get("currency", "USD")
+                itineraries = offer.get("itineraries", [])
+                if not itineraries:
+                    continue
+                outbound = itineraries[0]
+                segments = outbound.get("segments", [])
+                if not segments:
+                    continue
+                first_seg = segments[0]
+                last_seg = segments[-1]
+                carrier = first_seg.get("carrierCode", "")
+                flight_num = first_seg.get("number", "")
+                dep_time = first_seg.get("departure", {}).get("at", "")
+                arr_time = last_seg.get("arrival", {}).get("at", "")
+                stops = len(segments) - 1
+                stops_text = "Direct" if stops == 0 else f"{stops} stop{'s' if stops > 1 else ''}"
+                result_lines.append(f"{i}. {carrier}{flight_num} | {currency} {price} | {stops_text}")
+                result_lines.append(f"   Departs: {dep_time}")
+                result_lines.append(f"   Arrives: {arr_time}")
+                if len(itineraries) > 1:
+                    ret = itineraries[1]
+                    ret_segs = ret.get("segments", [])
+                    if ret_segs:
+                        r_first = ret_segs[0]
+                        r_last = ret_segs[-1]
+                        r_stops = len(ret_segs) - 1
+                        r_stops_text = "Direct" if r_stops == 0 else f"{r_stops} stop{'s' if r_stops > 1 else ''}"
+                        result_lines.append(f"   Return: {r_first.get('carrierCode', '')}{r_first.get('number', '')} | {r_first.get('departure', {}).get('at', '')} → {r_last.get('arrival', {}).get('at', '')} | {r_stops_text}")
+                result_lines.append("")
 
             return self.make_result(
                 status=AgentStatus.COMPLETED,
-                raw_message=formatted
+                raw_message="\n".join(result_lines).strip()
             )
 
         except httpx.HTTPStatusError as e:
@@ -313,75 +346,3 @@ Return ONLY valid JSON:"""
                 status=AgentStatus.COMPLETED,
                 raw_message="Couldn't search flights. Try again later?"
             )
-
-    async def _format_results(self, offers: List[Dict], origin_code: str, dest_code: str, departure: str, return_date: str) -> str:
-        """Format flight offers into concise SMS message"""
-        flights_summary = []
-        for i, offer in enumerate(offers[:3], 1):
-            price = offer.get("price", {}).get("total", "N/A")
-            itineraries = offer.get("itineraries", [])
-
-            if not itineraries:
-                continue
-
-            outbound = itineraries[0]
-            segments = outbound.get("segments", [])
-            if not segments:
-                continue
-
-            first_seg = segments[0]
-            last_seg = segments[-1]
-
-            carrier = first_seg.get("carrierCode", "")
-            departure_time = first_seg.get("departure", {}).get("at", "")
-            arrival_time = last_seg.get("arrival", {}).get("at", "")
-            stops = len(segments) - 1
-
-            flights_summary.append({
-                "rank": i,
-                "price": price,
-                "carrier": carrier,
-                "departure_time": departure_time,
-                "arrival_time": arrival_time,
-                "stops": stops
-            })
-
-        if self.llm_client:
-            try:
-                formatting_prompt = f"""Format these flight search results into a concise SMS (max 280 chars).
-
-Flight search:
-- Route: {origin_code} -> {dest_code}
-- Date: {departure} {f"(return {return_date})" if return_date else "(one-way)"}
-
-Results: {json.dumps(flights_summary)}
-
-Requirements:
-1. Show top 3 flights with price, airline NAME, stops
-2. Format times as 6:00am, 2:15pm
-3. Mark direct flights
-4. Keep under 280 chars
-5. Note: "Prices may vary"
-
-Return ONLY the formatted message:"""
-
-                result = await self.llm_client.chat_completion(
-                    messages=[
-                        {"role": "system", "content": "You format flight search results for SMS."},
-                        {"role": "user", "content": formatting_prompt}
-                    ],
-                    enable_thinking=False
-                )
-
-                return result.content.strip()
-
-            except Exception as e:
-                logger.error(f"LLM formatting failed: {e}")
-
-        # Fallback formatting
-        msg = f"{origin_code}->{dest_code} {departure}:\n\n"
-        for f in flights_summary[:3]:
-            stops_txt = "direct" if f["stops"] == 0 else f"{f['stops']} stop"
-            msg += f"{f['rank']}. {f['carrier']} ${f['price']} ({stops_txt})\n"
-        msg += f"\nPrices may vary."
-        return msg

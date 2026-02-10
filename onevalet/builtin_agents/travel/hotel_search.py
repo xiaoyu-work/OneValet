@@ -239,11 +239,26 @@ Return ONLY valid JSON:"""
                 )
 
             logger.info(f"Found {len(offers)} hotel offers")
-            formatted = await self._format_results(offers, location, check_in, check_out)
+
+            result_lines = [f"Hotels in {location} ({check_in} to {check_out}):\n"]
+            for i, offer in enumerate(offers[:5], 1):
+                hotel = offer.get("hotel", {})
+                hotel_offers = offer.get("offers", [])
+                if not hotel_offers:
+                    continue
+                best_offer = hotel_offers[0]
+                name = hotel.get("name", "Unknown Hotel")
+                price = best_offer.get("price", {}).get("total", "N/A")
+                currency = best_offer.get("price", {}).get("currency", "USD")
+                rating = hotel.get("rating", "N/A")
+                result_lines.append(f"{i}. {name}")
+                result_lines.append(f"   Price: {currency} {price}/night")
+                result_lines.append(f"   Rating: {rating}/5")
+                result_lines.append("")
 
             return self.make_result(
                 status=AgentStatus.COMPLETED,
-                raw_message=formatted
+                raw_message="\n".join(result_lines).strip()
             )
 
         except httpx.HTTPStatusError as e:
@@ -266,71 +281,3 @@ Return ONLY valid JSON:"""
                 status=AgentStatus.COMPLETED,
                 raw_message="Couldn't search hotels. Try again later?"
             )
-
-    async def _format_results(self, offers: List[Dict], location: str, check_in: str, check_out: str) -> str:
-        """Format hotel offers into concise SMS message"""
-        hotels_summary = []
-        for i, offer in enumerate(offers[:5], 1):
-            hotel = offer.get("hotel", {})
-            hotel_offers = offer.get("offers", [])
-
-            if not hotel_offers:
-                continue
-
-            best_offer = hotel_offers[0]
-
-            name = hotel.get("name", "Unknown Hotel")
-            price = best_offer.get("price", {}).get("total", "N/A")
-            rating = hotel.get("rating", "N/A")
-
-            hotels_summary.append({
-                "rank": i,
-                "name": name,
-                "price": price,
-                "rating": rating
-            })
-
-        booking_link = f"https://www.booking.com/searchresults.html?ss={location}&checkin={check_in}&checkout={check_out}"
-
-        if self.llm_client:
-            try:
-                formatting_prompt = f"""Format these hotel search results into a concise SMS (max 280 chars).
-
-Hotel search:
-- Location: {location}
-- Check-in: {check_in}
-- Check-out: {check_out}
-
-Results: {json.dumps(hotels_summary)}
-
-Booking link: {booking_link}
-
-Requirements:
-1. Show top 5 hotels with name, price/night, rating
-2. Mark highly rated (4.5+) with star
-3. Add booking link at end
-4. Keep under 280 chars
-5. Note: "Prices may vary"
-
-Return ONLY the formatted message:"""
-
-                result = await self.llm_client.chat_completion(
-                    messages=[
-                        {"role": "system", "content": "You format hotel search results for SMS."},
-                        {"role": "user", "content": formatting_prompt}
-                    ],
-                    enable_thinking=False
-                )
-
-                return result.content.strip()
-
-            except Exception as e:
-                logger.error(f"LLM formatting failed: {e}")
-
-        # Fallback formatting
-        msg = f"{location} {check_in} to {check_out}:\n\n"
-        for h in hotels_summary[:5]:
-            star = "*" if isinstance(h["rating"], (int, float)) and h["rating"] >= 4.5 else ""
-            msg += f"{h['rank']}. {h['name'][:20]} ${h['price']}/nt {star}{h['rating']}\n"
-        msg += f"\nPrices may vary. Book:\n{booking_link}"
-        return msg
