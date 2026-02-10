@@ -47,6 +47,7 @@ dependencies = [
     "pyyaml>=6.0",
     "asyncpg>=0.27",
     "httpx>=0.25",
+    "python-dateutil>=2.8",
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "momex @ git+https://github.com/xiaoyu-work/momex.git",
@@ -74,6 +75,9 @@ Homepage = "https://github.com/xiaoyu-work/onevalet"
 Documentation = "https://xiaoyu-work.github.io/onevalet"
 Repository = "https://github.com/xiaoyu-work/onevalet"
 Issues = "https://github.com/xiaoyu-work/onevalet/issues"
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["onevalet"]

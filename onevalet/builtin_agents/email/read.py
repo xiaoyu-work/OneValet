@@ -79,7 +79,7 @@ class ReadEmailAgent(StandardAgent):
 
         try:
             from onevalet.providers.email.resolver import AccountResolver
-            all_accounts = AccountResolver.resolve_accounts(self.tenant_id, ["all"])
+            all_accounts = await AccountResolver.resolve_accounts(self.tenant_id, ["all"])
 
             account_context = ""
             if all_accounts:
@@ -170,6 +170,14 @@ JSON Output:"""
         if "unread_only" not in fields:
             fields["unread_only"] = True
 
+        # Default to primary inbox for unread/generic queries (skip promotions, social, etc.)
+        if fields.get("unread_only") and not fields.get("include_categories"):
+            fields["include_categories"] = ["primary"]
+
+        # Default to last 7 days for generic unread queries
+        if fields.get("unread_only") and not fields.get("days_back") and not fields.get("date_range"):
+            fields["days_back"] = 7
+
         try:
             account_specs = fields.get("accounts")
             if account_specs and isinstance(account_specs, str):
@@ -178,7 +186,7 @@ JSON Output:"""
             if not account_specs:
                 account_specs = ["all"]
 
-            accounts = AccountResolver.resolve_accounts(self.tenant_id, account_specs)
+            accounts = await AccountResolver.resolve_accounts(self.tenant_id, account_specs)
 
             if not accounts:
                 return self.make_result(
@@ -480,12 +488,23 @@ Your Response:"""
                 if len(summary) > 50:
                     summary = summary[:47] + "..."
 
+                # Extract sender name (strip email address for brevity)
+                sender_raw = html.unescape(email.get("sender", "Unknown"))
+                if "<" in sender_raw:
+                    sender = sender_raw.split("<")[0].strip().strip('"')
+                else:
+                    sender = sender_raw
+
+                # Extract short date
+                date_raw = email.get("date", "")
+                date_short = self._format_short_date(date_raw)
+
                 if len(searched_accounts) > 1:
                     account_name = email.get('_account_name', 'Unknown')
                     summary = f"[{account_name}] {summary}"
 
                 global_idx = offset + i
-                email_text = f"{global_idx}. {summary}"
+                email_text = f"{global_idx}. {summary}\n   From: {sender}  |  {date_short}"
                 response_parts.append(email_text)
 
             if total_count and offset + len(emails) < total_count:
@@ -518,6 +537,22 @@ Your Response:"""
                         )
 
         return "\n".join(response_parts)
+
+    @staticmethod
+    def _format_short_date(date_str: str) -> str:
+        """Format email date string to short display format like 'Feb 9' or 'Jan 28, 2025'."""
+        if not date_str:
+            return ""
+        try:
+            from dateutil import parser as date_parser
+            dt = date_parser.parse(date_str)
+            now = datetime.now()
+            if dt.year == now.year:
+                return dt.strftime("%b %d, %I:%M %p").lstrip("0")
+            else:
+                return dt.strftime("%b %d, %Y").lstrip("0")
+        except Exception:
+            return date_str[:16] if len(date_str) > 16 else date_str
 
     async def _generate_no_results_message(self) -> str:
         """Generate contextual message when no emails found"""

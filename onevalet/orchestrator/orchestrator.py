@@ -474,12 +474,11 @@ class Orchestrator:
                 total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
                 total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
 
-            resp_message = response.choices[0].message
-            tool_calls = getattr(resp_message, "tool_calls", None)
+            tool_calls = response.tool_calls
 
             if not tool_calls:
                 # Final answer
-                final_text = getattr(resp_message, "content", "") or ""
+                final_text = response.content or ""
                 yield AgentEvent(
                     type=EventType.MESSAGE_START,
                     data={"turn": turn},
@@ -495,7 +494,7 @@ class Orchestrator:
                 break
             else:
                 # Append assistant message with tool_calls
-                messages.append(self._assistant_message_from_response(resp_message))
+                messages.append(self._assistant_message_from_response(response))
 
                 # Execute all tool calls concurrently
                 loop_broken = False
@@ -504,7 +503,7 @@ class Orchestrator:
                     yield AgentEvent(
                         type=EventType.TOOL_CALL_START,
                         data={
-                            "tool_name": tc.function.name,
+                            "tool_name": tc.name,
                             "call_id": tc.id,
                         },
                     )
@@ -515,7 +514,7 @@ class Orchestrator:
                 )
 
                 for tc, result in zip(tool_calls, results):
-                    tc_name = tc.function.name
+                    tc_name = tc.name
                     if isinstance(result, BaseException):
                         error_text = f"Error: {result}"
                         messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
@@ -598,7 +597,7 @@ class Orchestrator:
             })
             try:
                 response = await self._llm_call_with_retry(messages, tool_schemas=None)
-                final_text = getattr(response.choices[0].message, "content", "") or ""
+                final_text = response.content or ""
             except Exception:
                 final_text = "I was unable to complete the request within the allowed turns."
 
@@ -676,16 +675,15 @@ class Orchestrator:
                 total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
                 total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
 
-            resp_message = response.choices[0].message
-            tool_calls = getattr(resp_message, "tool_calls", None)
+            tool_calls = response.tool_calls
 
             # No tool calls -> final answer
             if not tool_calls:
-                final_response = getattr(resp_message, "content", "") or ""
+                final_response = response.content or ""
                 break
 
             # Append assistant message with tool_calls to conversation
-            messages.append(self._assistant_message_from_response(resp_message))
+            messages.append(self._assistant_message_from_response(response))
 
             # Execute all tool calls concurrently
             tc_batch_start = time.monotonic()
@@ -705,10 +703,10 @@ class Orchestrator:
 
             loop_broken = False
             for tc, result in zip(tool_calls, results):
-                tc_name = tc.function.name
+                tc_name = tc.name
 
                 try:
-                    args_summary = json.loads(tc.function.arguments)
+                    args_summary = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
                 except (json.JSONDecodeError, TypeError):
                     args_summary = {}
                 # Truncate args for observability
@@ -789,7 +787,7 @@ class Orchestrator:
             })
             try:
                 response = await self._llm_call_with_retry(messages, tool_schemas=None)
-                final_response = getattr(response.choices[0].message, "content", "") or ""
+                final_response = response.content or ""
                 usage = getattr(response, "usage", None)
                 if usage:
                     total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
@@ -880,7 +878,7 @@ class Orchestrator:
 
     async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
         """Execute a single tool/agent-tool with timeout."""
-        tool_name = tool_call.function.name
+        tool_name = tool_call.name
         is_agent = self._is_agent_tool(tool_name)
         timeout = (
             self._react_config.agent_tool_execution_timeout
@@ -899,9 +897,9 @@ class Orchestrator:
 
     async def _execute_single(self, tool_call: Any, tenant_id: str) -> Any:
         """Dispatch to agent-tool or regular tool execution."""
-        tool_name = tool_call.function.name
+        tool_name = tool_call.name
         try:
-            args = json.loads(tool_call.function.arguments)
+            args = tool_call.arguments if isinstance(tool_call.arguments, dict) else json.loads(tool_call.arguments)
         except (json.JSONDecodeError, TypeError):
             args = {}
 
@@ -952,21 +950,21 @@ class Orchestrator:
         }
 
     @staticmethod
-    def _assistant_message_from_response(resp_message: Any) -> Dict[str, Any]:
-        """Convert LLM response message to dict for the messages list."""
+    def _assistant_message_from_response(response: Any) -> Dict[str, Any]:
+        """Convert LLMResponse to dict for the messages list."""
         msg: Dict[str, Any] = {
             "role": "assistant",
-            "content": getattr(resp_message, "content", None),
+            "content": getattr(response, "content", None),
         }
-        tool_calls = getattr(resp_message, "tool_calls", None)
+        tool_calls = getattr(response, "tool_calls", None)
         if tool_calls:
             msg["tool_calls"] = [
                 {
                     "id": tc.id,
                     "type": "function",
                     "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
                     },
                 }
                 for tc in tool_calls

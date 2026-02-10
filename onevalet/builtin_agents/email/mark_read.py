@@ -107,7 +107,7 @@ class MarkReadEmailAgent(StandardAgent):
         from onevalet.providers.email.factory import EmailProviderFactory
 
         try:
-            accounts = AccountResolver.resolve_accounts(self.tenant_id, ["primary"])
+            accounts = await AccountResolver.resolve_accounts(self.tenant_id, ["primary"])
             if not accounts:
                 return False
 
@@ -162,7 +162,7 @@ class MarkReadEmailAgent(StandardAgent):
             failed_accounts = []
 
             for account_name, msg_ids in emails_by_account.items():
-                account = AccountResolver.resolve_account(self.tenant_id, account_name)
+                account = await AccountResolver.resolve_account(self.tenant_id, account_name)
                 if not account:
                     failed_accounts.append({
                         "account_name": account_name,

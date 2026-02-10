@@ -65,6 +65,7 @@ class Database:
             self._dsn,
             min_size=self._min_size,
             max_size=self._max_size,
+            statement_cache_size=0,
         )
         self._initialized = True
         logger.info("Database pool initialized")

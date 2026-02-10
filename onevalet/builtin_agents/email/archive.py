@@ -285,7 +285,7 @@ Return ONLY valid JSON:"""
                         self.message_ids = cached_message_ids
                         if cached_accounts:
                             account_spec = cached_accounts[0] if cached_accounts[0] else "primary"
-                            self.account = AccountResolver.resolve_account(self.tenant_id, account_spec)
+                            self.account = await AccountResolver.resolve_account(self.tenant_id, account_spec)
                         return
 
                 cached_emails = await self._filter_emails_with_llm(
@@ -296,7 +296,7 @@ Return ONLY valid JSON:"""
                     self.found_emails = cached_emails
                     self.message_ids = [e.get("message_id") for e in cached_emails if e.get("message_id")]
                     if cached_emails[0].get("account"):
-                        self.account = AccountResolver.resolve_account(self.tenant_id, cached_emails[0].get("account", "primary"))
+                        self.account = await AccountResolver.resolve_account(self.tenant_id, cached_emails[0].get("account", "primary"))
                     return
 
         if not search_query:
@@ -304,7 +304,7 @@ Return ONLY valid JSON:"""
 
         try:
             account_spec = self.collected_fields.get("account", "primary")
-            account = AccountResolver.resolve_account(self.tenant_id, account_spec)
+            account = await AccountResolver.resolve_account(self.tenant_id, account_spec)
 
             if not account:
                 self.error_message = f"I couldn't find your '{account_spec}' email account."

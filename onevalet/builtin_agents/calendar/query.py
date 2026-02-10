@@ -107,7 +107,7 @@ Return ONLY the JSON object:"""
             )
 
         try:
-            account = CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
+            account = await CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
 
             if not account:
                 return self.make_result(

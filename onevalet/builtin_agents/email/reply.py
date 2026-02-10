@@ -129,7 +129,7 @@ Return only valid JSON:"""
             if 0 <= idx < len(cached_emails):
                 self.target_email = cached_emails[idx]
                 account_name = self.target_email.get("_account_name", "primary")
-                self.account = AccountResolver.resolve_account(self.tenant_id, account_name)
+                self.account = await AccountResolver.resolve_account(self.tenant_id, account_name)
                 return True
 
         target_lower = target.lower()
@@ -139,10 +139,10 @@ Return only valid JSON:"""
             if target_lower in sender or target_lower in subject:
                 self.target_email = email
                 account_name = email.get("_account_name", "primary")
-                self.account = AccountResolver.resolve_account(self.tenant_id, account_name)
+                self.account = await AccountResolver.resolve_account(self.tenant_id, account_name)
                 return True
 
-        accounts = AccountResolver.resolve_accounts(self.tenant_id, ["all"])
+        accounts = await AccountResolver.resolve_accounts(self.tenant_id, ["all"])
         for account in accounts:
             provider = EmailProviderFactory.create_provider(account)
             if not provider:

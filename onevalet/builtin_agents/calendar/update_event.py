@@ -115,7 +115,7 @@ Return only valid JSON:"""
         from onevalet.providers.calendar.resolver import CalendarAccountResolver
         from onevalet.providers.calendar.factory import CalendarProviderFactory
 
-        self.account = CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
+        self.account = await CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
         if not self.account:
             return False
 

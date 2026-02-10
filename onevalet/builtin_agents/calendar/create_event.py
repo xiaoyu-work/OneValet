@@ -288,7 +288,7 @@ Only extract explicitly stated information."""
         try:
             from onevalet.providers.calendar.resolver import CalendarAccountResolver
 
-            account = CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
+            account = await CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
             if account:
                 self.calendar_account_name = account.get("account_name", "Unknown")
                 self.calendar_email = account.get("account_identifier", "your-calendar")
@@ -323,7 +323,7 @@ Only extract explicitly stated information."""
             attendees = [email.strip() for email in attendees_str.split(",") if email.strip()]
 
         try:
-            account = CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
+            account = await CalendarAccountResolver.resolve_account(self.tenant_id, "primary")
 
             if not account:
                 return self.make_result(

@@ -44,7 +44,7 @@ class EmailSummaryAgent(StandardAgent):
         logger.info(f"EmailSummaryAgent: Scanning unread emails for user {self.tenant_id}")
 
         try:
-            accounts = AccountResolver.resolve_accounts(self.tenant_id, ["all"])
+            accounts = await AccountResolver.resolve_accounts(self.tenant_id, ["all"])
 
             if not accounts:
                 return self.make_result(

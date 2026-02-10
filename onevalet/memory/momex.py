@@ -77,9 +77,12 @@ class MomexMemory:
 
         storage = StorageConfig()
         if self._database_url:
+            # Detect pgbouncer (Supabase pooler uses port 6543 or "pooler" in URL)
+            is_pgbouncer = "pooler" in self._database_url or ":6543" in self._database_url
             storage = StorageConfig(
                 backend="postgres",
                 postgres_url=self._database_url,
+                postgres_pgbouncer=is_pgbouncer,
             )
 
         self._config = MomexConfig(llm=llm, embedding=embedding, storage=storage)

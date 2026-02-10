@@ -104,7 +104,7 @@ async def search_calendar_events(
     from onevalet.providers.calendar.factory import CalendarProviderFactory
 
     try:
-        account = CalendarAccountResolver.resolve_account(user_id, account_hint)
+        account = await CalendarAccountResolver.resolve_account(user_id, account_hint)
         if not account:
             return {
                 "success": False,

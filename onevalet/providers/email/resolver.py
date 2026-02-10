@@ -17,98 +17,196 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+_EMAIL_SERVICES = ("gmail", "outlook")
+
+
 class AccountResolver:
     """
     Resolve user-friendly account references to credential dicts
     using CredentialStore.
     """
 
-    def __init__(self, credential_store):
+    _default_store = None
+
+    @classmethod
+    def set_default_store(cls, credential_store):
+        """Set the default credential store for class-level access."""
+        cls._default_store = credential_store
+
+    def __init__(self, credential_store=None):
         """
         Args:
             credential_store: CredentialStore instance (from onevalet.credentials)
         """
-        self.credential_store = credential_store
+        self.credential_store = credential_store or self._default_store
 
     async def resolve_account(
         self,
         tenant_id: str,
-        service: str,
+        account_spec_or_service: Optional[str] = None,
         account_spec: Optional[str] = None,
     ) -> Optional[dict]:
         """
         Resolve a single account specification to a credentials dict.
 
-        Args:
-            tenant_id: Tenant/user ID
-            service: Service name (e.g., "google", "outlook")
-            account_spec: Account specification (can be):
-                - None or "primary": Primary account
-                - Account name: "work", "personal", etc.
-                - Email address: "john@gmail.com"
+        Supports two calling conventions:
+            # Instance call with explicit service:
+            resolver.resolve_account(tenant_id, "gmail", "primary")
 
-        Returns:
-            Credentials dict or None if not found
+            # Class-level call (searches all email services):
+            AccountResolver.resolve_account(tenant_id, "primary")
         """
+        # Detect class-level call: self is a string (tenant_id)
+        if isinstance(self, str):
+            actual_tenant = self
+            actual_spec = tenant_id  # second arg is account_spec
+            resolver = AccountResolver()
+            return await resolver._resolve_account_all_services(
+                actual_tenant, actual_spec, _EMAIL_SERVICES
+            )
+
+        # Instance call
+        if account_spec is not None:
+            # resolve_account(tenant_id, service, spec)
+            return await self._resolve_account_for_service(
+                tenant_id, account_spec_or_service, account_spec
+            )
+        else:
+            # resolve_account(tenant_id, spec) — search all services
+            return await self._resolve_account_all_services(
+                tenant_id, account_spec_or_service, _EMAIL_SERVICES
+            )
+
+    async def _resolve_account_all_services(
+        self, tenant_id: str, account_spec: Optional[str], services: tuple
+    ) -> Optional[dict]:
+        """Search across multiple services for a matching account."""
+        for service in services:
+            result = await self._resolve_account_for_service(tenant_id, service, account_spec)
+            if result:
+                return result
+        return None
+
+    @staticmethod
+    def _enrich(creds: dict, account_name: str, service: str) -> dict:
+        """Inject account_name and account_identifier that agents expect."""
+        if creds is None:
+            return None
+        creds.setdefault("account_name", account_name)
+        creds.setdefault("account_identifier", creds.get("email", ""))
+        creds.setdefault("service", service)
+        return creds
+
+    async def _resolve_account_for_service(
+        self, tenant_id: str, service: str, account_spec: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Resolve a single account for a specific service."""
+        if not self.credential_store:
+            logger.error("No credential store available")
+            return None
+
         # Default to primary account
         if not account_spec or account_spec.lower() == "primary":
             creds = await self.credential_store.get(tenant_id, service, "primary")
-            if not creds:
-                logger.warning(f"No primary account found for tenant {tenant_id}, service {service}")
-            return creds
+            return self._enrich(creds, "primary", service)
 
         # Try by account_name directly
         creds = await self.credential_store.get(tenant_id, service, account_spec)
         if creds:
-            logger.info(f"Resolved '{account_spec}' to account_name match")
-            return creds
+            return self._enrich(creds, account_spec, service)
 
         # Try by email in list of all accounts for this service
         all_accounts = await self.credential_store.list(tenant_id, service)
         for acc in all_accounts:
             acc_creds = acc.get("credentials", {})
             if acc_creds.get("email", "").lower() == account_spec.lower():
-                logger.info(f"Resolved '{account_spec}' by email match")
-                return acc_creds
+                return self._enrich(acc_creds, acc.get("account_name", "primary"), service)
 
-        logger.warning(f"No account found matching spec: '{account_spec}'")
         return None
 
     async def resolve_accounts(
         self,
         tenant_id: str,
-        service: str,
+        service_or_specs=None,
         account_specs: Optional[List[str]] = None,
     ) -> List[dict]:
         """
-        Resolve multiple account specifications to credential dicts.
+        Resolve account specifications to credential dicts.
 
-        Args:
-            tenant_id: Tenant/user ID
-            service: Service name
-            account_specs: List of account specs, or special values:
-                - None: Default to primary account only
-                - ["all"]: All active accounts for this service
-                - ["work", "personal"]: Multiple specific accounts
+        Supports two calling conventions:
+            # Instance call with explicit service:
+            resolver.resolve_accounts(tenant_id, "gmail", ["all"])
 
-        Returns:
-            List of credentials dicts (deduplicated)
+            # Class-level call (searches all email services):
+            AccountResolver.resolve_accounts(tenant_id, ["all"])
         """
+        # Detect class-level call: AccountResolver.resolve_accounts(tenant_id, specs)
+        # In that case, `self` is actually tenant_id (a string), and
+        # `tenant_id` is account_specs.
+        if isinstance(self, str):
+            # Called as AccountResolver.resolve_accounts(tenant_id, account_specs)
+            actual_tenant = self
+            actual_specs = tenant_id if isinstance(tenant_id, list) else None
+            resolver = AccountResolver()
+            return await resolver._resolve_all_email_accounts(actual_tenant, actual_specs)
+
+        # Instance call with explicit service
+        if isinstance(service_or_specs, list):
+            # resolve_accounts(tenant_id, ["all"]) — no explicit service
+            return await self._resolve_all_email_accounts(tenant_id, service_or_specs)
+        elif isinstance(service_or_specs, str):
+            # resolve_accounts(tenant_id, "gmail", ["all"]) — explicit service
+            return await self._resolve_for_service(tenant_id, service_or_specs, account_specs)
+        else:
+            return await self._resolve_all_email_accounts(tenant_id, None)
+
+    async def _resolve_all_email_accounts(
+        self,
+        tenant_id: str,
+        account_specs: Optional[List[str]] = None,
+    ) -> List[dict]:
+        """Resolve accounts across all email services (gmail, outlook)."""
+        all_accounts = []
+        seen_emails: set = set()
+
+        for service in _EMAIL_SERVICES:
+            accounts = await self._resolve_for_service(tenant_id, service, account_specs)
+            for acc in accounts:
+                email = acc.get("email", "")
+                if email not in seen_emails:
+                    all_accounts.append(acc)
+                    seen_emails.add(email)
+
+        return all_accounts
+
+    async def _resolve_for_service(
+        self,
+        tenant_id: str,
+        service: str,
+        account_specs: Optional[List[str]] = None,
+    ) -> List[dict]:
+        """Resolve accounts for a single service."""
+        if not self.credential_store:
+            logger.error("No credential store available")
+            return []
+
         # Default: primary account only
         if not account_specs:
             primary = await self.credential_store.get(tenant_id, service, "primary")
             if primary:
                 logger.info(f"Using primary account for service {service}")
-                return [primary]
+                return [self._enrich(primary, "primary", service)]
             else:
-                logger.warning(f"No primary account found for tenant {tenant_id}, service {service}")
                 return []
 
         # Special case: "all" accounts
         if len(account_specs) == 1 and account_specs[0].lower() == "all":
             all_accounts = await self.credential_store.list(tenant_id, service)
-            results = [acc["credentials"] for acc in all_accounts if "credentials" in acc]
-            logger.info(f"Resolved 'all' to {len(results)} accounts")
+            results = []
+            for acc in all_accounts:
+                if "credentials" in acc:
+                    results.append(self._enrich(acc["credentials"], acc.get("account_name", "primary"), service))
+            logger.info(f"Resolved 'all' for {service}: {len(results)} accounts")
             return results
 
         # Resolve each spec individually
@@ -122,11 +220,6 @@ class AccountResolver:
                 if email not in seen_emails:
                     accounts.append(creds)
                     seen_emails.add(email)
-                else:
-                    logger.debug(f"Skipping duplicate account: {email}")
-
-        if not accounts:
-            logger.warning(f"No accounts resolved from specs: {account_specs}")
 
         return accounts
 

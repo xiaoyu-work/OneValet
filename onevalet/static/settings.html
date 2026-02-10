@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings - OneValet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-full bg-gray-50">
+
+  <!-- Header -->
+  <header class="bg-gray-900 text-white px-6 py-3.5 flex items-center gap-4 sticky top-0 z-10">
+    <a href="/" class="p-1.5 rounded-lg hover:bg-gray-800 transition-colors" title="Back to chat">
+      <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/>
+      </svg>
+    </a>
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center font-bold text-sm">OV</div>
+      <span class="text-lg font-semibold tracking-tight">Settings</span>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 py-8 space-y-8">
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Configuration -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Configuration</h2>
+        <p class="text-xs text-gray-500 mt-0.5">LLM provider, model, and database connection</p>
+      </div>
+      <div class="px-6 py-5 space-y-4">
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>
+            <select id="cfg-provider" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="azure">Azure OpenAI</option>
+              <option value="dashscope">DashScope (Qwen)</option>
+              <option value="gemini">Gemini</option>
+              <option value="ollama">Ollama</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Model</label>
+            <input id="cfg-model" type="text" placeholder="gpt-4o" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">
+              API Key <span id="cfg-apikey-status" class="text-xs text-gray-400 ml-1"></span>
+            </label>
+            <input id="cfg-apikey" type="password" placeholder="sk-..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <p class="text-xs text-gray-400 mt-1">Leave blank to keep existing key</p>
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Base URL <span class="text-gray-400">(optional)</span></label>
+            <input id="cfg-baseurl" type="text" placeholder="https://your-resource.openai.azure.com/" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">Database URL</label>
+          <input id="cfg-database" type="text" placeholder="postgresql://user:pass@localhost:5432/onevalet" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">System Prompt <span class="text-gray-400">(optional)</span></label>
+          <textarea id="cfg-sysprompt" rows="2" placeholder="You are a helpful personal assistant..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="cfg-save-btn" onclick="saveConfig()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
+            Save &amp; Initialize
+          </button>
+          <span id="cfg-status" class="text-sm hidden"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- OAuth Apps -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">OAuth Apps</h2>
+        <p class="text-xs text-gray-500 mt-0.5">
+          Required for Google &amp; Microsoft sign-in.
+          Create apps in
+          <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-blue-600 hover:underline">Google Cloud Console</a> and
+          <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps" target="_blank" class="text-blue-600 hover:underline">Azure App Registrations</a>.
+        </p>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="px-6 py-5" id="svc-google_oauth_app"></div>
+        <div class="px-6 py-5" id="svc-microsoft_oauth_app"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Google (Email & Calendar) -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Google</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Gmail &amp; Google Calendar — one authorization covers both</p>
+      </div>
+      <div class="px-6 py-5" id="svc-google"></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Microsoft (Email & Calendar) -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Microsoft</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Outlook Mail &amp; Calendar — one authorization covers both</p>
+      </div>
+      <div class="px-6 py-5" id="svc-microsoft"></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Travel -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Travel</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Flight search, hotel search, weather forecasts</p>
+      </div>
+      <div class="divide-y divide-gray-100">
+        <div class="px-6 py-5" id="svc-amadeus"></div>
+        <div class="px-6 py-5" id="svc-weather_api"></div>
+      </div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Maps -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Maps</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Place search, directions, air quality</p>
+      </div>
+      <div class="px-6 py-5" id="svc-google_maps"></div>
+    </section>
+
+    <!-- ══════════════════════════════════════════ -->
+    <!-- Search -->
+    <!-- ══════════════════════════════════════════ -->
+    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+      <div class="px-6 py-4 border-b border-gray-100">
+        <h2 class="text-base font-semibold text-gray-900">Search</h2>
+        <p class="text-xs text-gray-500 mt-0.5">Web search via Google Custom Search</p>
+      </div>
+      <div class="px-6 py-5" id="svc-google_search"></div>
+    </section>
+
+    <div class="h-8"></div>
+  </main>
+
+  <!-- Toast -->
+  <div id="toast-container" class="fixed bottom-6 right-6 z-50 space-y-2"></div>
+
+<script>
+// ===============================================
+// Service Definitions
+// ===============================================
+
+const SERVICES = {
+  // Combined OAuth services (one button per provider)
+  google:    { label: 'Gmail & Google Calendar',       type: 'oauth_combined', provider: 'google',    services: ['gmail', 'google_calendar'] },
+  microsoft: { label: 'Outlook Mail & Calendar', type: 'oauth_combined', provider: 'microsoft', services: ['outlook', 'outlook_calendar'] },
+  // API key services
+  amadeus:          { label: 'Amadeus (Flights & Hotels)', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Amadeus API key' },
+    { key: 'api_secret', label: 'API Secret', placeholder: 'Your Amadeus API secret' },
+  ]},
+  weather_api:      { label: 'Weather API', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your WeatherAPI.com key' },
+  ]},
+  google_maps:      { label: 'Google Maps', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Google Maps API key' },
+  ]},
+  google_search:    { label: 'Google Search', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Google Search API key' },
+    { key: 'search_engine_id', label: 'Search Engine ID', placeholder: 'Your Custom Search Engine ID' },
+  ]},
+  // OAuth app credentials
+  google_oauth_app: { label: 'Google OAuth App', type: 'apikey', fields: [
+    { key: 'client_id', label: 'Client ID', placeholder: 'Your Google OAuth Client ID' },
+    { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Google OAuth Client Secret' },
+  ]},
+  microsoft_oauth_app: { label: 'Microsoft OAuth App', type: 'apikey', fields: [
+    { key: 'client_id', label: 'Client ID', placeholder: 'Your Microsoft App Client ID' },
+    { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Microsoft App Client Secret' },
+    { key: 'tenant_id', label: 'Tenant ID', placeholder: 'common (or your Azure AD tenant)' },
+  ]},
+};
+
+// ===============================================
+// Configuration
+// ===============================================
+
+async function loadCurrentConfig() {
+  try {
+    const resp = await fetch('/api/config');
+    if (!resp.ok) return;
+    const cfg = await resp.json();
+    if (cfg.provider) document.getElementById('cfg-provider').value = cfg.provider;
+    if (cfg.model) document.getElementById('cfg-model').value = cfg.model;
+    if (cfg.database) document.getElementById('cfg-database').value = cfg.database;
+    if (cfg.base_url) document.getElementById('cfg-baseurl').value = cfg.base_url;
+    if (cfg.system_prompt) document.getElementById('cfg-sysprompt').value = cfg.system_prompt;
+
+    const statusEl = document.getElementById('cfg-apikey-status');
+    if (cfg.api_key_set) {
+      statusEl.textContent = `(current: ${cfg.api_key_display})`;
+      statusEl.className = 'text-xs text-green-600 ml-1';
+    } else {
+      statusEl.textContent = '(not set)';
+      statusEl.className = 'text-xs text-amber-500 ml-1';
+    }
+    document.getElementById('cfg-apikey').value = '';
+  } catch (e) {
+    console.error('Failed to load config:', e);
+  }
+}
+
+async function saveConfig() {
+  const btn = document.getElementById('cfg-save-btn');
+  const statusEl = document.getElementById('cfg-status');
+
+  const provider = document.getElementById('cfg-provider').value;
+  const model = document.getElementById('cfg-model').value.trim();
+  const database = document.getElementById('cfg-database').value.trim();
+  const apiKey = document.getElementById('cfg-apikey').value.trim();
+  const baseUrl = document.getElementById('cfg-baseurl').value.trim();
+  const sysPrompt = document.getElementById('cfg-sysprompt').value.trim();
+
+  if (!model) { showToast('Model is required', 'error'); return; }
+  if (!database) { showToast('Database URL is required', 'error'); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  statusEl.classList.add('hidden');
+
+  const body = { provider, model, database };
+  if (apiKey) body.api_key = apiKey;
+  if (baseUrl) body.base_url = baseUrl;
+  if (sysPrompt) body.system_prompt = sysPrompt;
+
+  try {
+    const resp = await fetch('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+
+    if (resp.ok) {
+      showToast('Configuration saved and initialized!');
+      statusEl.textContent = 'Initialized';
+      statusEl.className = 'text-sm text-green-600';
+      statusEl.classList.remove('hidden');
+      loadCurrentConfig();
+      renderAllServices();
+    } else {
+      const detail = data.detail || 'Failed to save';
+      statusEl.textContent = detail;
+      statusEl.className = 'text-sm text-red-600';
+      statusEl.classList.remove('hidden');
+      showToast('Configuration error', 'error');
+    }
+  } catch (err) {
+    showToast(`Connection error: ${err.message}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save & Initialize';
+  }
+}
+
+// ===============================================
+// Credentials — Load & Render
+// ===============================================
+
+let allCredentials = [];
+
+async function loadAllCredentials() {
+  try {
+    const resp = await fetch('/api/credentials');
+    if (resp.ok) {
+      allCredentials = await resp.json();
+    } else {
+      allCredentials = [];
+    }
+  } catch (e) {
+    allCredentials = [];
+  }
+}
+
+function getCredential(service) {
+  return allCredentials.find(c => c.service === service) || null;
+}
+
+function renderAllServices() {
+  loadAllCredentials().then(() => {
+    for (const [svc, def] of Object.entries(SERVICES)) {
+      const el = document.getElementById(`svc-${svc}`);
+      if (!el) continue;
+      if (def.type === 'oauth_combined') {
+        renderOAuthCombinedService(el, svc, def);
+      } else if (def.type === 'apikey') {
+        renderApiKeyService(el, svc, def);
+      }
+    }
+  });
+}
+
+// ===============================================
+// OAuth Service Card
+// ===============================================
+
+function renderOAuthCombinedService(container, key, def) {
+  // Check if any of the sub-services are connected
+  const cred = def.services.map(s => getCredential(s)).find(c => c);
+  const connected = !!cred;
+  const provider = def.provider;
+  const providerLabel = provider === 'google' ? 'Google' : 'Microsoft';
+  const oauthAppService = provider === 'google' ? 'google_oauth_app' : 'microsoft_oauth_app';
+  const oauthAppConfigured = !!getCredential(oauthAppService);
+  const btnColor = provider === 'google'
+    ? 'bg-blue-600 hover:bg-blue-700'
+    : 'bg-indigo-600 hover:bg-indigo-700';
+
+  let html = `
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2.5">
+        <span class="text-sm font-medium text-gray-900">${def.label}</span>
+        ${connected
+          ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">Connected</span>`
+          : `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Not connected</span>`
+        }
+      </div>
+      ${connected ? `
+        <button onclick="deleteOAuthCombined('${provider}', ${JSON.stringify(def.services)})" class="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Remove</button>
+      ` : ''}
+    </div>
+  `;
+
+  if (connected) {
+    html += `
+      <div class="bg-gray-50 rounded-lg px-3 py-2.5">
+        <p class="text-sm text-gray-700">${escapeHtml(cred.account_name)}</p>
+        ${cred.email ? `<p class="text-xs text-gray-500">${escapeHtml(cred.email)}</p>` : ''}
+      </div>
+    `;
+  } else {
+    html += `<div class="space-y-3">`;
+
+    if (oauthAppConfigured) {
+      html += `
+        <button onclick="startOAuthFlow('${provider}')"
+                class="${btnColor} text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors flex items-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round"
+                  d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"/>
+          </svg>
+          Connect with ${providerLabel}
+        </button>
+      `;
+    } else {
+      html += `
+        <p class="text-xs text-amber-600">
+          Configure ${providerLabel} OAuth App credentials above first.
+        </p>
+      `;
+    }
+
+    // Collapsible manual paste fallback
+    const firstService = def.services[0];
+    html += `
+      <details class="border border-gray-200 rounded-lg">
+        <summary class="px-3 py-2 text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+          Advanced: paste token JSON manually
+        </summary>
+        <div class="px-3 pb-3 pt-1 space-y-2">
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">Account Name</label>
+              <input id="${firstService}-account" type="text" value="primary"
+                     class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-500 mb-1">OAuth Token JSON</label>
+              <textarea id="${firstService}-token" rows="3" placeholder='{"access_token": "...", "refresh_token": "...", "email": "..."}'
+                class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            </div>
+          </div>
+          <button onclick="saveOAuthCredentialCombined('${provider}', ${JSON.stringify(def.services)})" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            Connect ${def.label}
+          </button>
+        </div>
+      </details>
+    `;
+    html += `</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+// ===============================================
+// API Key Service Card
+// ===============================================
+
+function renderApiKeyService(container, service, def) {
+  const cred = getCredential(service);
+  const connected = !!cred;
+
+  let html = `
+    <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2.5">
+        <span class="text-sm font-medium text-gray-900">${def.label}</span>
+        ${connected
+          ? `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">Configured</span>`
+          : `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Not configured</span>`
+        }
+      </div>
+      ${connected ? `
+        <button onclick="deleteCredential('${service}', 'primary')" class="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Remove</button>
+      ` : ''}
+    </div>
+    <div class="space-y-3">
+      <div class="grid grid-cols-${def.fields.length} gap-3">
+  `;
+
+  for (const field of def.fields) {
+    html += `
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">${field.label}</label>
+        <input id="${service}-${field.key}" type="password" placeholder="${field.placeholder}"
+          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        ${connected ? `<p class="text-xs text-green-600 mt-1">Set (hidden)</p>` : ''}
+      </div>
+    `;
+  }
+
+  html += `
+      </div>
+      <button onclick="saveApiKeyCredential('${service}')" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+        ${connected ? 'Update' : 'Save'}
+      </button>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+// ===============================================
+// Save & Delete Credentials
+// ===============================================
+
+async function saveOAuthCredential(service) {
+  const accountName = document.getElementById(`${service}-account`)?.value.trim() || 'primary';
+  const tokenStr = document.getElementById(`${service}-token`)?.value.trim();
+
+  if (!tokenStr) { showToast('Please paste the OAuth token JSON', 'error'); return; }
+
+  let credentials;
+  try {
+    credentials = JSON.parse(tokenStr);
+  } catch (e) {
+    showToast('Invalid JSON format', 'error');
+    return;
+  }
+
+  try {
+    const resp = await fetch(`/api/credentials/${service}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_name: accountName, credentials }),
+    });
+    if (resp.ok) {
+      showToast(`${SERVICES[service].label} connected`);
+      renderAllServices();
+    } else {
+      showToast('Failed to save', 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function saveApiKeyCredential(service) {
+  const def = SERVICES[service];
+  const credentials = {};
+  let hasValue = false;
+
+  for (const field of def.fields) {
+    const val = document.getElementById(`${service}-${field.key}`)?.value.trim();
+    if (val) {
+      credentials[field.key] = val;
+      hasValue = true;
+    }
+  }
+
+  if (!hasValue) { showToast('Please fill in at least one field', 'error'); return; }
+
+  try {
+    const resp = await fetch(`/api/credentials/${service}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_name: 'primary', credentials }),
+    });
+    if (resp.ok) {
+      showToast(`${def.label} configured`);
+      renderAllServices();
+    } else {
+      showToast('Failed to save', 'error');
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteCredential(service, accountName) {
+  const label = SERVICES[service]?.label || service;
+  if (!confirm(`Remove ${label} credentials?`)) return;
+  try {
+    const resp = await fetch(`/api/credentials/${service}/${accountName}`, { method: 'DELETE' });
+    if (resp.ok) {
+      showToast(`${label} removed`);
+      renderAllServices();
+    }
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+// ===============================================
+// OAuth Flow
+// ===============================================
+
+async function startOAuthFlow(provider) {
+  const label = provider === 'google' ? 'Google' : 'Microsoft';
+  try {
+    const resp = await fetch(`/api/oauth/${provider}/authorize`);
+    if (!resp.ok) {
+      const data = await resp.json();
+      showToast(data.detail || 'Failed to start OAuth flow', 'error');
+      return;
+    }
+    const data = await resp.json();
+
+    // Open authorization URL in a popup
+    const popup = window.open(data.authorize_url, 'oauth_popup',
+      'width=600,height=700,scrollbars=yes,resizable=yes');
+
+    // Listen for completion message from the callback page
+    const messageHandler = (event) => {
+      if (event.data === 'oauth_complete') {
+        window.removeEventListener('message', messageHandler);
+        showToast(`${label} connected!`);
+        renderAllServices();
+      }
+    };
+    window.addEventListener('message', messageHandler);
+
+    // Fallback: poll for popup close
+    const pollTimer = setInterval(() => {
+      if (popup && popup.closed) {
+        clearInterval(pollTimer);
+        window.removeEventListener('message', messageHandler);
+        renderAllServices();
+      }
+    }, 1000);
+
+  } catch (err) {
+    showToast(`OAuth error: ${err.message}`, 'error');
+  }
+}
+
+async function deleteOAuthCombined(provider, services) {
+  const label = provider === 'google' ? 'Google' : 'Microsoft';
+  if (!confirm(`Remove ${label} credentials?`)) return;
+  try {
+    for (const svc of services) {
+      await fetch(`/api/credentials/${svc}/primary`, { method: 'DELETE' });
+    }
+    showToast(`${label} removed`);
+    renderAllServices();
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+async function saveOAuthCredentialCombined(provider, services) {
+  const firstService = services[0];
+  const accountName = document.getElementById(`${firstService}-account`)?.value.trim() || 'primary';
+  const tokenStr = document.getElementById(`${firstService}-token`)?.value.trim();
+
+  if (!tokenStr) { showToast('Please paste the OAuth token JSON', 'error'); return; }
+
+  let credentials;
+  try {
+    credentials = JSON.parse(tokenStr);
+  } catch (e) {
+    showToast('Invalid JSON format', 'error');
+    return;
+  }
+
+  try {
+    for (const svc of services) {
+      const resp = await fetch(`/api/credentials/${svc}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ account_name: accountName, credentials }),
+      });
+      if (!resp.ok) { showToast('Failed to save', 'error'); return; }
+    }
+    const label = provider === 'google' ? 'Google' : 'Microsoft';
+    showToast(`${label} connected`);
+    renderAllServices();
+  } catch (err) {
+    showToast(`Error: ${err.message}`, 'error');
+  }
+}
+
+// ===============================================
+// Utils
+// ===============================================
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  const bg = type === 'error' ? 'bg-red-600' : 'bg-gray-900';
+  toast.className = `${bg} text-white text-sm px-4 py-2.5 rounded-lg shadow-lg transform transition-all duration-300 translate-y-2 opacity-0`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  requestAnimationFrame(() => toast.classList.remove('translate-y-2', 'opacity-0'));
+  setTimeout(() => {
+    toast.classList.add('translate-y-2', 'opacity-0');
+    setTimeout(() => toast.remove(), 300);
+  }, 2500);
+}
+
+// ===============================================
+// Init
+// ===============================================
+loadCurrentConfig();
+renderAllServices();
+</script>
+</body>
+</html>

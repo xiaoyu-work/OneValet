@@ -195,7 +195,7 @@ Return ONLY one word: APPROVED, REJECTED, or MODIFY"""
 
         try:
             from_account_spec = fields.get("from_account", "primary")
-            account = AccountResolver.resolve_account(self.tenant_id, from_account_spec)
+            account = await AccountResolver.resolve_account(self.tenant_id, from_account_spec)
 
             if not account:
                 return self.make_result(
@@ -252,7 +252,7 @@ Return ONLY one word: APPROVED, REJECTED, or MODIFY"""
         from onevalet.providers.email.resolver import AccountResolver
 
         from_account_spec = self.collected_fields.get("from_account", "primary")
-        account = AccountResolver.resolve_account(self.tenant_id, from_account_spec)
+        account = await AccountResolver.resolve_account(self.tenant_id, from_account_spec)
 
         if account:
             self.from_email = account.get("account_identifier", "")

@@ -3,28 +3,69 @@ OneValet REST API Server
 
 Usage:
     python -m onevalet
-    # → POST /chat, POST /stream, GET /health
+    # → http://0.0.0.0:8000
 """
 
 import json
 import logging
 import os
+import pathlib
+import secrets
+import time
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+import yaml
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from .app import OneValet
 
 logger = logging.getLogger(__name__)
 
-# Load config from ONEVALET_CONFIG env var, default to config.yaml
 _config_path = os.getenv("ONEVALET_CONFIG", "config.yaml")
-_app = OneValet(_config_path)
+_STATIC_DIR = pathlib.Path(__file__).parent / "static"
+
+_app: Optional[OneValet] = None
+
+
+def _try_load_app():
+    """Attempt to load OneValet from config. Silent if config missing."""
+    global _app
+    try:
+        if os.path.exists(_config_path):
+            _app = OneValet(_config_path)
+            logger.info(f"OneValet loaded from {_config_path}")
+        else:
+            logger.warning(f"Config not found: {_config_path}. Starting in setup mode.")
+    except Exception as e:
+        logger.warning(f"Failed to load config: {e}. Starting in setup mode.")
+        _app = None
+
+
+_try_load_app()
 
 api = FastAPI(title="OneValet", version="0.1.1")
+api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+_TENANT_ID = "default"
+_SUPPORTED_PROVIDERS = ["openai", "anthropic", "azure", "dashscope", "gemini", "ollama"]
+
+
+def _require_app() -> OneValet:
+    """Raise 503 if app is not configured."""
+    if _app is None:
+        raise HTTPException(503, "Not configured. Complete setup in Settings.")
+    return _app
+
+
+# ─── Models ───
 
 class ChatRequest(BaseModel):
     message: str
@@ -37,9 +78,131 @@ class ChatResponse(BaseModel):
     status: str
 
 
+class CredentialSaveRequest(BaseModel):
+    account_name: str = "primary"
+    credentials: dict
+
+
+class ConfigRequest(BaseModel):
+    provider: str
+    model: str
+    database: str
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    system_prompt: Optional[str] = None
+
+
+# ─── Pages ───
+
+@api.get("/")
+async def index():
+    return FileResponse(_STATIC_DIR / "index.html", media_type="text/html")
+
+
+@api.get("/settings")
+async def settings_page():
+    return FileResponse(_STATIC_DIR / "settings.html", media_type="text/html")
+
+
+# ─── Status & Config ───
+
+@api.get("/api/status")
+async def get_status():
+    return {"configured": _app is not None}
+
+
+def _mask_config(cfg: dict) -> dict:
+    """Return config with api_key masked for display."""
+    result = {
+        "provider": cfg.get("provider", ""),
+        "model": cfg.get("model", ""),
+        "database": cfg.get("database", ""),
+        "base_url": cfg.get("base_url", ""),
+        "system_prompt": cfg.get("system_prompt", ""),
+    }
+    api_key = cfg.get("api_key", "")
+    if api_key and len(api_key) > 8:
+        result["api_key_display"] = api_key[:4] + "..." + api_key[-4:]
+        result["api_key_set"] = True
+    elif api_key:
+        result["api_key_display"] = "****"
+        result["api_key_set"] = True
+    else:
+        result["api_key_display"] = ""
+        result["api_key_set"] = False
+    return result
+
+
+@api.get("/api/config")
+async def get_config():
+    """Return current configuration (API key masked)."""
+    if _app is not None:
+        return _mask_config(_app.config)
+    # Try reading raw YAML if file exists but failed to load
+    if os.path.exists(_config_path):
+        with open(_config_path, "r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f.read()) or {}
+        return _mask_config(raw)
+    return {}
+
+
+@api.post("/api/config")
+async def save_config(req: ConfigRequest):
+    """Save configuration to config.yaml and reinitialize the app."""
+    global _app
+
+    if req.provider not in _SUPPORTED_PROVIDERS:
+        raise HTTPException(400, f"Unsupported provider: {req.provider}")
+
+    # Build config dict
+    config = {
+        "provider": req.provider,
+        "model": req.model,
+        "database": req.database,
+    }
+    if req.api_key:
+        config["api_key"] = req.api_key
+    elif _app is not None and _app.config.get("api_key"):
+        config["api_key"] = _app.config["api_key"]
+
+    if req.base_url:
+        config["base_url"] = req.base_url
+    if req.system_prompt:
+        config["system_prompt"] = req.system_prompt
+
+    # Shut down existing app
+    if _app is not None:
+        try:
+            await _app.shutdown()
+        except Exception as e:
+            logger.warning(f"Error during shutdown: {e}")
+        _app = None
+
+    # Write config.yaml
+    with open(_config_path, "w", encoding="utf-8") as f:
+        yaml.dump(config, f, default_flow_style=False, allow_unicode=True)
+
+    # Reload and initialize
+    try:
+        _app = OneValet(_config_path)
+        await _app._ensure_initialized()
+        return {"success": True, "message": "Configuration saved and initialized."}
+    except Exception as e:
+        _app = None
+        logger.error(f"Config saved but initialization failed: {e}")
+        raise HTTPException(
+            422,
+            f"Config saved but initialization failed: {e}. "
+            f"Check your database URL and API key.",
+        )
+
+
+# ─── Chat ───
+
 @api.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
-    result = await _app.chat(
+    app = _require_app()
+    result = await app.chat(
         message_or_tenant_id=req.tenant_id,
         message=req.message,
         metadata=req.metadata,
@@ -52,8 +215,10 @@ async def chat(req: ChatRequest):
 
 @api.post("/stream")
 async def stream(req: ChatRequest):
+    app = _require_app()
+
     async def event_generator():
-        async for event in _app.stream(
+        async for event in app.stream(
             message_or_tenant_id=req.tenant_id,
             message=req.message,
             metadata=req.metadata,
@@ -75,6 +240,248 @@ async def stream(req: ChatRequest):
 async def health():
     return {"status": "ok"}
 
+
+# ─── Credentials ───
+
+_SENSITIVE_KEYS = {"access_token", "refresh_token", "client_secret", "client_id"}
+
+
+def _sanitize_credential(entry: dict) -> dict:
+    """Strip sensitive fields, keep metadata + email."""
+    creds = entry.get("credentials", {})
+    return {
+        "service": entry.get("service"),
+        "account_name": entry.get("account_name"),
+        "email": creds.get("email", ""),
+        "created_at": str(entry.get("created_at", "")),
+        "updated_at": str(entry.get("updated_at", "")),
+    }
+
+
+@api.get("/api/credentials")
+async def list_credentials():
+    app = _require_app()
+    await app._ensure_initialized()
+    entries = await app._credential_store.list(_TENANT_ID)
+    return [_sanitize_credential(e) for e in entries]
+
+
+@api.post("/api/credentials/{service}")
+async def save_credential(service: str, req: CredentialSaveRequest):
+    app = _require_app()
+    await app._ensure_initialized()
+    await app._credential_store.save(
+        tenant_id=_TENANT_ID,
+        service=service,
+        credentials=req.credentials,
+        account_name=req.account_name,
+    )
+    # Reload API keys / OAuth app credentials into env vars immediately
+    await app._load_api_keys_to_env()
+    return {"saved": True}
+
+
+@api.delete("/api/credentials/{service}/{account_name}")
+async def delete_credential(service: str, account_name: str):
+    app = _require_app()
+    await app._ensure_initialized()
+    deleted = await app._credential_store.delete(
+        tenant_id=_TENANT_ID,
+        service=service,
+        account_name=account_name,
+    )
+    return {"deleted": deleted}
+
+
+# ─── OAuth ───
+
+_oauth_states: dict[str, dict] = {}
+
+
+def _generate_state(service: str) -> str:
+    """Generate a cryptographic state token for CSRF protection."""
+    token = secrets.token_urlsafe(32)
+    _oauth_states[token] = {"created_at": time.time(), "service": service}
+    # Garbage-collect expired states (>10 min)
+    cutoff = time.time() - 600
+    expired = [k for k, v in _oauth_states.items() if v["created_at"] < cutoff]
+    for k in expired:
+        del _oauth_states[k]
+    return token
+
+
+def _validate_state(state: str) -> Optional[str]:
+    """Validate and consume a state token. Returns service name or None."""
+    entry = _oauth_states.pop(state, None)
+    if not entry:
+        return None
+    if time.time() - entry["created_at"] > 600:
+        return None
+    return entry["service"]
+
+
+def _get_base_url(request: Request) -> str:
+    """Determine base URL from request, respecting reverse proxy headers."""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get(
+        "x-forwarded-host", request.headers.get("host", "localhost:8000")
+    )
+    return f"{proto}://{host}"
+
+
+@api.get("/api/oauth/google/authorize")
+async def google_oauth_authorize(request: Request):
+    """Initiate Google OAuth flow. Returns authorization URL."""
+    from .oauth.google_oauth import GoogleOAuth
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state = _generate_state("google")
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/google/callback"
+
+    try:
+        url = GoogleOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.get("/api/oauth/google/callback")
+async def google_oauth_callback(request: Request, code: str, state: str):
+    """Google OAuth callback — exchange code for tokens and store credentials."""
+    from .oauth.google_oauth import GoogleOAuth
+
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/google/callback"
+
+    try:
+        tokens = await GoogleOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+        email = await GoogleOAuth.fetch_user_email(tokens["access_token"])
+
+        credentials = {
+            "provider": "google",
+            "email": email,
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_expiry": tokens["token_expiry"],
+            "scopes": tokens.get("scope", "").split(),
+        }
+
+        # Save to both gmail and google_calendar (scopes cover both)
+        for svc in ("gmail", "google_calendar"):
+            await app._credential_store.save(
+                tenant_id=_TENANT_ID,
+                service=svc,
+                credentials=credentials,
+                account_name="primary",
+            )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Gmail &amp; Google Calendar connected as <b>{email}</b></p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Google OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
+@api.get("/api/oauth/microsoft/authorize")
+async def microsoft_oauth_authorize(request: Request):
+    """Initiate Microsoft OAuth flow. Returns authorization URL."""
+    from .oauth.microsoft_oauth import MicrosoftOAuth
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state = _generate_state("microsoft")
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/microsoft/callback"
+
+    try:
+        url = MicrosoftOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@api.get("/api/oauth/microsoft/callback")
+async def microsoft_oauth_callback(request: Request, code: str, state: str):
+    """Microsoft OAuth callback — exchange code for tokens and store credentials."""
+    from .oauth.microsoft_oauth import MicrosoftOAuth
+
+    service = _validate_state(state)
+    if not service:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    app = _require_app()
+    await app._ensure_initialized()
+
+    base_url = _get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/microsoft/callback"
+
+    try:
+        tokens = await MicrosoftOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+        email = await MicrosoftOAuth.fetch_user_email(tokens["access_token"])
+
+        credentials = {
+            "provider": "microsoft",
+            "email": email,
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "token_expiry": tokens["token_expiry"],
+            "scopes": tokens.get("scope", "").split(),
+        }
+
+        # Save to both outlook and outlook_calendar (scopes cover both)
+        for svc in ("outlook", "outlook_calendar"):
+            await app._credential_store.save(
+                tenant_id=_TENANT_ID,
+                service=svc,
+                credentials=credentials,
+                account_name="primary",
+            )
+
+        return HTMLResponse(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+            f"<h2>Connected!</h2>"
+            f"<p>Outlook &amp; Outlook Calendar connected as <b>{email}</b></p>"
+            f"<script>"
+            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+            f"setTimeout(()=>window.close(),1500);"
+            f"</script></body></html>"
+        )
+    except Exception as e:
+        logger.error(f"Microsoft OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            f"<h2>OAuth Error</h2><p>{e}</p>",
+            status_code=500,
+        )
+
+
+# ─── Main ───
 
 def main():
     import uvicorn

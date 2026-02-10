@@ -50,3 +50,7 @@ site/
 
 uv.lock
 py.typed
+
+nul
+momex_data/
+config.yaml

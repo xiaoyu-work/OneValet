@@ -150,6 +150,10 @@ class OneValet:
         self._credential_store = CredentialStore(db=self._database)
         await self._credential_store.ensure_table()
 
+        # Set default store for AccountResolver (agents call it as classmethod)
+        from .providers.email.resolver import AccountResolver
+        AccountResolver.set_default_store(self._credential_store)
+
         # 4. MomexMemory — reuse LLM config from OneValet
         from .memory.momex import MomexMemory
         momex_provider = provider
@@ -215,8 +219,64 @@ class OneValet:
         )
         await self._orchestrator.initialize()
 
+        # 8. Load API key credentials into env vars for agent access
+        await self._load_api_keys_to_env()
+
         self._initialized = True
         logger.info("OneValet initialized")
+
+    _API_KEY_ENV_MAP = {
+        "amadeus": {"api_key": "AMADEUS_API_KEY", "api_secret": "AMADEUS_API_SECRET"},
+        "weather_api": {"api_key": "WEATHER_API_KEY"},
+        "google_maps": {"api_key": "GOOGLE_MAPS_API_KEY"},
+        "google_search": {"api_key": "GOOGLE_SEARCH_API_KEY", "search_engine_id": "GOOGLE_SEARCH_ENGINE_ID"},
+        "google_oauth_app": {"client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET"},
+        "microsoft_oauth_app": {
+            "client_id": "MICROSOFT_CLIENT_ID",
+            "client_secret": "MICROSOFT_CLIENT_SECRET",
+            "tenant_id": "MICROSOFT_TENANT_ID",
+        },
+    }
+
+    async def _load_api_keys_to_env(self) -> None:
+        """Load API key credentials from credential store into env vars."""
+        for service, mapping in self._API_KEY_ENV_MAP.items():
+            try:
+                entries = await self._credential_store.list("default", service=service)
+                if entries:
+                    creds = entries[0].get("credentials", {})
+                    for json_key, env_var in mapping.items():
+                        val = creds.get(json_key, "")
+                        if val:
+                            os.environ[env_var] = val
+            except Exception as e:
+                logger.debug(f"No {service} credentials found: {e}")
+
+    @property
+    def config(self) -> dict:
+        """Return a copy of the raw configuration dict."""
+        return dict(self._config)
+
+    async def shutdown(self) -> None:
+        """Shut down the application, closing all connections."""
+        if not self._initialized:
+            return
+        try:
+            if self._orchestrator:
+                await self._orchestrator.shutdown()
+            if self._database:
+                await self._database.close()
+        except Exception as e:
+            logger.warning(f"Error during shutdown: {e}")
+        finally:
+            self._initialized = False
+            self._llm_client = None
+            self._database = None
+            self._credential_store = None
+            self._momex = None
+            self._agent_registry = None
+            self._orchestrator = None
+            logger.info("OneValet shut down")
 
     async def chat(
         self,
