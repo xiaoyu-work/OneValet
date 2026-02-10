@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet
 class ImportantDateDigestAgent(StandardAgent):
-    """Gets important dates that need reminding today"""
+    """Check for upcoming birthdays, anniversaries, and important dates. Use for daily reminders or when the user asks about special dates."""
 
     def __init__(self, tenant_id: str = "", llm_client=None, **kwargs):
         super().__init__(

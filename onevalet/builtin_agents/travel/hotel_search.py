@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class HotelSearchAgent(StandardAgent):
-    """Hotel search agent using Amadeus Hotel Search API"""
+    """Search for hotels in a city. Use when the user needs accommodation for travel or a trip."""
 
     location = InputField(
         prompt="Where do you need a hotel?",

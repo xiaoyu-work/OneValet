@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class DeleteEmailAgent(StandardAgent):
-    """Delete email agent with search and approval"""
+    """Delete emails from the user's inbox. Use when the user wants to remove or trash emails."""
 
     account = InputField(
         prompt="Which email account would you like to delete from?",

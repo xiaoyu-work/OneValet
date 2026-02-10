@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class MarkReadEmailAgent(StandardAgent):
-    """Mark emails as read agent"""
+    """Mark emails as read. Use when the user wants to clear unread status on emails."""
 
     target = InputField(
         prompt="Which emails would you like to mark as read?",

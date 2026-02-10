@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class CalendarAgent(StandardAgent):
-    """Calendar query agent - simple single-step agent"""
+    """Check the user's calendar for events. Use when the user asks about their schedule, meetings, or availability."""
 
     time_range = InputField(
         prompt="What time range would you like to check?",

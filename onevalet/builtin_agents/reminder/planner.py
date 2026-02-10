@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class PlannerAgent(StandardAgent):
-    """Automation planner agent - creates structured Task definitions for TriggerEngine"""
+    """Create automated workflows and scheduled tasks. Use when the user wants to set up recurring actions or complex automations."""
 
     def __init__(self, tenant_id: str = "", llm_client=None, **kwargs):
         super().__init__(

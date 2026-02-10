@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class GoogleDocsCreateAgent(StandardAgent):
-    """Create a new Google Doc with title and content"""
+    """Create a new Google Doc. Use when the user wants to write or create a document in Google Docs."""
 
     title = InputField(
         prompt="What's the title for the document?",

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class MapSearchAgent(StandardAgent):
-    """Map search agent using Google Places API"""
+    """Search for places, restaurants, attractions, or businesses by location. Use when the user asks for recommendations or wants to find nearby places."""
 
     query = InputField(
         prompt="What are you looking for?",

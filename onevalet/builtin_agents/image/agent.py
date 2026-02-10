@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ImageAgent(StandardAgent):
-    """Unified image generation and editing agent with approval"""
+    """Generate or edit images from a text description. Use when the user wants to create, modify, or design an image."""
 
     prompt = InputField(
         prompt="What image would you like?",

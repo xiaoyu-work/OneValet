@@ -78,7 +78,8 @@ if TYPE_CHECKING:
 
 from ..standard_agent import StandardAgent
 from ..config import AgentRegistry
-from ..tools.models import ToolExecutionContext
+from ..tools.models import ToolExecutionContext, ToolDefinition, ToolCategory
+from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +280,9 @@ class Orchestrator:
         if self.trigger_engine:
             await self.trigger_engine.start()
 
+        # Register recall_memory tool (needs momex instance)
+        self._register_memory_tool()
+
         self._initialized = True
         logger.info("Orchestrator initialized")
 
@@ -455,6 +459,9 @@ class Orchestrator:
         all_tool_records: List[ToolCallRecord] = []
         total_usage = TokenUsage()
         pending_approvals = []
+        final_response = ""
+
+        logger.info(f"[ReAct] tenant={tenant_id} message={message[:80]!r}")
 
         for turn in range(1, self._react_config.max_turns + 1):
             # Context guard
@@ -481,6 +488,8 @@ class Orchestrator:
             if not tool_calls:
                 # Final answer
                 final_text = response.content or ""
+                final_response = final_text
+                logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
                 yield AgentEvent(
                     type=EventType.MESSAGE_START,
                     data={"turn": turn},
@@ -499,6 +508,8 @@ class Orchestrator:
                 messages.append(self._assistant_message_from_response(response))
 
                 # Execute all tool calls concurrently
+                tool_names = [tc.name for tc in tool_calls]
+                logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
                 loop_broken = False
                 loop_broken_text = None
                 for tc in tool_calls:
@@ -517,7 +528,10 @@ class Orchestrator:
 
                 for tc, result in zip(tool_calls, results):
                     tc_name = tc.name
+                    is_agent = self._is_agent_tool(tc_name)
+                    kind = "agent" if is_agent else "tool"
                     if isinstance(result, BaseException):
+                        logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
                         error_text = f"Error: {result}"
                         messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
                         all_tool_records.append(ToolCallRecord(
@@ -528,6 +542,7 @@ class Orchestrator:
                             data={"tool_name": tc_name, "call_id": tc.id, "success": False, "error": str(result)},
                         )
                     elif isinstance(result, AgentToolResult) and not result.completed:
+                        logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
                         # Agent-Tool not completed: store in pool, collect approval
                         if result.agent:
                             await self.agent_pool.add_agent(result.agent)
@@ -562,6 +577,7 @@ class Orchestrator:
                         else:
                             result_text = str(result) if result is not None else ""
                         result_text = self._context_manager.truncate_tool_result(result_text)
+                        logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
                         messages.append(self._build_tool_result_message(tc.id, result_text))
                         all_tool_records.append(ToolCallRecord(
                             name=tc_name, args_summary={},
@@ -573,6 +589,7 @@ class Orchestrator:
                         )
 
                 if loop_broken:
+                    final_response = loop_broken_text or ""
                     # Yield the waiting agent's prompt to the user
                     if loop_broken_text:
                         yield AgentEvent(
@@ -603,6 +620,8 @@ class Orchestrator:
             except Exception:
                 final_text = "I was unable to complete the request within the allowed turns."
 
+            final_response = final_text
+
             yield AgentEvent(
                 type=EventType.MESSAGE_START,
                 data={"turn": turn},
@@ -626,6 +645,28 @@ class Orchestrator:
                 "tool_calls_count": len(all_tool_records),
             },
         )
+
+        # Save conversation history to momex (background, non-blocking)
+        session_id = context.get("session_id", tenant_id)
+        if message:
+            self.momex.save_message(
+                tenant_id=tenant_id, session_id=session_id,
+                content=message, role="user",
+            )
+        if final_response:
+            self.momex.save_message(
+                tenant_id=tenant_id, session_id=session_id,
+                content=final_response, role="assistant",
+            )
+        if message or final_response:
+            conv_messages = []
+            if message:
+                conv_messages.append({"role": "user", "content": message})
+            if final_response:
+                conv_messages.append({"role": "assistant", "content": final_response})
+            asyncio.create_task(
+                self.momex.add(tenant_id=tenant_id, messages=conv_messages, infer=True)
+            )
 
     # ==========================================================================
     # REACT LOOP
@@ -1046,26 +1087,10 @@ class Orchestrator:
         now = datetime.now(timezone.utc)
         framework_parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-        if self._agent_registry:
-            agent_types = self._agent_registry.get_all_agent_names()
-            if agent_types:
-                framework_parts.append(f"Available agents: {', '.join(agent_types)}")
+        # Tool descriptions are already in tool schemas; no need to duplicate here
 
         if framework_parts:
             system_parts.append("\n[Context]\n" + "\n".join(framework_parts))
-
-        recalled = context.get("recalled_memories", [])
-        if recalled:
-            memory_lines = []
-            for m in recalled:
-                if isinstance(m, dict):
-                    memory_lines.append(m.get("memory", m.get("text", str(m))))
-                else:
-                    memory_lines.append(str(m))
-            if memory_lines:
-                system_parts.append(
-                    "\n[Recalled user context]\n" + "\n".join(memory_lines)
-                )
 
         if system_parts:
             messages.append({
@@ -1111,7 +1136,51 @@ class Orchestrator:
         agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
         schemas.extend(agent_tool_schemas)
 
+        tool_names = [s.get("function", {}).get("name", "?") for s in schemas]
+        logger.info(f"[Tools] {len(schemas)} available: {', '.join(tool_names)}")
+
         return schemas
+
+    def _register_memory_tool(self) -> None:
+        """Register recall_memory as a tool so the LLM can query long-term memory on demand."""
+        momex = self.momex
+
+        async def recall_memory_executor(args: dict, context: ToolExecutionContext = None) -> str:
+            query = args.get("query", "")
+            if not query:
+                return "Error: query is required"
+            tenant_id = context.user_id if context else "default"
+            results = await momex.search(tenant_id=tenant_id, query=query, limit=5)
+            if not results:
+                return "No relevant memories found."
+            lines = []
+            for r in results:
+                text = r.get("memory", r.get("text", str(r)))
+                lines.append(f"- {text}")
+            return "\n".join(lines)
+
+        registry = ToolRegistry.get_instance()
+        registry.register(ToolDefinition(
+            name="recall_memory",
+            description=(
+                "Search the user's long-term memory for past preferences, facts, or context. "
+                "Use when the user refers to something from a previous conversation, or when "
+                "personalization would improve the response (e.g. dietary preferences, travel habits)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What to search for in the user's memory",
+                    }
+                },
+                "required": ["query"],
+            },
+            executor=recall_memory_executor,
+            category=ToolCategory.USER,
+        ))
+        logger.info("recall_memory tool registered")
 
     # ==========================================================================
     # EXTENSION POINTS - Override these in subclasses
@@ -1160,22 +1229,13 @@ class Orchestrator:
             "active_agents": active_agents,
         }
 
-        # Load conversation history (short-term memory)
+        # Load conversation history (short-term memory, in-memory cache)
         history = self.momex.get_history(
             tenant_id=tenant_id,
             session_id=session_id,
         )
         if history:
             context["conversation_history"] = history
-
-        # Recall relevant long-term memories
-        recalled = await self.momex.search(
-            tenant_id=tenant_id,
-            query=message,
-            limit=10,
-        )
-        if recalled:
-            context["recalled_memories"] = recalled
 
         return context
 

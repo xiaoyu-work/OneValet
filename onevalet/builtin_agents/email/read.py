@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ReadEmailAgent(StandardAgent):
-    """Email search and query agent"""
+    """Search and read the user's emails. Use when the user asks about their inbox, wants to find an email, or check messages."""
 
     accounts = InputField(
         prompt="Which email accounts would you like to search?",

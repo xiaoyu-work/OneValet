@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class CreateEventAgent(StandardAgent):
-    """Create calendar event agent with field collection and approval"""
+    """Create a new calendar event. Use when the user wants to schedule a meeting, appointment, or event."""
 
     summary = InputField(
         prompt="What's the event title?",

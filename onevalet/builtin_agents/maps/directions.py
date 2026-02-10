@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class DirectionsAgent(StandardAgent):
-    """Directions agent using Google Directions API"""
+    """Get driving, transit, or walking directions between two locations. Use when the user needs route info, travel time, or navigation."""
 
     destination = InputField(
         prompt="Where do you want to go?",

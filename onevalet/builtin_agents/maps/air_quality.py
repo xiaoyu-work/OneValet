@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class AirQualityAgent(StandardAgent):
-    """Air quality query agent using Google Air Quality API"""
+    """Check air quality (AQI) for a location. Use when the user asks about air pollution or outdoor safety."""
 
     location = InputField(
         prompt="Which location would you like to check air quality for?",

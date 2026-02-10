@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class TodoQueryAgent(StandardAgent):
-    """Todo search and query agent"""
+    """List or search the user's todo tasks. Use when the user asks about their to-do list or pending tasks."""
 
     search_query = InputField(
         prompt="What tasks are you looking for?",

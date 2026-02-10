@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class LightControlAgent(StandardAgent):
-    """Smart light control agent for Philips Hue"""
+    """Control smart lights (on/off, brightness, color). Use when the user wants to adjust their home lighting."""
 
     action = InputField(
         prompt="What would you like to do with the lights?",

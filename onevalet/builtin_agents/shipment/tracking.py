@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ShipmentAgent(StandardAgent):
-    """Shipment tracking and management agent"""
+    """Track packages and shipments. Use when the user asks about delivery status or wants to track an order."""
 
     action = InputField(
         prompt="What would you like to do with your shipments?",

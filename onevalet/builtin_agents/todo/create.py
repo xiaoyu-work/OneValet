@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class CreateTodoAgent(StandardAgent):
-    """Create todo task agent with field collection and approval"""
+    """Create a new todo task. Use when the user wants to add something to their to-do list."""
 
     title = InputField(
         prompt="What's the task?",

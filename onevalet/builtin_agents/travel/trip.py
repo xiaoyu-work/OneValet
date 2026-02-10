@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class TripAgent(StandardAgent):
-    """Trip management agent with extraction capabilities"""
+    """Save or manage a trip itinerary. Use when the user wants to store trip details or look up their upcoming trips."""
 
     action = InputField(
         prompt="What would you like to do with your trips?",

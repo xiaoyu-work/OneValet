@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ReplyEmailAgent(StandardAgent):
-    """Reply to email agent with LLM-composed reply content"""
+    """Reply to an email. Use when the user wants to respond to a specific email."""
 
     target = InputField(
         prompt="Which email would you like to reply to?",

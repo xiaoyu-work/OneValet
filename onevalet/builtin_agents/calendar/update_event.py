@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class UpdateEventAgent(StandardAgent):
-    """Update calendar event agent with field collection and approval"""
+    """Update an existing calendar event. Use when the user wants to reschedule or change event details."""
 
     target = InputField(
         prompt="Which event would you like to update?",

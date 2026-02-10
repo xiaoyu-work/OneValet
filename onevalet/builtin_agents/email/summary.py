@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class EmailSummaryAgent(StandardAgent):
-    """Email summary agent for morning digest - scans unread emails and provides brief summary"""
+    """Summarize unread emails. Use when the user asks for an email digest or overview of their inbox."""
 
     def __init__(
         self,

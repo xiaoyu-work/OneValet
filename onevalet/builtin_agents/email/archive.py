@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ArchiveEmailAgent(StandardAgent):
-    """Archive email agent with search and approval"""
+    """Archive emails. Use when the user wants to move emails out of their inbox without deleting."""
 
     account = InputField(
         prompt="Which email account would you like to archive from?",

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class ReminderAgent(StandardAgent):
-    """Creates new reminders using TriggerEngine - simple single-step agent (no approval needed)"""
+    """Set a reminder for the user. Use when the user wants to be reminded about something at a specific time."""
 
     def __init__(self, tenant_id: str = "", llm_client=None, **kwargs):
         super().__init__(

@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class GoogleSheetsWriteAgent(StandardAgent):
-    """Write data to a Google Sheets spreadsheet"""
+    """Write or update data in a Google Sheets spreadsheet. Use when the user wants to add or modify spreadsheet data."""
 
     spreadsheet_name = InputField(
         prompt="Which spreadsheet should I write to?",

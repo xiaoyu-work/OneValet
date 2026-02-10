@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class NotionUpdatePageAgent(StandardAgent):
-    """Update existing Notion pages"""
+    """Update an existing Notion page. Use when the user wants to edit or modify content in Notion."""
 
     page_title = InputField(
         prompt="Which note do you want to update?",

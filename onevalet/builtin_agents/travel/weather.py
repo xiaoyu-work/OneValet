@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class WeatherAgent(StandardAgent):
-    """Weather query agent with forecast support (up to 14 days)"""
+    """Get current weather or forecast for a location. Use when the user asks about weather, or when planning travel to check destination conditions."""
 
     location = InputField(
         prompt="Which city would you like to check the weather for?",

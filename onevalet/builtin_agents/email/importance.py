@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class EmailImportanceAgent(StandardAgent):
-    """Determine email importance using LLM with system and user rules"""
+    """Classify email importance level. Use internally to determine if an email is urgent or important."""
 
     # System default rules (LLM's own judgment criteria)
     SYSTEM_RULES = """

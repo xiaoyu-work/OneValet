@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class UpdateTodoAgent(StandardAgent):
-    """Update/complete todo task agent with search and approval"""
+    """Update or complete a todo task. Use when the user wants to mark a task as done or change its details."""
 
     search_query = InputField(
         prompt="Which task would you like to complete or update?",

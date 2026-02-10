@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class CloudStorageAgent(StandardAgent):
-    """Cloud storage search, browse, share, and management agent"""
+    """Search and manage files in cloud storage (Dropbox, Google Drive, OneDrive). Use when the user asks about their files or wants to share/upload."""
 
     action = InputField(
         prompt="What would you like to do?",

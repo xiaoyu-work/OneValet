@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class SpeakerControlAgent(StandardAgent):
-    """Sonos speaker control agent"""
+    """Control smart speakers (play, pause, volume, skip). Use when the user wants to control music playback."""
 
     action = InputField(
         prompt="What would you like to do?",

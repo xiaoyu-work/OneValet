@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class NotionCreatePageAgent(StandardAgent):
-    """Create new Notion pages with content"""
+    """Create a new page in Notion. Use when the user wants to add a note, document, or entry in Notion."""
 
     title = InputField(
         prompt="What's the title for the note?",

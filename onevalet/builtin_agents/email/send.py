@@ -21,7 +21,7 @@ def validate_email(email: str) -> str | None:
 
 @valet()
 class SendEmailAgent(StandardAgent):
-    """Send email agent with field collection and approval"""
+    """Compose and send an email. Use when the user wants to send or write an email to someone."""
 
     from_account = InputField(
         prompt="Which account to send from?",

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class EmailPreferenceAgent(StandardAgent):
-    """Manage user's email importance rules and notification preferences"""
+    """Manage email notification rules. Use when the user wants to change which emails are flagged as important."""
 
     action = InputField(
         prompt="What would you like to do with your email rules?",

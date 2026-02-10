@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class DeleteEventAgent(StandardAgent):
-    """Delete calendar event agent with search and approval"""
+    """Delete a calendar event. Use when the user wants to cancel or remove an event."""
 
     search_query = InputField(
         prompt="What events would you like to delete?",

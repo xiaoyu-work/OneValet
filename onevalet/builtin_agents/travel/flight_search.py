@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class FlightSearchAgent(StandardAgent):
-    """Flight search agent using Amadeus Flight Offers Search API"""
+    """Search for flights between cities. Use when the user wants to find, compare, or book flights for travel."""
 
     origin = InputField(
         prompt="Where are you flying from?",

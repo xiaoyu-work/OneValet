@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class DeleteTodoAgent(StandardAgent):
-    """Delete todo task agent with search and approval"""
+    """Delete a todo task. Use when the user wants to remove a task from their to-do list."""
 
     search_query = InputField(
         prompt="Which task would you like to delete?",

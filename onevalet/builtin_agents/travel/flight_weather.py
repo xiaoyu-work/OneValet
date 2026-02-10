@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @valet
 class FlightWeatherAgent(StandardAgent):
-    """Gets today's flights from trips table and fetches destination weather"""
+    """Check weather at flight destinations for today's trips. Use for daily travel briefings."""
 
     def __init__(self, tenant_id: str = "", llm_client=None, **kwargs):
         super().__init__(

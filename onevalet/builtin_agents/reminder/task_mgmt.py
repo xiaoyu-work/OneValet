@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 @valet()
 class TaskManagementAgent(StandardAgent):
-    """Manages user's scheduled reminders and automations - supports list, show, update, pause, resume, delete"""
+    """List, update, pause, or delete the user's scheduled reminders and automations."""
 
     def __init__(self, tenant_id: str = "", llm_client=None, **kwargs):
         super().__init__(
