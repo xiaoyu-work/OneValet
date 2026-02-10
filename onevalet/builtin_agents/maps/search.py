@@ -12,8 +12,6 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
-
 
 @valet(triggers=["find", "search", "where", "near", "nearby", "restaurant", "store", "shop"])
 class MapSearchAgent(StandardAgent):
@@ -139,7 +137,7 @@ Return JSON:
 
         logger.info(f"Searching for '{query}' in '{location}'")
 
-        if not GOOGLE_MAPS_API_KEY:
+        if not os.getenv("GOOGLE_MAPS_API_KEY"):
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Google Maps API key not configured. Please contact support."
@@ -149,7 +147,7 @@ Return JSON:
             url = "https://places.googleapis.com/v1/places:searchText"
             headers = {
                 "Content-Type": "application/json",
-                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-Api-Key": os.getenv("GOOGLE_MAPS_API_KEY", ""),
                 "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.types,places.priceLevel,places.businessStatus,places.googleMapsUri,places.internationalPhoneNumber,places.regularOpeningHours,places.websiteUri"
             }
 

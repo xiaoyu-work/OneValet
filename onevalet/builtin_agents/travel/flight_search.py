@@ -12,9 +12,6 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 
 logger = logging.getLogger(__name__)
 
-AMADEUS_API_KEY = os.getenv("AMADEUS_API_KEY", "")
-AMADEUS_API_SECRET = os.getenv("AMADEUS_API_SECRET", "")
-
 
 @valet(triggers=["flight", "fly", "airline", "plane ticket"])
 class FlightSearchAgent(StandardAgent):
@@ -108,8 +105,8 @@ class FlightSearchAgent(StandardAgent):
             url = "https://test.api.amadeus.com/v1/security/oauth2/token"
             data = {
                 "grant_type": "client_credentials",
-                "client_id": AMADEUS_API_KEY,
-                "client_secret": AMADEUS_API_SECRET
+                "client_id": os.getenv("AMADEUS_API_KEY", ""),
+                "client_secret": os.getenv("AMADEUS_API_SECRET", "")
             }
 
             async with httpx.AsyncClient() as client:
@@ -241,7 +238,7 @@ Return ONLY valid JSON:"""
 
         logger.info(f"Searching flights: {origin} -> {destination} on {departure_date}")
 
-        if not AMADEUS_API_KEY or not AMADEUS_API_SECRET:
+        if not os.getenv("AMADEUS_API_KEY") or not os.getenv("AMADEUS_API_SECRET"):
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Amadeus API credentials not configured. Please contact support."

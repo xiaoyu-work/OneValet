@@ -13,8 +13,6 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 
 logger = logging.getLogger(__name__)
 
-WEATHER_API_KEY = os.getenv("WEATHER_API_KEY", "")
-
 
 @valet(triggers=["weather", "forecast", "temperature"])
 class WeatherAgent(StandardAgent):
@@ -176,7 +174,7 @@ Return ONLY the JSON object, nothing else:"""
                 if days_from_today == 0:
                     url = "http://api.weatherapi.com/v1/current.json"
                     params = {
-                        "key": WEATHER_API_KEY,
+                        "key": os.getenv("WEATHER_API_KEY", ""),
                         "q": location,
                         "aqi": "no"
                     }
@@ -188,7 +186,7 @@ Return ONLY the JSON object, nothing else:"""
                 else:
                     url = "http://api.weatherapi.com/v1/forecast.json"
                     params = {
-                        "key": WEATHER_API_KEY,
+                        "key": os.getenv("WEATHER_API_KEY", ""),
                         "q": location,
                         "days": days_from_today + 1,
                         "aqi": "no"

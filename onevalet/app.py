@@ -228,8 +228,10 @@ class OneValet:
     _API_KEY_ENV_MAP = {
         "amadeus": {"api_key": "AMADEUS_API_KEY", "api_secret": "AMADEUS_API_SECRET"},
         "weather_api": {"api_key": "WEATHER_API_KEY"},
-        "google_maps": {"api_key": "GOOGLE_MAPS_API_KEY"},
-        "google_search": {"api_key": "GOOGLE_SEARCH_API_KEY", "search_engine_id": "GOOGLE_SEARCH_ENGINE_ID"},
+        "google_api": {
+            "api_key": ["GOOGLE_MAPS_API_KEY", "GOOGLE_SEARCH_API_KEY"],
+            "search_engine_id": "GOOGLE_SEARCH_ENGINE_ID",
+        },
         "google_oauth_app": {"client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET"},
         "microsoft_oauth_app": {
             "client_id": "MICROSOFT_CLIENT_ID",
@@ -245,10 +247,14 @@ class OneValet:
                 entries = await self._credential_store.list("default", service=service)
                 if entries:
                     creds = entries[0].get("credentials", {})
-                    for json_key, env_var in mapping.items():
+                    for json_key, env_vars in mapping.items():
                         val = creds.get(json_key, "")
                         if val:
-                            os.environ[env_var] = val
+                            if isinstance(env_vars, list):
+                                for env_var in env_vars:
+                                    os.environ[env_var] = val
+                            else:
+                                os.environ[env_vars] = val
             except Exception as e:
                 logger.debug(f"No {service} credentials found: {e}")
 

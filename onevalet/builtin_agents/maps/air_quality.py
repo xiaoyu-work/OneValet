@@ -10,8 +10,6 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
-
 
 @valet(triggers=["air quality", "aqi", "pollution"])
 class AirQualityAgent(StandardAgent):
@@ -77,7 +75,7 @@ Location:"""
             url = "https://maps.googleapis.com/maps/api/geocode/json"
             params = {
                 "address": location,
-                "key": GOOGLE_MAPS_API_KEY
+                "key": os.getenv("GOOGLE_MAPS_API_KEY", "")
             }
 
             async with httpx.AsyncClient() as client:
@@ -108,7 +106,7 @@ Location:"""
 
         logger.info(f"Getting air quality for {location}")
 
-        if not GOOGLE_MAPS_API_KEY:
+        if not os.getenv("GOOGLE_MAPS_API_KEY"):
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Google Maps API key not configured. Please contact support."
@@ -141,7 +139,7 @@ Location:"""
                 "languageCode": "en"
             }
 
-            params = {"key": GOOGLE_MAPS_API_KEY}
+            params = {"key": os.getenv("GOOGLE_MAPS_API_KEY", "")}
 
             async with httpx.AsyncClient() as client:
                 response = await client.post(

@@ -5,11 +5,17 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Settings - OneValet</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .nav-link { transition: all 0.15s; }
+    .nav-link.active { color: #2563eb; background: #eff6ff; font-weight: 500; }
+    #settings-content::-webkit-scrollbar { width: 6px; }
+    #settings-content::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+  </style>
 </head>
-<body class="h-full bg-gray-50">
+<body class="h-full bg-gray-50 flex flex-col overflow-hidden">
 
   <!-- Header -->
-  <header class="bg-gray-900 text-white px-6 py-3.5 flex items-center gap-4 sticky top-0 z-10">
+  <header class="bg-gray-900 text-white px-6 py-3.5 flex items-center gap-4 shrink-0">
     <a href="/" class="p-1.5 rounded-lg hover:bg-gray-800 transition-colors" title="Back to chat">
       <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18"/>
@@ -21,157 +27,178 @@
     </div>
   </header>
 
-  <main class="max-w-3xl mx-auto px-4 py-8 space-y-8">
+  <div class="flex flex-1 overflow-hidden">
+    <!-- Sidebar Nav -->
+    <nav id="settings-nav" class="w-52 shrink-0 bg-white border-r border-gray-200 py-4 px-3 space-y-0.5 overflow-y-auto">
+      <a href="#sec-config" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Configuration</a>
+      <a href="#sec-oauth-apps" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">OAuth Apps</a>
+      <a href="#sec-google" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Google</a>
+      <a href="#sec-microsoft" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Microsoft</a>
+      <a href="#sec-travel" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Travel</a>
+      <a href="#sec-google-api" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Google API</a>
+    </nav>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Configuration -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Configuration</h2>
-        <p class="text-xs text-gray-500 mt-0.5">LLM provider, model, and database connection</p>
-      </div>
-      <div class="px-6 py-5 space-y-4">
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>
-            <select id="cfg-provider" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="azure">Azure OpenAI</option>
-              <option value="dashscope">DashScope (Qwen)</option>
-              <option value="gemini">Gemini</option>
-              <option value="ollama">Ollama</option>
-            </select>
+    <!-- Content -->
+    <main id="settings-content" class="flex-1 overflow-y-auto">
+      <div class="max-w-3xl mx-auto px-6 py-8 space-y-8">
+
+        <!-- Configuration -->
+        <section id="sec-config" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Configuration</h2>
+            <p class="text-xs text-gray-500 mt-0.5">LLM provider, model, and database connection</p>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">Model</label>
-            <input id="cfg-model" type="text" placeholder="gpt-4o" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <div class="px-6 py-5 space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>
+                <select id="cfg-provider" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="openai">OpenAI</option>
+                  <option value="anthropic">Anthropic</option>
+                  <option value="azure">Azure OpenAI</option>
+                  <option value="dashscope">DashScope (Qwen)</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Model</label>
+                <input id="cfg-model" type="text" placeholder="gpt-4o" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">
+                  API Key <span id="cfg-apikey-status" class="text-xs text-gray-400 ml-1"></span>
+                </label>
+                <input id="cfg-apikey" type="password" placeholder="sk-..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <p class="text-xs text-gray-400 mt-1">Leave blank to keep existing key</p>
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Base URL <span class="text-gray-400">(optional)</span></label>
+                <input id="cfg-baseurl" type="text" placeholder="https://your-resource.openai.azure.com/" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">Database URL</label>
+              <input id="cfg-database" type="text" placeholder="postgresql://user:pass@localhost:5432/onevalet" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">System Prompt <span class="text-gray-400">(optional)</span></label>
+              <textarea id="cfg-sysprompt" rows="2" placeholder="You are a helpful personal assistant..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+            </div>
+            <div class="flex items-center gap-3">
+              <button id="cfg-save-btn" onclick="saveConfig()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
+                Save &amp; Initialize
+              </button>
+              <span id="cfg-status" class="text-sm hidden"></span>
+            </div>
           </div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">
-              API Key <span id="cfg-apikey-status" class="text-xs text-gray-400 ml-1"></span>
-            </label>
-            <input id="cfg-apikey" type="password" placeholder="sk-..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <p class="text-xs text-gray-400 mt-1">Leave blank to keep existing key</p>
+        </section>
+
+        <!-- OAuth Apps -->
+        <section id="sec-oauth-apps" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">OAuth Apps</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+              Required for Google &amp; Microsoft sign-in.
+              Create apps in
+              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-blue-600 hover:underline">Google Cloud Console</a> and
+              <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps" target="_blank" class="text-blue-600 hover:underline">Azure App Registrations</a>.
+            </p>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">Base URL <span class="text-gray-400">(optional)</span></label>
-            <input id="cfg-baseurl" type="text" placeholder="https://your-resource.openai.azure.com/" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+          <div class="divide-y divide-gray-100">
+            <div class="px-6 py-5" id="svc-google_oauth_app"></div>
+            <div class="px-6 py-5" id="svc-microsoft_oauth_app"></div>
           </div>
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 mb-1">Database URL</label>
-          <input id="cfg-database" type="text" placeholder="postgresql://user:pass@localhost:5432/onevalet" class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        </div>
-        <div>
-          <label class="block text-xs font-medium text-gray-500 mb-1">System Prompt <span class="text-gray-400">(optional)</span></label>
-          <textarea id="cfg-sysprompt" rows="2" placeholder="You are a helpful personal assistant..." class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
-        </div>
-        <div class="flex items-center gap-3">
-          <button id="cfg-save-btn" onclick="saveConfig()" class="bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
-            Save &amp; Initialize
-          </button>
-          <span id="cfg-status" class="text-sm hidden"></span>
-        </div>
-      </div>
-    </section>
+        </section>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- OAuth Apps -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">OAuth Apps</h2>
-        <p class="text-xs text-gray-500 mt-0.5">
-          Required for Google &amp; Microsoft sign-in.
-          Create apps in
-          <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="text-blue-600 hover:underline">Google Cloud Console</a> and
-          <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps" target="_blank" class="text-blue-600 hover:underline">Azure App Registrations</a>.
-        </p>
-      </div>
-      <div class="divide-y divide-gray-100">
-        <div class="px-6 py-5" id="svc-google_oauth_app"></div>
-        <div class="px-6 py-5" id="svc-microsoft_oauth_app"></div>
-      </div>
-    </section>
+        <!-- Google -->
+        <section id="sec-google" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Google</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Gmail &amp; Google Calendar — one authorization covers both</p>
+          </div>
+          <div class="px-6 py-5" id="svc-google"></div>
+        </section>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Google (Email & Calendar) -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Google</h2>
-        <p class="text-xs text-gray-500 mt-0.5">Gmail &amp; Google Calendar — one authorization covers both</p>
-      </div>
-      <div class="px-6 py-5" id="svc-google"></div>
-    </section>
+        <!-- Microsoft -->
+        <section id="sec-microsoft" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Microsoft</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Outlook Mail &amp; Calendar — one authorization covers both</p>
+          </div>
+          <div class="px-6 py-5" id="svc-microsoft"></div>
+        </section>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Microsoft (Email & Calendar) -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Microsoft</h2>
-        <p class="text-xs text-gray-500 mt-0.5">Outlook Mail &amp; Calendar — one authorization covers both</p>
-      </div>
-      <div class="px-6 py-5" id="svc-microsoft"></div>
-    </section>
+        <!-- Travel -->
+        <section id="sec-travel" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Travel</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Flight search, hotel search, weather forecasts</p>
+          </div>
+          <div class="divide-y divide-gray-100">
+            <div class="px-6 py-5" id="svc-amadeus"></div>
+            <div class="px-6 py-5" id="svc-weather_api"></div>
+          </div>
+        </section>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Travel -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Travel</h2>
-        <p class="text-xs text-gray-500 mt-0.5">Flight search, hotel search, weather forecasts</p>
-      </div>
-      <div class="divide-y divide-gray-100">
-        <div class="px-6 py-5" id="svc-amadeus"></div>
-        <div class="px-6 py-5" id="svc-weather_api"></div>
-      </div>
-    </section>
+        <!-- Google API -->
+        <section id="sec-google-api" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Google API</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Maps, Places, Directions, Air Quality, Web Search — one API key for all</p>
+          </div>
+          <div class="px-6 py-5" id="svc-google_api"></div>
+        </section>
 
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Maps -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Maps</h2>
-        <p class="text-xs text-gray-500 mt-0.5">Place search, directions, air quality</p>
+        <div class="h-8"></div>
       </div>
-      <div class="px-6 py-5" id="svc-google_maps"></div>
-    </section>
-
-    <!-- ══════════════════════════════════════════ -->
-    <!-- Search -->
-    <!-- ══════════════════════════════════════════ -->
-    <section class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-      <div class="px-6 py-4 border-b border-gray-100">
-        <h2 class="text-base font-semibold text-gray-900">Search</h2>
-        <p class="text-xs text-gray-500 mt-0.5">Web search via Google Custom Search</p>
-      </div>
-      <div class="px-6 py-5" id="svc-google_search"></div>
-    </section>
-
-    <div class="h-8"></div>
-  </main>
+    </main>
+  </div>
 
   <!-- Toast -->
   <div id="toast-container" class="fixed bottom-6 right-6 z-50 space-y-2"></div>
 
 <script>
 // ===============================================
+// Sidebar Navigation — scroll highlight
+// ===============================================
+
+const settingsContent = document.getElementById('settings-content');
+const navLinks = document.querySelectorAll('#settings-nav .nav-link');
+const sections = [];
+
+navLinks.forEach(link => {
+  const id = link.getAttribute('href').slice(1);
+  const sec = document.getElementById(id);
+  if (sec) sections.push({ id, el: sec, link });
+
+  link.addEventListener('click', (e) => {
+    e.preventDefault();
+    sec?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+function updateActiveNav() {
+  const scrollTop = settingsContent.scrollTop;
+  let current = sections[0];
+  for (const s of sections) {
+    if (s.el.offsetTop - 80 <= scrollTop) current = s;
+  }
+  navLinks.forEach(l => l.classList.remove('active'));
+  if (current) current.link.classList.add('active');
+}
+
+settingsContent.addEventListener('scroll', updateActiveNav);
+
+// ===============================================
 // Service Definitions
 // ===============================================
 
 const SERVICES = {
-  // Combined OAuth services (one button per provider)
   google:    { label: 'Gmail & Google Calendar',       type: 'oauth_combined', provider: 'google',    services: ['gmail', 'google_calendar'] },
   microsoft: { label: 'Outlook Mail & Calendar', type: 'oauth_combined', provider: 'microsoft', services: ['outlook', 'outlook_calendar'] },
-  // API key services
   amadeus:          { label: 'Amadeus (Flights & Hotels)', type: 'apikey', fields: [
     { key: 'api_key', label: 'API Key', placeholder: 'Your Amadeus API key' },
     { key: 'api_secret', label: 'API Secret', placeholder: 'Your Amadeus API secret' },
@@ -179,14 +206,10 @@ const SERVICES = {
   weather_api:      { label: 'Weather API', type: 'apikey', fields: [
     { key: 'api_key', label: 'API Key', placeholder: 'Your WeatherAPI.com key' },
   ]},
-  google_maps:      { label: 'Google Maps', type: 'apikey', fields: [
-    { key: 'api_key', label: 'API Key', placeholder: 'Your Google Maps API key' },
+  google_api:       { label: 'Google API', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Google Cloud API key' },
+    { key: 'search_engine_id', label: 'Search Engine ID', placeholder: 'Custom Search Engine ID (optional)' },
   ]},
-  google_search:    { label: 'Google Search', type: 'apikey', fields: [
-    { key: 'api_key', label: 'API Key', placeholder: 'Your Google Search API key' },
-    { key: 'search_engine_id', label: 'Search Engine ID', placeholder: 'Your Custom Search Engine ID' },
-  ]},
-  // OAuth app credentials
   google_oauth_app: { label: 'Google OAuth App', type: 'apikey', fields: [
     { key: 'client_id', label: 'Client ID', placeholder: 'Your Google OAuth Client ID' },
     { key: 'client_secret', label: 'Client Secret', placeholder: 'Your Google OAuth Client Secret' },
@@ -322,7 +345,6 @@ function renderAllServices() {
 // ===============================================
 
 function renderOAuthCombinedService(container, key, def) {
-  // Check if any of the sub-services are connected
   const cred = def.services.map(s => getCredential(s)).find(c => c);
   const connected = !!cred;
   const provider = def.provider;
@@ -377,7 +399,6 @@ function renderOAuthCombinedService(container, key, def) {
       `;
     }
 
-    // Collapsible manual paste fallback
     const firstService = def.services[0];
     html += `
       <details class="border border-gray-200 rounded-lg">
@@ -418,7 +439,7 @@ function renderApiKeyService(container, service, def) {
   const connected = !!cred;
 
   let html = `
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <span class="text-sm font-medium text-gray-900">${def.label}</span>
         ${connected
@@ -426,32 +447,56 @@ function renderApiKeyService(container, service, def) {
           : `<span class="text-xs font-medium px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">Not configured</span>`
         }
       </div>
-      ${connected ? `
-        <button onclick="deleteCredential('${service}', 'primary')" class="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Remove</button>
-      ` : ''}
+      <div class="flex items-center gap-3">
+        ${connected ? `
+          <button onclick="deleteCredential('${service}', 'primary')" class="text-xs text-red-500 hover:text-red-700 font-medium transition-colors">Remove</button>
+        ` : ''}
+      </div>
     </div>
-    <div class="space-y-3">
-      <div class="grid grid-cols-${def.fields.length} gap-3">
   `;
 
-  for (const field of def.fields) {
+  if (connected) {
     html += `
-      <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">${field.label}</label>
-        <input id="${service}-${field.key}" type="password" placeholder="${field.placeholder}"
-          class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
-        ${connected ? `<p class="text-xs text-green-600 mt-1">Set (hidden)</p>` : ''}
+      <details class="mt-3 border border-gray-200 rounded-lg">
+        <summary class="px-3 py-2 text-xs text-gray-500 cursor-pointer hover:text-gray-700">Update credentials</summary>
+        <div class="px-3 pb-3 pt-1 space-y-3">
+          <div class="grid grid-cols-${def.fields.length} gap-3">
+    `;
+    for (const field of def.fields) {
+      html += `
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">${field.label}</label>
+          <input id="${service}-${field.key}" type="password" placeholder="${field.placeholder}"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+      `;
+    }
+    html += `
+          </div>
+          <button onclick="saveApiKeyCredential('${service}')" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Update</button>
+        </div>
+      </details>
+    `;
+  } else {
+    html += `
+      <div class="mt-3 space-y-3">
+        <div class="grid grid-cols-${def.fields.length} gap-3">
+    `;
+    for (const field of def.fields) {
+      html += `
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">${field.label}</label>
+          <input id="${service}-${field.key}" type="password" placeholder="${field.placeholder}"
+            class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+      `;
+    }
+    html += `
+        </div>
+        <button onclick="saveApiKeyCredential('${service}')" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">Save</button>
       </div>
     `;
   }
-
-  html += `
-      </div>
-      <button onclick="saveApiKeyCredential('${service}')" class="bg-gray-900 hover:bg-gray-800 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-        ${connected ? 'Update' : 'Save'}
-      </button>
-    </div>
-  `;
 
   container.innerHTML = html;
 }
@@ -552,11 +597,9 @@ async function startOAuthFlow(provider) {
     }
     const data = await resp.json();
 
-    // Open authorization URL in a popup
     const popup = window.open(data.authorize_url, 'oauth_popup',
       'width=600,height=700,scrollbars=yes,resizable=yes');
 
-    // Listen for completion message from the callback page
     const messageHandler = (event) => {
       if (event.data === 'oauth_complete') {
         window.removeEventListener('message', messageHandler);
@@ -566,7 +609,6 @@ async function startOAuthFlow(provider) {
     };
     window.addEventListener('message', messageHandler);
 
-    // Fallback: poll for popup close
     const pollTimer = setInterval(() => {
       if (popup && popup.closed) {
         clearInterval(pollTimer);
@@ -655,6 +697,7 @@ function showToast(message, type = 'success') {
 // ===============================================
 loadCurrentConfig();
 renderAllServices();
+updateActiveNav();
 </script>
 </body>
 </html>

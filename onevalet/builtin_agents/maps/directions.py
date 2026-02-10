@@ -11,8 +11,6 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "")
-
 
 @valet(triggers=["directions", "how to get", "navigate", "route"])
 class DirectionsAgent(StandardAgent):
@@ -156,7 +154,7 @@ Return ONLY valid JSON:"""
 
         logger.info(f"Getting directions from {origin} to {destination}")
 
-        if not GOOGLE_MAPS_API_KEY:
+        if not os.getenv("GOOGLE_MAPS_API_KEY"):
             return self.make_result(
                 status=AgentStatus.COMPLETED,
                 raw_message="Google Maps API key not configured. Please contact support."
@@ -169,7 +167,7 @@ Return ONLY valid JSON:"""
                 "destination": destination,
                 "mode": "driving",
                 "alternatives": "false",
-                "key": GOOGLE_MAPS_API_KEY
+                "key": os.getenv("GOOGLE_MAPS_API_KEY", "")
             }
 
             async with httpx.AsyncClient() as client:
