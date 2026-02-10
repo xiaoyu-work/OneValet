@@ -1,36 +1,34 @@
 # OneValet
 
-A zero-code AI personal assistant with built-in agents, ReAct orchestration, and multi-tenant support.
+A self-hosted AI personal assistant. Manage emails, calendar, and more through a chat interface.
 
 ## Quick Start
+
+### 1. Install
 
 ```bash
 git clone https://github.com/xiaoyu-work/onevalet.git
 cd onevalet
 uv sync --extra openai        # or: --extra anthropic, --all-extras
-cp .env.example .env          # configure API keys
-cp config.yaml.example config.yaml
 ```
+
+### 2. Start
 
 ```bash
-# Start
 python -m onevalet
-
-# Chat
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is the weather in Tokyo?"}'
-
-# Stream (SSE)
-curl -X POST http://localhost:8000/stream \
-  -H "Content-Type: application/json" \
-  -d '{"message": "What is the weather in Tokyo?"}'
-
-# Multi-tenant
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id": "user_123", "message": "What is on my calendar today?"}'
 ```
+
+Open **http://localhost:8000** in your browser.
+
+### 3. Configure
+
+Go to **http://localhost:8000/settings** and set up:
+
+1. **LLM Provider** - Choose your AI provider (OpenAI, Azure, Anthropic, etc.), enter API key, model name, and database URL
+2. **OAuth Apps** *(optional)* - Add Google/Microsoft OAuth app credentials to enable one-click account connection
+3. **Connect Accounts** *(optional)* - Connect Gmail, Outlook, Google Calendar, or Outlook Calendar
+
+That's it. Go back to the chat and start talking.
 
 ## API
 
@@ -40,46 +38,42 @@ curl -X POST http://localhost:8000/chat \
 | `/stream` | POST | Send message, stream response (SSE) |
 | `/health` | GET | Health check |
 
-**Request body:**
+```bash
+# Chat
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Do I have any unread emails?"}'
 
-```json
-{
-  "message": "...",
-  "tenant_id": "...",   // optional, default "default"
-  "metadata": {}        // optional
-}
+# Stream (SSE)
+curl -X POST http://localhost:8000/stream \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Do I have any unread emails?"}'
+
+# Multi-tenant
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"tenant_id": "user_123", "message": "What is on my calendar today?"}'
 ```
 
 ## Config
 
+`config.yaml` is created automatically via the settings page. You can also create it manually:
+
+```yaml
+provider: openai          # openai / anthropic / azure / dashscope / gemini / ollama
+model: gpt-4o
+api_key: sk-...           # or omit to use provider's default env var
+database: postgresql://user:pass@host:5432/dbname
+```
+
 | Field | Required | Description |
 |-------|----------|-------------|
-| `provider` | Yes | `openai` / `anthropic` / `azure` / `dashscope` / `gemini` / `ollama` |
-| `model` | Yes | Model name, e.g. `gpt-4o`, `claude-sonnet-4-5-20250929` |
-| `database` | Yes | PostgreSQL DSN, supports `${ENV_VAR}` |
-| `api_key` | No | If omitted, reads from provider's default env var (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) |
-| `base_url` | No | Custom endpoint (required for Azure OpenAI) |
+| `provider` | Yes | LLM provider |
+| `model` | Yes | Model name |
+| `database` | Yes | PostgreSQL connection URL |
+| `api_key` | No | API key (defaults to provider env var) |
+| `base_url` | No | Custom endpoint (required for Azure) |
 | `system_prompt` | No | System prompt / personality |
-
-See [docs/configuration.md](docs/configuration.md) for full configuration reference.
-
-## Custom Agents
-
-```python
-from onevalet import valet, StandardAgent, InputField, AgentStatus
-
-@valet(triggers=["send email"])
-class SendEmailAgent(StandardAgent):
-    """Send emails to users"""
-
-    recipient = InputField("Who should I send to?")
-
-    async def on_running(self, msg):
-        return self.make_result(
-            status=AgentStatus.COMPLETED,
-            raw_message=f"Email sent to {self.recipient}!",
-        )
-```
 
 ## License
 
