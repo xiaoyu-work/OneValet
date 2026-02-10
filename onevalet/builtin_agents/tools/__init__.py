@@ -6,6 +6,7 @@ Provides:
 - important_dates: CRUD for birthdays, anniversaries, etc.
 - user_tools: User profile and connected accounts lookup
 - notion: Search, read pages, and query databases in Notion
+- google_workspace: Search Drive, read Docs, and read Sheets
 
 All tools use the standard onevalet tool pattern and CredentialStore
 for credential access.
@@ -20,6 +21,7 @@ from .google_search import register_google_search_tools
 from .important_dates import register_important_dates_tools
 from .user_tools import register_user_tools
 from .notion import register_notion_tools
+from .google_workspace import register_google_workspace_tools
 
 
 def register_all_builtin_tools() -> None:
@@ -28,6 +30,7 @@ def register_all_builtin_tools() -> None:
     register_important_dates_tools()
     register_user_tools()
     register_notion_tools()
+    register_google_workspace_tools()
 
 
 __all__ = [
@@ -36,4 +39,5 @@ __all__ = [
     "register_important_dates_tools",
     "register_user_tools",
     "register_notion_tools",
+    "register_google_workspace_tools",
 ]

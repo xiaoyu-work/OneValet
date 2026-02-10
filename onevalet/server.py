@@ -385,7 +385,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         }
 
         # Save to both gmail and google_calendar (scopes cover both)
-        for svc in ("gmail", "google_calendar", "google_tasks"):
+        for svc in ("gmail", "google_calendar", "google_tasks", "google_drive"):
             await app._credential_store.save(
                 tenant_id=_TENANT_ID,
                 service=svc,
@@ -396,7 +396,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(
             f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
             f"<h2>Connected!</h2>"
-            f"<p>Gmail, Google Calendar &amp; Google Tasks connected as <b>{email}</b></p>"
+            f"<p>Gmail, Google Calendar, Tasks, Drive, Docs &amp; Sheets connected as <b>{email}</b></p>"
             f"<script>"
             f"window.opener&&window.opener.postMessage('oauth_complete','*');"
             f"setTimeout(()=>window.close(),1500);"

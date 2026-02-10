@@ -10,5 +10,6 @@ Subpackages:
 - shipment: Package tracking and management
 - digest: Important date digests
 - notion: Notion search, create/update pages, query databases
+- google_workspace: Drive search, Docs read/create, Sheets read/write
 - todo: Todo query, create, update, delete across Todoist/Google Tasks/Microsoft To Do
 """
