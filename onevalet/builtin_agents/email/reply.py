@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["reply to email", "respond to email", "reply email"])
+@valet()
 class ReplyEmailAgent(StandardAgent):
     """Reply to email agent with LLM-composed reply content"""
 

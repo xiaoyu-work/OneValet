@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["create event", "add event", "schedule event", "new event", "calendar event"])
+@valet()
 class CreateEventAgent(StandardAgent):
     """Create calendar event agent with field collection and approval"""
 

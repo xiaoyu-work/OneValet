@@ -171,25 +171,6 @@ class AgentRegistry:
 
     # ===== Routing =====
 
-    def find_agent_by_trigger(self, message: str) -> Optional[str]:
-        """
-        Find agent that matches a trigger
-
-        Args:
-            message: User message
-
-        Returns:
-            Agent name or None
-        """
-        message_lower = message.lower()
-
-        for name, metadata in self._get_agent_registry().items():
-            for trigger in metadata.triggers:
-                if trigger.lower() in message_lower:
-                    return name
-
-        return None
-
     def get_all_agent_tool_schemas(self) -> List[Dict[str, Any]]:
         """Return enhanced tool schemas for all agents with expose_as_tool=True."""
         from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema

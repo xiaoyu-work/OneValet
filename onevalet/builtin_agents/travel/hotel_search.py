@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["hotel", "accommodation", "stay", "lodging"])
+@valet()
 class HotelSearchAgent(StandardAgent):
     """Hotel search agent using Amadeus Hotel Search API"""
 

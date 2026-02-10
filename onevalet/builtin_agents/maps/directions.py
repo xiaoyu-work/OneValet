@@ -12,7 +12,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["directions", "how to get", "navigate", "route"])
+@valet()
 class DirectionsAgent(StandardAgent):
     """Directions agent using Google Directions API"""
 

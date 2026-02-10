@@ -1458,7 +1458,6 @@ class Orchestrator:
             result.append({
                 "name": name,
                 "description": metadata.description,
-                "triggers": metadata.triggers,
                 "capabilities": getattr(metadata, "capabilities", []),
             })
         return result
@@ -1485,7 +1484,6 @@ class Orchestrator:
         return {
             "name": config.name,
             "description": config.description,
-            "triggers": config.triggers,
             "capabilities": getattr(config, "capabilities", []),
             "inputs": [{"name": i.name, "type": i.type} for i in config.inputs],
             "outputs": [{"name": o.name, "type": o.type} for o in config.outputs],

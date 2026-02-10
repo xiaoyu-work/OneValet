@@ -16,7 +16,7 @@ Key Features:
 Quick Start (Recommended):
     from onevalet import valet, StandardAgent, InputField, OutputField, AgentStatus
 
-    @valet(triggers=["send email"])
+    @valet()
     class SendEmailAgent(StandardAgent):
         '''Send emails to users'''
 

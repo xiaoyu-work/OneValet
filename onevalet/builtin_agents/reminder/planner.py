@@ -23,7 +23,7 @@ from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["automate", "automation", "every day", "every week", "when I receive", "schedule task"])
+@valet()
 class PlannerAgent(StandardAgent):
     """Automation planner agent - creates structured Task definitions for TriggerEngine"""
 

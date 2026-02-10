@@ -12,7 +12,7 @@ from .client import NotionClient
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["create note", "new note", "write note", "create notion page", "add note", "new page"])
+@valet()
 class NotionCreatePageAgent(StandardAgent):
     """Create new Notion pages with content"""
 

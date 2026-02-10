@@ -11,7 +11,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["air quality", "aqi", "pollution"])
+@valet()
 class AirQualityAgent(StandardAgent):
     """Air quality query agent using Google Air Quality API"""
 

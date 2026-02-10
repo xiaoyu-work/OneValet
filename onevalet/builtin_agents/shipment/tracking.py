@@ -25,7 +25,7 @@ from .shipment_repo import ShipmentRepository
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["track package", "track shipment", "where is my package", "shipment", "delivery"])
+@valet()
 class ShipmentAgent(StandardAgent):
     """Shipment tracking and management agent"""
 

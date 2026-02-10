@@ -12,7 +12,7 @@ from onevalet import valet, StandardAgent, InputField
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["check email importance", "is email important"])
+@valet()
 class EmailImportanceAgent(StandardAgent):
     """Determine email importance using LLM with system and user rules"""
 

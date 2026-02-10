@@ -7,7 +7,7 @@ input/output values on agent instances.
 Usage:
     from onevalet import InputField, OutputField, valet, StandardAgent
 
-    @valet(triggers=["send email"])
+    @valet()
     class SendEmailAgent(StandardAgent):
         '''Send emails to users'''
 

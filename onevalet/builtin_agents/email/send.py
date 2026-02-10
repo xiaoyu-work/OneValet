@@ -19,7 +19,7 @@ def validate_email(email: str) -> str | None:
     return "Invalid email format"
 
 
-@valet(triggers=["send email", "compose email", "write email"])
+@valet()
 class SendEmailAgent(StandardAgent):
     """Send email agent with field collection and approval"""
 

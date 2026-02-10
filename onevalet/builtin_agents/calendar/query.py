@@ -19,7 +19,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["check calendar", "my calendar", "what's on my calendar", "calendar", "upcoming events"])
+@valet()
 class CalendarAgent(StandardAgent):
     """Calendar query agent - simple single-step agent"""
 

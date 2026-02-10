@@ -21,7 +21,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["check email", "read email", "search email", "any email", "new email"])
+@valet()
 class ReadEmailAgent(StandardAgent):
     """Email search and query agent"""
 

@@ -14,7 +14,7 @@ from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["email summary", "summarize emails", "email digest"])
+@valet()
 class EmailSummaryAgent(StandardAgent):
     """Email summary agent for morning digest - scans unread emails and provides brief summary"""
 

@@ -14,7 +14,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["update event", "change event", "reschedule event", "move event", "modify event"])
+@valet()
 class UpdateEventAgent(StandardAgent):
     """Update calendar event agent with field collection and approval"""
 

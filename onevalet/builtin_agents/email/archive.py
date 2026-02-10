@@ -19,7 +19,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["archive email", "file email"])
+@valet()
 class ArchiveEmailAgent(StandardAgent):
     """Archive email agent with search and approval"""
 

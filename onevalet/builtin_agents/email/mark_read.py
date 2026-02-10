@@ -14,7 +14,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["mark as read", "mark read", "mark email read"])
+@valet()
 class MarkReadEmailAgent(StandardAgent):
     """Mark emails as read agent"""
 

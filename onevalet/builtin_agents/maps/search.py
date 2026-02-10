@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["find", "search", "where", "near", "nearby", "restaurant", "store", "shop"])
+@valet()
 class MapSearchAgent(StandardAgent):
     """Map search agent using Google Places API"""
 

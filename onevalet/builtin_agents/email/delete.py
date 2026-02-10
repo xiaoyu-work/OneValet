@@ -19,7 +19,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["delete email", "remove email", "trash email"])
+@valet()
 class DeleteEmailAgent(StandardAgent):
     """Delete email agent with search and approval"""
 

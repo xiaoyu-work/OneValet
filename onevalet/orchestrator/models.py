@@ -50,8 +50,6 @@ def callback_handler(name: str):
 class RoutingReason(str, Enum):
     """Reason codes for routing decisions."""
     ACTIVE_AGENT_FOUND = "active_agent_found"
-    WORKFLOW_TRIGGER_MATCHED = "workflow_trigger_matched"
-    AGENT_TRIGGER_MATCHED = "agent_trigger_matched"
     LLM_ROUTING = "llm_routing"
     DEFAULT_FALLBACK = "default_fallback"
     NO_ROUTER = "no_router"

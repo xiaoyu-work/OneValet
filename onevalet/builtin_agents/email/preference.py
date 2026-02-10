@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["email preferences", "email rules", "email notification settings"])
+@valet()
 class EmailPreferenceAgent(StandardAgent):
     """Manage user's email importance rules and notification preferences"""
 

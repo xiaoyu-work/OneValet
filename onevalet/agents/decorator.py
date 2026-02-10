@@ -69,7 +69,7 @@ class AgentMetadata:
     - Class docstring -> description
     - InputField class variables -> inputs
     - OutputField class variables -> outputs
-    - @valet parameters -> triggers, llm, capabilities, enable_memory, extra
+    - @valet parameters -> llm, capabilities, enable_memory, extra
     """
     name: str
     agent_class: Type
@@ -77,9 +77,6 @@ class AgentMetadata:
 
     # LLM provider name
     llm: Optional[str] = None
-
-    # Routing triggers (keywords/patterns that route to this agent)
-    triggers: List[str] = field(default_factory=list)
 
     # Capabilities - what this agent can do (for routing decisions)
     capabilities: List[str] = field(default_factory=list)
@@ -149,7 +146,6 @@ def _extract_fields(cls: Type) -> tuple[List[InputSpec], List[OutputSpec]]:
 def valet(
     _cls: Optional[Type] = None,
     *,
-    triggers: Optional[List[str]] = None,
     llm: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
     enable_memory: bool = False,
@@ -167,7 +163,6 @@ def valet(
         class MyAgent(StandardAgent): ...
 
     Args:
-        triggers: Keywords/patterns that route messages to this agent (optional)
         llm: LLM provider name (optional, uses default if not specified)
         capabilities: What this agent can do (for routing decisions)
         enable_memory: If True, orchestrator will auto recall/store memories
@@ -195,7 +190,6 @@ def valet(
             agent_class=cls,
             description=description,
             llm=llm,
-            triggers=triggers or [],
             capabilities=capabilities or [],
             inputs=inputs,
             outputs=outputs,

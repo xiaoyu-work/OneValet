@@ -13,7 +13,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["delete event", "remove event", "cancel event"])
+@valet()
 class DeleteEventAgent(StandardAgent):
     """Delete calendar event agent with search and approval"""
 

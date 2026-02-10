@@ -24,7 +24,7 @@ from .task_repo import TaskRepository
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["my reminders", "show reminders", "list reminders", "manage reminders", "change reminder", "delete reminder", "pause reminder"])
+@valet()
 class TaskManagementAgent(StandardAgent):
     """Manages user's scheduled reminders and automations - supports list, show, update, pause, resume, delete"""
 

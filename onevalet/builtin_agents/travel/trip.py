@@ -18,7 +18,7 @@ from .trip_repo import TripRepository
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["trip", "flight", "travel", "hotel booking"])
+@valet()
 class TripAgent(StandardAgent):
     """Trip management agent with extraction capabilities"""
 

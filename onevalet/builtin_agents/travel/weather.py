@@ -14,7 +14,7 @@ from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult,
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["weather", "forecast", "temperature"])
+@valet()
 class WeatherAgent(StandardAgent):
     """Weather query agent with forecast support (up to 14 days)"""
 

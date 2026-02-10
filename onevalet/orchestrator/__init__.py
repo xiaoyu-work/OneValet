@@ -68,18 +68,6 @@ from .react_config import (
 
 from .orchestrator import Orchestrator
 
-# Backward-compatible lazy import for MessageRouter / TriggerMatcher.
-# These are deprecated; the ReAct loop replaces the router-based flow.
-# Users can still do `from onevalet.orchestrator import MessageRouter`.
-
-
-def __getattr__(name: str):
-    if name in ("MessageRouter", "TriggerMatcher"):
-        from . import router as _router_module  # noqa: F811
-        return getattr(_router_module, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
 __all__ = [
     # Models
     "RoutingAction",
@@ -102,7 +90,4 @@ __all__ = [
     "TokenUsage",
     # Main
     "Orchestrator",
-    # Deprecated (still importable via __getattr__)
-    "MessageRouter",
-    "TriggerMatcher",
 ]

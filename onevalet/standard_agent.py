@@ -11,7 +11,7 @@ This is the core agent class that provides:
 Example with InputField/OutputField (recommended):
     from onevalet import valet, StandardAgent, InputField, OutputField, AgentStatus
 
-    @valet(triggers=["send email"])
+    @valet()
     class SendEmailAgent(StandardAgent):
         '''Send emails to users'''
 
@@ -173,7 +173,7 @@ class StandardAgent(BaseAgent):
 
     Use InputField and OutputField class variables to define inputs/outputs:
 
-        @valet(triggers=["send email"])
+        @valet()
         class SendEmailAgent(StandardAgent):
             '''Send emails'''
 

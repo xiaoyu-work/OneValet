@@ -20,7 +20,7 @@ from onevalet import valet, StandardAgent, AgentStatus, AgentResult, Message
 logger = logging.getLogger(__name__)
 
 
-@valet(triggers=["remind me", "set reminder", "reminder", "remind"])
+@valet()
 class ReminderAgent(StandardAgent):
     """Creates new reminders using TriggerEngine - simple single-step agent (no approval needed)"""
 
