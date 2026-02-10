@@ -142,13 +142,13 @@ Return ONLY valid JSON:"""
 
         if not destination:
             return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
+                status=AgentStatus.COMPLETED,
                 raw_message="I need a destination. Where do you want to go?"
             )
 
         if not origin:
             return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
+                status=AgentStatus.COMPLETED,
                 raw_message="I need a starting point. Where are you starting from?"
             )
 

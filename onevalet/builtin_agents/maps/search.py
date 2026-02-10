@@ -181,7 +181,7 @@ Return JSON:
             formatted = await self._format_results(places, query)
 
             return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
+                status=AgentStatus.COMPLETED,
                 raw_message=formatted
             )
 
