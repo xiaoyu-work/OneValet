@@ -1,22 +1,11 @@
 """
 Travel agents for OneValet
 
-Provides agents for flight search, hotel search, weather, trip management,
-and flight weather digest.
+Provides a unified TravelAgent for flights, hotels, and weather searches.
 """
 
-from .flight_search import FlightSearchAgent
-from .hotel_search import HotelSearchAgent
-from .weather import WeatherAgent
-from .trip import TripAgent, extract_trip_from_email, extract_trip_from_calendar
-from .flight_weather import FlightWeatherAgent
+from .agent import TravelAgent
 
 __all__ = [
-    "FlightSearchAgent",
-    "HotelSearchAgent",
-    "WeatherAgent",
-    "TripAgent",
-    "extract_trip_from_email",
-    "extract_trip_from_calendar",
-    "FlightWeatherAgent",
+    "TravelAgent",
 ]

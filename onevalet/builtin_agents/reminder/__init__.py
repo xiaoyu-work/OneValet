@@ -1,15 +1,8 @@
 """
 Reminder agents for OneValet
 
-Provides agents for creating reminders, managing tasks, and automation planning.
+Reminder functionality is now handled by TodoDomainAgent.
+This package is kept for the shared TaskRepository utility.
 """
 
-from .reminder import ReminderAgent
-from .task_mgmt import TaskManagementAgent
-from .planner import PlannerAgent
-
-__all__ = [
-    "ReminderAgent",
-    "TaskManagementAgent",
-    "PlannerAgent",
-]
+__all__ = []

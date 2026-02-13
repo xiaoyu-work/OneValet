@@ -4,8 +4,8 @@ Shipment agents for OneValet
 Provides agents for package tracking and shipment management.
 """
 
-from .tracking import ShipmentAgent
+from .agent import ShippingAgent
 
 __all__ = [
-    "ShipmentAgent",
+    "ShippingAgent",
 ]

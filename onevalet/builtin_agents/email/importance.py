@@ -12,7 +12,7 @@ from onevalet import valet, StandardAgent, InputField
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(expose_as_tool=False)
 class EmailImportanceAgent(StandardAgent):
     """Classify email importance level. Use internally to determine if an email is urgent or important."""
 

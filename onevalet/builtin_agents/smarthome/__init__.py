@@ -1,15 +1,9 @@
 """
 Smart Home agents for OneValet
 
-Provides agents for controlling Philips Hue lights and Sonos speakers.
+Provides a unified SmartHomeAgent for controlling Philips Hue lights and Sonos speakers.
 """
 
-from .light import LightControlAgent
+from .agent import SmartHomeAgent
 
-__all__ = ["LightControlAgent"]
-
-try:
-    from .speaker import SpeakerControlAgent
-    __all__.append("SpeakerControlAgent")
-except ImportError:
-    pass
+__all__ = ["SmartHomeAgent"]

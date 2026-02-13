@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent-Tool Execution - Execute agents as tools in the ReAct loop
 
 Per design doc sections 4.1 and 6:
@@ -20,38 +20,34 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgentToolResult:
     """Result from executing an agent as a tool in the ReAct loop."""
-    completed: bool                                    # Whether the agent finished
-    result_text: str = ""                              # Result text for LLM
-    agent: Optional[Any] = None                        # Agent instance (non-None when WAITING)
-    approval_request: Optional[Any] = None             # ApprovalRequest (non-None when WAITING_FOR_APPROVAL)
+
+    completed: bool
+    result_text: str = ""
+    agent: Optional[Any] = None
+    approval_request: Optional[Any] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 async def execute_agent_tool(
-    orchestrator,  # Orchestrator instance
+    orchestrator,
     agent_type: str,
     tenant_id: str,
     tool_call_args: Dict[str, Any],
     task_instruction: str = "",
 ) -> AgentToolResult:
-    """Execute an agent as a tool in the ReAct loop.
-
-    Per design doc sections 4.1 and 6:
-    1. Create Agent via orchestrator.create_agent(), tool_call_args passed as context_hints
-    2. Build Message from task_instruction (or empty)
-    3. Call agent.reply(msg)
-    4. Return based on AgentResult.status:
-       - COMPLETED -> completed=True, result_text
-       - WAITING_FOR_INPUT -> completed=False, agent instance
-       - WAITING_FOR_APPROVAL -> completed=False, agent + ApprovalRequest
-       - ERROR -> completed=True, error message
-    """
+    """Execute an agent as a tool in the ReAct loop."""
     from .approval import build_approval_request
 
-    # 1. Create agent instance with tool_call_args as context_hints
+    enriched_hints = dict(tool_call_args)
+    if orchestrator.database:
+        enriched_hints["db"] = orchestrator.database
+    if orchestrator.trigger_engine:
+        enriched_hints["trigger_engine"] = orchestrator.trigger_engine
+
     agent = await orchestrator.create_agent(
         tenant_id=tenant_id,
         agent_type=agent_type,
-        context_hints=tool_call_args,
+        context_hints=enriched_hints,
     )
     if agent is None:
         return AgentToolResult(
@@ -59,7 +55,6 @@ async def execute_agent_tool(
             result_text=f"Error: Agent type '{agent_type}' not found.",
         )
 
-    # 2. Build message from task_instruction
     msg_content = task_instruction if task_instruction else ""
     msg = Message(
         name="orchestrator",
@@ -67,9 +62,9 @@ async def execute_agent_tool(
         role="user",
     )
 
-    # 3. Call agent.reply(msg)
     try:
         result = await agent.reply(msg)
+        logger.info(f"[AgentTool] {agent_type} status={result.status.value}")
     except Exception as e:
         logger.error(f"Agent execution failed for {agent_type}: {e}", exc_info=True)
         return AgentToolResult(
@@ -77,39 +72,54 @@ async def execute_agent_tool(
             result_text=f"Error executing {agent_type}: {e}",
         )
 
-    # 4. Return based on status
     if result.status == AgentStatus.COMPLETED:
+        completed_meta = dict(result.metadata or {})
+        completed_meta.setdefault("agent_status", AgentStatus.COMPLETED.value)
         return AgentToolResult(
             completed=True,
             result_text=result.raw_message or "Agent completed successfully.",
+            metadata=completed_meta,
         )
 
-    elif result.status == AgentStatus.WAITING_FOR_INPUT:
+    if result.status == AgentStatus.WAITING_FOR_INPUT:
+        waiting_meta = dict(result.metadata or {})
+        waiting_meta["requires_user_input"] = True
+        waiting_meta["agent_status"] = AgentStatus.WAITING_FOR_INPUT.value
         return AgentToolResult(
             completed=False,
             result_text=result.raw_message or "",
             agent=agent,
+            metadata=waiting_meta,
         )
 
-    elif result.status == AgentStatus.WAITING_FOR_APPROVAL:
+    if result.status == AgentStatus.WAITING_FOR_APPROVAL:
         approval_request = build_approval_request(agent)
+        waiting_meta = dict(result.metadata or {})
+        waiting_meta["requires_user_input"] = True
+        waiting_meta["requires_approval"] = True
+        waiting_meta["agent_status"] = AgentStatus.WAITING_FOR_APPROVAL.value
         return AgentToolResult(
             completed=False,
             result_text=result.raw_message or "",
             agent=agent,
             approval_request=approval_request,
+            metadata=waiting_meta,
         )
 
-    elif result.status == AgentStatus.ERROR:
+    if result.status == AgentStatus.ERROR:
         error_msg = result.error_message or result.raw_message or "Unknown error"
+        error_meta = dict(result.metadata or {})
+        error_meta.setdefault("agent_status", AgentStatus.ERROR.value)
         return AgentToolResult(
             completed=True,
             result_text=f"Error: {error_msg}",
+            metadata=error_meta,
         )
 
-    else:
-        # CANCELLED, PAUSED, or other states
-        return AgentToolResult(
-            completed=True,
-            result_text=result.raw_message or f"Agent finished with status: {result.status.value}",
-        )
+    other_meta = dict(result.metadata or {})
+    other_meta.setdefault("agent_status", result.status.value)
+    return AgentToolResult(
+        completed=True,
+        result_text=result.raw_message or f"Agent finished with status: {result.status.value}",
+        metadata=other_meta,
+    )

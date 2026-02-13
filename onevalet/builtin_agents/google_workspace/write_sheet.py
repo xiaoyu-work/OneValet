@@ -11,7 +11,7 @@ from .client import GoogleWorkspaceClient
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(expose_as_tool=False)
 class GoogleSheetsWriteAgent(StandardAgent):
     """Write or update data in a Google Sheets spreadsheet. Use when the user wants to add or modify spreadsheet data."""
 

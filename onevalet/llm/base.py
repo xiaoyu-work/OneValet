@@ -26,6 +26,7 @@ class StopReason(str, Enum):
     MAX_TOKENS = "max_tokens"       # Hit token limit
     STOP_SEQUENCE = "stop_sequence" # Hit stop sequence
     TOOL_USE = "tool_use"           # Model wants to use a tool
+    CONTENT_FILTER = "content_filter"  # Blocked by content filter
     ERROR = "error"                 # Error occurred
 
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 OneValet Orchestrator - Central coordinator using ReAct loop
 
 This module provides an extensible Orchestrator using the Template Method pattern
@@ -48,6 +48,7 @@ Example (hooks, no subclass):
 import json
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, AsyncIterator, Callable, TYPE_CHECKING
@@ -130,6 +131,18 @@ class Orchestrator:
 
     # Reserved callback names that cannot be overridden by subclasses
     _builtin_callback_names: set = {"list_agents", "get_agent_config"}
+    _ROUTER_POLICY_SYSTEM_PROMPT = (
+        "You are a tool routing policy engine for an orchestrator. "
+        "Return strict JSON only with this schema: "
+        "{\"intent\": string, \"must_use_tools\": boolean, "
+        "\"selected_tools\": string[], \"force_first_tool\": string|null, "
+        "\"reason_code\": string}. "
+        "Rules: choose from provided tool names only; use must_use_tools=true "
+        "for requests that require external, account, or real-time data/actions. "
+        "Prefer composite planner agents for multi-step tasks when available. "
+        "Use must_use_tools=false ONLY for clear non-tool scenarios: "
+        "casual_chat, creative_writing, language_translation, text_rewrite, pure_math."
+    )
 
     def __init_subclass__(cls, **kwargs):
         """Collect @callback_handler decorated methods when subclass is defined."""
@@ -165,6 +178,7 @@ class Orchestrator:
         system_prompt: str = "",
         react_config: Optional[ReactLoopConfig] = None,
         credential_store: Optional[Any] = None,
+        database: Optional[Any] = None,
         trigger_engine: Optional[Any] = None,
         checkpoint_manager: Optional["CheckpointManager"] = None,
         message_hub: Optional["MessageHub"] = None,
@@ -176,7 +190,7 @@ class Orchestrator:
         Initialize Orchestrator.
 
         Args:
-            momex: Momex memory — conversation history + long-term knowledge
+            momex: Momex memory Ã¢â‚¬â€ conversation history + long-term knowledge
             config: Full orchestrator configuration
             llm_client: LLM client for the ReAct loop
             agent_registry: Pre-configured agent registry
@@ -210,6 +224,7 @@ class Orchestrator:
         self.checkpoint_manager = checkpoint_manager
         self.message_hub = message_hub
         self.credential_store = credential_store
+        self.database = database
         self.trigger_engine = trigger_engine
         self.system_prompt = system_prompt
 
@@ -345,14 +360,26 @@ class Orchestrator:
             # Agent completed -> feed result into ReAct loop as context
             context["pending_agent_result"] = agent_result
 
-        # Step 4: Build LLM messages
+        # Step 4: Build tool schemas
+        tool_schemas = self._build_tool_schemas()
+        policy = await self._plan_tool_policy(message, tool_schemas)
+        selected_tool_schemas = policy["tool_schemas"]
+        logger.info(
+            f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
+            f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
+        )
+
+        # Step 5: Build LLM messages
         messages = self._build_llm_messages(context, message)
 
-        # Step 5: Build tool schemas
-        tool_schemas = self._build_tool_schemas()
-
         # Step 6: Run ReAct loop
-        loop_result = await self.react_loop(messages, tool_schemas, tenant_id)
+        loop_result = await self.react_loop(
+            messages,
+            selected_tool_schemas,
+            tenant_id,
+            first_turn_tool_choice=policy["first_turn_tool_choice"],
+            retry_with_required_on_empty=policy["retry_with_required_on_empty"],
+        )
 
         # Step 7: Map ReactLoopResult -> AgentResult
         result = AgentResult(
@@ -367,6 +394,13 @@ class Orchestrator:
                 },
                 "duration_ms": loop_result.duration_ms,
                 "tool_calls_count": len(loop_result.tool_calls),
+                "tool_policy": {
+                    "intent": policy["intent"],
+                    "must_use_tools": policy["must_use_tools"],
+                    "first_turn_tool_choice": policy["first_turn_tool_choice"],
+                    "selected_tool_count": len(selected_tool_schemas),
+                    "total_tool_count": len(tool_schemas),
+                },
             },
         )
 
@@ -443,9 +477,15 @@ class Orchestrator:
             )
             return
 
-        # Build messages and tool schemas
-        messages = self._build_llm_messages(context, message)
+        # Build tool schemas
         tool_schemas = self._build_tool_schemas()
+        policy = await self._plan_tool_policy(message, tool_schemas)
+        selected_tool_schemas = policy["tool_schemas"]
+        logger.info(
+            f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
+            f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
+        )
+        messages = self._build_llm_messages(context, message)
 
         # Yield execution start
         yield AgentEvent(
@@ -469,7 +509,12 @@ class Orchestrator:
 
             # LLM call
             try:
-                response = await self._llm_call_with_retry(messages, tool_schemas)
+                first_turn_choice = policy["first_turn_tool_choice"] if turn == 1 else "auto"
+                response = await self._llm_call_with_retry(
+                    messages,
+                    selected_tool_schemas,
+                    tool_choice=first_turn_choice,
+                )
             except Exception as e:
                 yield AgentEvent(
                     type=EventType.ERROR,
@@ -486,24 +531,42 @@ class Orchestrator:
             tool_calls = response.tool_calls
 
             if not tool_calls:
-                # Final answer
-                final_text = response.content or ""
-                final_response = final_text
-                logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
-                yield AgentEvent(
-                    type=EventType.MESSAGE_START,
-                    data={"turn": turn},
-                )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_CHUNK,
-                    data={"chunk": final_text},
-                )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_END,
-                    data={},
-                )
-                break
-            else:
+                if (
+                    turn == 1
+                    and policy["retry_with_required_on_empty"]
+                    and selected_tool_schemas
+                    and policy["first_turn_tool_choice"] != "required"
+                ):
+                    response = await self._llm_call_with_retry(
+                        messages,
+                        selected_tool_schemas,
+                        tool_choice="required",
+                    )
+                    usage_retry = getattr(response, "usage", None)
+                    if usage_retry:
+                        total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
+                        total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
+                    tool_calls = response.tool_calls
+
+                if not tool_calls:
+                    # Final answer
+                    final_text = response.content or ""
+                    final_response = final_text
+                    logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_START,
+                        data={"turn": turn},
+                    )
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_CHUNK,
+                        data={"chunk": final_text},
+                    )
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_END,
+                        data={},
+                    )
+                    break
+            if tool_calls:
                 # Append assistant message with tool_calls
                 messages.append(self._assistant_message_from_response(response))
 
@@ -530,6 +593,7 @@ class Orchestrator:
                     tc_name = tc.name
                     is_agent = self._is_agent_tool(tc_name)
                     kind = "agent" if is_agent else "tool"
+
                     if isinstance(result, BaseException):
                         logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
                         error_text = f"Error: {result}"
@@ -539,55 +603,106 @@ class Orchestrator:
                         ))
                         yield AgentEvent(
                             type=EventType.TOOL_RESULT,
-                            data={"tool_name": tc_name, "call_id": tc.id, "success": False, "error": str(result)},
+                            data={
+                                "tool_name": tc_name,
+                                "call_id": tc.id,
+                                "kind": kind,
+                                "success": False,
+                                "error": str(result),
+                                "result_preview": error_text[:240],
+                            },
                         )
+
+                    elif (
+                        isinstance(result, AgentToolResult)
+                        and isinstance(result.metadata, dict)
+                        and result.metadata.get("requires_user_input")
+                    ):
+                        logger.info(f"[ReAct]   agent={tc_name} FORCED_WAIT_BY_METADATA")
+                        waiting_text = result.result_text or "More information is required."
+                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary={}, result_status="WAITING_FOR_INPUT",
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={
+                                "tool_name": tc_name,
+                                "call_id": tc.id,
+                                "kind": "agent",
+                                "success": True,
+                                "waiting": True,
+                                "status": "WAITING_FOR_INPUT",
+                                "result_preview": waiting_text[:240],
+                                "tool_trace": result.metadata.get("tool_trace") or [],
+                            },
+                        )
+                        loop_broken = True
+                        loop_broken_text = waiting_text
+
                     elif isinstance(result, AgentToolResult) and not result.completed:
                         logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
-                        # Agent-Tool not completed: store in pool, collect approval
                         if result.agent:
                             await self.agent_pool.add_agent(result.agent)
                         if result.approval_request:
                             pending_approvals.append(result.approval_request)
-                        messages.append(self._build_tool_result_message(
-                            tc.id,
-                            result.result_text or "Agent is waiting for input.",
-                        ))
+                        waiting_text = result.result_text or "Agent is waiting for input."
+                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
                         waiting_status = (
                             "WAITING_FOR_APPROVAL" if result.approval_request
                             else "WAITING_FOR_INPUT"
                         )
                         all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={},
-                            result_status=waiting_status,
+                            name=tc_name, args_summary={}, result_status=waiting_status,
                         ))
+                        tool_trace = []
+                        if isinstance(result.metadata, dict):
+                            tool_trace = result.metadata.get("tool_trace") or []
                         yield AgentEvent(
                             type=EventType.TOOL_RESULT,
-                            data={"tool_name": tc_name, "call_id": tc.id, "success": True, "waiting": True},
+                            data={
+                                "tool_name": tc_name,
+                                "call_id": tc.id,
+                                "kind": "agent",
+                                "success": True,
+                                "waiting": True,
+                                "status": waiting_status,
+                                "result_preview": waiting_text[:240],
+                                "tool_trace": tool_trace,
+                            },
                         )
                         yield AgentEvent(
                             type=EventType.STATE_CHANGE,
                             data={"agent_type": tc_name, "status": waiting_status},
                         )
                         loop_broken = True
-                        loop_broken_text = result.result_text
+                        loop_broken_text = waiting_text
+
                     else:
-                        # Regular tool or completed Agent-Tool
                         if isinstance(result, AgentToolResult):
                             result_text = result.result_text
+                            metadata = result.metadata if isinstance(result.metadata, dict) else {}
+                            tool_trace = metadata.get("tool_trace") or []
                         else:
                             result_text = str(result) if result is not None else ""
+                            tool_trace = []
                         result_text = self._context_manager.truncate_tool_result(result_text)
                         logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
                         messages.append(self._build_tool_result_message(tc.id, result_text))
                         all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={},
-                            result_chars=len(result_text),
+                            name=tc_name, args_summary={}, result_chars=len(result_text),
                         ))
                         yield AgentEvent(
                             type=EventType.TOOL_RESULT,
-                            data={"tool_name": tc_name, "call_id": tc.id, "success": True},
+                            data={
+                                "tool_name": tc_name,
+                                "call_id": tc.id,
+                                "kind": kind,
+                                "success": True,
+                                "result_preview": result_text[:240],
+                                "tool_trace": tool_trace,
+                            },
                         )
-
                 if loop_broken:
                     final_response = loop_broken_text or ""
                     # Yield the waiting agent's prompt to the user
@@ -677,6 +792,8 @@ class Orchestrator:
         messages: List[Dict[str, Any]],
         tool_schemas: List[Dict[str, Any]],
         tenant_id: str,
+        first_turn_tool_choice: Any = "auto",
+        retry_with_required_on_empty: bool = False,
     ) -> ReactLoopResult:
         """
         Core ReAct (Reasoning + Acting) loop.
@@ -706,11 +823,12 @@ class Orchestrator:
         for turn in range(1, self._react_config.max_turns + 1):
             turns_executed = turn
 
-            # Defense 2: context guard
+            # Context guard
             messages = self._context_manager.trim_if_needed(messages)
 
             # LLM call with retry
-            response = await self._llm_call_with_retry(messages, tool_schemas)
+            tool_choice = first_turn_tool_choice if turn == 1 else "auto"
+            response = await self._llm_call_with_retry(messages, tool_schemas, tool_choice=tool_choice)
 
             # Accumulate token usage
             usage = getattr(response, "usage", None)
@@ -722,13 +840,25 @@ class Orchestrator:
 
             # No tool calls -> final answer
             if not tool_calls:
+                if (
+                    turn == 1
+                    and retry_with_required_on_empty
+                    and tool_schemas
+                    and first_turn_tool_choice != "required"
+                ):
+                    response = await self._llm_call_with_retry(messages, tool_schemas, tool_choice="required")
+                    usage_retry = getattr(response, "usage", None)
+                    if usage_retry:
+                        total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
+                        total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
+                    tool_calls = response.tool_calls
+
+            if not tool_calls:
                 final_response = response.content or ""
                 break
 
             # Append assistant message with tool_calls to conversation
             messages.append(self._assistant_message_from_response(response))
-
-            # Execute all tool calls concurrently
             tc_batch_start = time.monotonic()
             results = await asyncio.gather(
                 *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
@@ -752,11 +882,9 @@ class Orchestrator:
                     args_summary = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
                 except (json.JSONDecodeError, TypeError):
                     args_summary = {}
-                # Truncate args for observability
                 args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
 
                 if isinstance(result, BaseException):
-                    # Exception -> error message as tool_result
                     error_text = f"Error executing {tc_name}: {result}"
                     messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
                     all_tool_records.append(ToolCallRecord(
@@ -768,8 +896,25 @@ class Orchestrator:
                         token_attribution=turn_tokens,
                     ))
 
+                elif (
+                    isinstance(result, AgentToolResult)
+                    and isinstance(result.metadata, dict)
+                    and result.metadata.get("requires_user_input")
+                ):
+                    waiting_text = result.result_text or "More information is required."
+                    messages.append(self._build_tool_result_message(tc.id, waiting_text))
+                    all_tool_records.append(ToolCallRecord(
+                        name=tc_name,
+                        args_summary=args_summary,
+                        duration_ms=tc_batch_duration,
+                        success=True,
+                        result_status="WAITING_FOR_INPUT",
+                        result_chars=len(waiting_text),
+                        token_attribution=turn_tokens,
+                    ))
+                    final_response = waiting_text
+                    loop_broken = True
                 elif isinstance(result, AgentToolResult) and not result.completed:
-                    # Agent-Tool not completed -> store in Pool, collect ApprovalRequest
                     if result.agent:
                         await self.agent_pool.add_agent(result.agent)
                     if result.approval_request:
@@ -790,15 +935,12 @@ class Orchestrator:
                     loop_broken = True
 
                 else:
-                    # Regular tool or completed Agent-Tool
                     if isinstance(result, AgentToolResult):
                         result_text = result.result_text
                     else:
                         result_text = str(result) if result is not None else ""
 
-                    # Capture original length before truncation
                     result_chars_original = len(result_text)
-                    # Defense 1: truncate individual tool result
                     result_text = self._context_manager.truncate_tool_result(result_text)
                     messages.append(self._build_tool_result_message(tc.id, result_text))
 
@@ -811,11 +953,10 @@ class Orchestrator:
                         result_chars=result_chars_original,
                         token_attribution=turn_tokens,
                     ))
-
             if loop_broken:
                 if pending_approvals:
                     pending_approvals = collect_batch_approvals(pending_approvals)
-                # Return the waiting agent's prompt directly — no extra LLM call
+                # Return the waiting agent's prompt directly Ã¢â‚¬â€ no extra LLM call
                 # final_response was already set when loop_broken was triggered
                 break
 
@@ -857,6 +998,7 @@ class Orchestrator:
         self,
         messages: List[Dict[str, Any]],
         tool_schemas: Optional[List[Dict[str, Any]]],
+        tool_choice: Optional[Any] = None,
     ) -> Any:
         """LLM call with error recovery strategy per design doc section 3.3.
 
@@ -864,6 +1006,10 @@ class Orchestrator:
         - ContextOverflowError -> three-step recovery (trim -> truncate_all -> force_trim)
         - AuthError -> raise immediately
         - TimeoutError -> retry once
+
+        Args:
+            tool_choice: Override for tool_choice param ("auto", "required", "none").
+                         If None, the LLM client uses its default ("auto").
         """
         last_error = None
         for attempt in range(self._react_config.llm_max_retries + 1):
@@ -871,7 +1017,18 @@ class Orchestrator:
                 kwargs: Dict[str, Any] = {"messages": messages}
                 if tool_schemas:
                     kwargs["tools"] = tool_schemas
-                return await self.llm_client.chat_completion(**kwargs)
+                    if tool_choice:
+                        kwargs["tool_choice"] = tool_choice
+                    logger.info(f"[LLM] Sending {len(tool_schemas)} tools, tool_choice={tool_choice or 'auto'}, sample: {json.dumps(tool_schemas[0], ensure_ascii=False)[:200]}")
+                else:
+                    logger.info("[LLM] Sending request with NO tools")
+                response = await self.llm_client.chat_completion(**kwargs)
+                # Debug: log what came back
+                tc = getattr(response, 'tool_calls', None)
+                sr = getattr(response, 'stop_reason', None)
+                content_len = len(getattr(response, 'content', '') or '')
+                logger.info(f"[LLM] Response: stop_reason={sr}, tool_calls={len(tc) if tc else 0}, content_len={content_len}")
+                return response
 
             except Exception as e:
                 last_error = e
@@ -968,6 +1125,7 @@ class Orchestrator:
             context = ToolExecutionContext(
                 user_id=tenant_id,
                 credentials=self.credential_store,
+                metadata=self._build_tool_metadata(),
             )
             return await tool_def.executor(args, context)
 
@@ -976,6 +1134,14 @@ class Orchestrator:
         if not self._agent_registry:
             return False
         return self._agent_registry.get_agent_class(tool_name) is not None
+
+    def _build_tool_metadata(self) -> dict:
+        """Build metadata dict for regular tool execution context."""
+        meta = {}
+        if self.database:
+            from onevalet.builtin_agents.digest.important_dates_repo import ImportantDatesRepository
+            meta["important_dates_store"] = ImportantDatesRepository(self.database)
+        return meta
 
     def _build_tool_result_message(
         self,
@@ -1082,15 +1248,17 @@ class Orchestrator:
         if self.system_prompt:
             system_parts.append(self.system_prompt)
 
-        # Framework context (current time, capabilities list)
+        # Framework context
         framework_parts = []
         now = datetime.now(timezone.utc)
         framework_parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-        # Tool descriptions are already in tool schemas; no need to duplicate here
-
         if framework_parts:
             system_parts.append("\n[Context]\n" + "\n".join(framework_parts))
+
+        # NOTE: The system prompt lists agent/tool names as a routing table
+        # so the LLM knows WHICH tool to call for each domain. The detailed
+        # schemas are still passed only via the native `tools` parameter.
 
         if system_parts:
             messages.append({
@@ -1101,7 +1269,10 @@ class Orchestrator:
         # Conversation history (from Momex short-term memory)
         history = context.get("conversation_history", [])
         if history:
+            logger.info(f"[ReAct] history: {len(history)} messages, roles: {[m.get('role') for m in history[:6]]}...")
             messages.extend(history)
+        else:
+            logger.info("[ReAct] history: 0 messages (clean session)")
 
         # Current user message
         messages.append({
@@ -1136,10 +1307,208 @@ class Orchestrator:
         agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
         schemas.extend(agent_tool_schemas)
 
-        tool_names = [s.get("function", {}).get("name", "?") for s in schemas]
-        logger.info(f"[Tools] {len(schemas)} available: {', '.join(tool_names)}")
+        logger.info(f"[Tools] {len(schemas)} total available")
 
         return schemas
+
+    @staticmethod
+    def _tool_name_from_schema(schema: Dict[str, Any]) -> Optional[str]:
+        """Extract function name from an OpenAI tool schema."""
+        if not isinstance(schema, dict):
+            return None
+        function_part = schema.get("function")
+        if not isinstance(function_part, dict):
+            return None
+        name = function_part.get("name")
+        return name if isinstance(name, str) else None
+
+    def _filter_tool_schemas(
+        self,
+        tool_schemas: List[Dict[str, Any]],
+        preferred_names: List[str],
+    ) -> List[Dict[str, Any]]:
+        """Filter tool schemas by a preferred name list while preserving order."""
+        if not preferred_names:
+            return tool_schemas
+        name_set = set(preferred_names)
+        filtered = [
+            schema for schema in tool_schemas
+            if self._tool_name_from_schema(schema) in name_set
+        ]
+        return filtered
+
+    def _score_tool_relevance(self, user_message: str, schema: Dict[str, Any]) -> float:
+        """Generic lexical relevance score for fallback tool narrowing."""
+        name = (self._tool_name_from_schema(schema) or "").lower()
+        description = str(schema.get("function", {}).get("description", "") or "").lower()
+        user_text = (user_message or "").lower()
+
+        user_tokens = set(re.findall(r"[a-z0-9_]+", user_text))
+        tool_tokens = set(re.findall(r"[a-z0-9_]+", f"{name} {description}"))
+        overlap = user_tokens.intersection(tool_tokens)
+
+        score = float(len(overlap))
+        if name and name in user_text:
+            score += 2.0
+        if self._is_agent_tool(name):
+            score += 0.5
+        return score
+
+    def _choose_fallback_tools(
+        self,
+        user_message: str,
+        tool_schemas: List[Dict[str, Any]],
+        max_tools: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Choose a bounded fallback subset when router output is missing/ambiguous."""
+        if not tool_schemas:
+            return []
+
+        scored: List[tuple[float, Dict[str, Any]]] = []
+        for schema in tool_schemas:
+            scored.append((self._score_tool_relevance(user_message, schema), schema))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        picked = [schema for score, schema in scored if score > 0][:max_tools]
+        if not picked:
+            picked = tool_schemas[:max_tools]
+
+        if not any(self._is_agent_tool(self._tool_name_from_schema(s) or "") for s in picked):
+            for schema in tool_schemas:
+                name = self._tool_name_from_schema(schema) or ""
+                if self._is_agent_tool(name):
+                    if schema not in picked:
+                        if len(picked) >= max_tools:
+                            picked = picked[:-1]
+                        picked.append(schema)
+                    break
+
+        return picked
+
+    @staticmethod
+    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
+        """Extract first JSON object from model output."""
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            pass
+        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+        if not m:
+            return None
+        try:
+            parsed = json.loads(m.group(0))
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None
+
+    async def _plan_tool_policy(
+        self,
+        user_message: str,
+        tool_schemas: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Plan tool policy dynamically with a router LLM call (no hardcoded intent map)."""
+        tool_names = [
+            self._tool_name_from_schema(schema)
+            for schema in tool_schemas
+            if self._tool_name_from_schema(schema)
+        ]
+        if not tool_names:
+            return {
+                "intent": "general",
+                "must_use_tools": False,
+                "tool_schemas": tool_schemas,
+                "first_turn_tool_choice": "auto",
+                "retry_with_required_on_empty": False,
+            }
+
+        default_policy = {
+            "intent": "general",
+            "must_use_tools": False,
+            "tool_schemas": tool_schemas,
+            "first_turn_tool_choice": "auto",
+            "retry_with_required_on_empty": False,
+        }
+
+        tool_lines = []
+        for schema in tool_schemas:
+            name = self._tool_name_from_schema(schema)
+            if not name:
+                continue
+            desc = schema.get("function", {}).get("description", "")
+            tool_lines.append(f"- {name}: {desc}")
+
+        router_messages = [
+            {"role": "system", "content": self._ROUTER_POLICY_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"User message:\n{user_message}\n\n"
+                    f"Available tools:\n" + "\n".join(tool_lines) + "\n\n"
+                    "Return JSON only."
+                ),
+            },
+        ]
+
+        try:
+            router_response = await self.llm_client.chat_completion(messages=router_messages)
+            router_json = self._extract_json_object(router_response.content or "")
+            if not router_json:
+                return default_policy
+        except Exception as e:
+            logger.warning(f"[ToolPolicy] router failed, falling back to auto: {e}")
+            return default_policy
+
+        selected_names_raw = router_json.get("selected_tools", [])
+        selected_names = [
+            str(name)
+            for name in selected_names_raw
+            if isinstance(name, str) and name in tool_names
+        ]
+
+        must_use_tools = bool(router_json.get("must_use_tools"))
+        reason_code = str(router_json.get("reason_code", "") or "").strip().lower()
+        no_tool_reasons = {
+            "casual_chat",
+            "creative_writing",
+            "language_translation",
+            "text_rewrite",
+            "pure_math",
+        }
+        if not must_use_tools and reason_code not in no_tool_reasons:
+            must_use_tools = True
+
+        force_first_tool = router_json.get("force_first_tool")
+        first_turn_tool_choice: Any = "auto"
+
+        if isinstance(force_first_tool, str) and force_first_tool in tool_names:
+            selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
+            first_turn_tool_choice = {
+                "type": "function",
+                "function": {"name": force_first_tool},
+            }
+            must_use_tools = True
+        elif selected_names:
+            selected_schemas = self._filter_tool_schemas(tool_schemas, selected_names)
+            if must_use_tools:
+                first_turn_tool_choice = "required"
+        elif must_use_tools:
+            selected_schemas = self._choose_fallback_tools(user_message, tool_schemas, max_tools=8)
+            first_turn_tool_choice = "required"
+        else:
+            selected_schemas = tool_schemas
+
+        intent = str(router_json.get("intent", "domain"))
+        return {
+            "intent": intent,
+            "must_use_tools": must_use_tools,
+            "tool_schemas": selected_schemas,
+            "first_turn_tool_choice": first_turn_tool_choice,
+            "retry_with_required_on_empty": must_use_tools,
+        }
 
     def _register_memory_tool(self) -> None:
         """Register recall_memory as a tool so the LLM can query long-term memory on demand."""
@@ -1748,3 +2117,12 @@ class Orchestrator:
             await self.agent_pool.update_agent(agent)
 
         return result
+
+
+
+
+
+
+
+
+

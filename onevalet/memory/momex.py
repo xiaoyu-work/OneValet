@@ -143,6 +143,25 @@ class MomexMemory:
             logger.warning(f"Failed to load history for {tenant_id}/{session_id}: {e}")
             return []
 
+    def clear_history(self, tenant_id: str, session_id: str) -> None:
+        """Clear conversation history for a tenant/session (cache + database).
+
+        Works even after server restart when _short_terms cache is empty,
+        by creating the STM instance first to connect to the SQLite database.
+        """
+        key = (tenant_id, session_id)
+        try:
+            # Always get/create the STM instance to ensure database is cleared
+            stm = self._get_short_term(tenant_id, session_id)
+            stm.clear()
+            logger.info(f"Cleared STM database for {tenant_id}/{session_id}")
+        except Exception as e:
+            logger.warning(f"Failed to clear STM database: {e}")
+        # Remove from cache
+        if key in self._short_terms:
+            del self._short_terms[key]
+        logger.info(f"Cleared history for {tenant_id}/{session_id}")
+
     def save_message(
         self,
         tenant_id: str,

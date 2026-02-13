@@ -104,7 +104,7 @@ class EmbeddingConfigRequest(BaseModel):
 class ConfigRequest(BaseModel):
     llm: LLMConfigRequest
     database: str
-    embedding: Optional[EmbeddingConfigRequest] = None
+    embedding: EmbeddingConfigRequest
     system_prompt: Optional[str] = None
 
 
@@ -203,10 +203,9 @@ async def save_config(req: ConfigRequest):
         "llm": llm_config,
         "database": req.database,
     }
-    if req.embedding:
-        emb = {k: v for k, v in req.embedding.model_dump().items() if v}
-        if emb:
-            config["embedding"] = emb
+    emb = {k: v for k, v in req.embedding.model_dump().items() if v}
+    if emb:
+        config["embedding"] = emb
     if req.system_prompt:
         config["system_prompt"] = req.system_prompt
 
@@ -279,6 +278,68 @@ async def stream(req: ChatRequest):
 @api.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@api.post("/api/clear-session")
+async def clear_session():
+    """Clear conversation history for the default tenant."""
+    app = _require_app()
+    await app._ensure_initialized()
+    app._momex.clear_history(tenant_id=_TENANT_ID, session_id=_TENANT_ID)
+    return {"status": "ok", "message": "Session history cleared"}
+
+
+@api.get("/api/test-tool-calling")
+async def test_tool_calling():
+    """Minimal test: does this Azure deployment support tool calling at all?"""
+    app = _require_app()
+    await app._ensure_initialized()
+
+    test_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get current weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name"}
+                },
+                "required": ["city"],
+            },
+        },
+    }
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant. Use the provided tools when needed."},
+        {"role": "user", "content": "What's the weather in Tokyo?"},
+    ]
+
+    # Test 1: tool_choice=auto
+    resp1 = await app._llm_client.chat_completion(
+        messages=messages, tools=[test_tool]
+    )
+    auto_result = {
+        "tool_choice": "auto",
+        "has_tool_calls": resp1.has_tool_calls,
+        "tool_calls": [tc.to_dict() for tc in resp1.tool_calls] if resp1.tool_calls else [],
+        "content_len": len(resp1.content or ""),
+        "stop_reason": str(resp1.stop_reason),
+    }
+
+    # Test 2: tool_choice=required
+    resp2 = await app._llm_client.chat_completion(
+        messages=messages, tools=[test_tool], tool_choice="required"
+    )
+    required_result = {
+        "tool_choice": "required",
+        "has_tool_calls": resp2.has_tool_calls,
+        "tool_calls": [tc.to_dict() for tc in resp2.tool_calls] if resp2.tool_calls else [],
+        "content_len": len(resp2.content or ""),
+        "stop_reason": str(resp2.stop_reason),
+    }
+
+    return {"auto": auto_result, "required": required_result}
 
 
 # ─── Credentials ───

@@ -1,14 +1,17 @@
 """
-Google Workspace agents for OneValet
+Google Workspace integration for OneValet
 
-- Drive search, Docs read, Sheets read: ReAct tools (see builtin_agents/tools/google_workspace.py)
-- Create Docs, write Sheets: Agents with approval flow (below)
+GoogleWorkspaceDomainAgent handles all Google Workspace operations
+(Drive search, Docs read/create, Sheets read/write) via an internal
+mini ReAct loop.
 """
 
+from .agent import GoogleWorkspaceDomainAgent
 from .create_doc import GoogleDocsCreateAgent
 from .write_sheet import GoogleSheetsWriteAgent
 
 __all__ = [
+    "GoogleWorkspaceDomainAgent",
     "GoogleDocsCreateAgent",
     "GoogleSheetsWriteAgent",
 ]

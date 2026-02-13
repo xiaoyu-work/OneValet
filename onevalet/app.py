@@ -98,6 +98,8 @@ class OneValet:
         llm_cfg = self._config.get("llm", {})
         if not llm_cfg.get("provider") or not llm_cfg.get("model"):
             raise ValueError("Missing required config fields: 'llm.provider' and 'llm.model'")
+        if not self._config.get("embedding"):
+            raise ValueError("Missing required config field: 'embedding'")
 
         provider = llm_cfg["provider"]
         if provider not in _PROVIDER_CLIENTS:
@@ -142,16 +144,17 @@ class OneValet:
         mod = importlib.import_module(module_path)
         ClientClass = getattr(mod, class_name)
         self._llm_client = ClientClass(**client_kwargs)
+        logger.info(f"LLM client: provider={provider}, model={model}, client={class_name}")
 
-        # 2. Database
-        from .db import Database
+        # 2. Database + all tables
+        from .db import Database, ensure_schema
         self._database = Database(dsn=cfg["database"])
         await self._database.initialize()
+        await ensure_schema(self._database)
 
         # 3. CredentialStore
         from .credentials import CredentialStore
         self._credential_store = CredentialStore(db=self._database)
-        await self._credential_store.ensure_table()
 
         # Set default store for AccountResolver (agents call it as classmethod)
         from .providers.email.resolver import AccountResolver
@@ -165,25 +168,12 @@ class OneValet:
             momex_provider = "openai"  # fallback: momex only supports openai/azure/anthropic/deepseek/qwen
 
         # Embedding config
-        embedding_cfg = cfg.get("embedding", {})
-        if embedding_cfg:
-            emb_provider = embedding_cfg.get("provider", "")
-            emb_model = embedding_cfg.get("model", "")
-            emb_api_key = embedding_cfg.get("api_key", "")
-            emb_api_base = embedding_cfg.get("base_url", "")
-            emb_api_version = embedding_cfg.get("api_version", "")
-        else:
-            # No embedding config — try reusing LLM credentials
-            emb_provider = ""
-            emb_model = ""
-            emb_api_key = api_key or ""
-            emb_api_base = llm_cfg.get("base_url", "") if provider == "azure" else ""
-            emb_api_version = ""
-            if not emb_api_key:
-                logger.warning(
-                    "No 'embedding' config provided and no LLM api_key available — "
-                    "memory embedding will not work."
-                )
+        embedding_cfg = cfg["embedding"]
+        emb_provider = embedding_cfg.get("provider", "openai")
+        emb_model = embedding_cfg.get("model", "text-embedding-3-small")
+        emb_api_key = embedding_cfg.get("api_key", "")
+        emb_api_base = embedding_cfg.get("base_url", "")
+        emb_api_version = embedding_cfg.get("api_version", "")
 
         self._momex = MomexMemory(
             llm_provider=momex_provider,
@@ -229,6 +219,7 @@ class OneValet:
             llm_client=self._llm_client,
             agent_registry=self._agent_registry,
             credential_store=self._credential_store,
+            database=self._database,
             system_prompt=cfg.get("system_prompt", ""),
         )
         await self._orchestrator.initialize()

@@ -7,6 +7,7 @@ Supports:
 """
 
 import json
+import logging
 import os
 from typing import Dict, Any, List, Optional, AsyncIterator
 
@@ -14,6 +15,8 @@ from .base import (
     BaseLLMClient, LLMConfig, LLMResponse, StreamChunk,
     ToolCall, Usage, StopReason
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AzureOpenAIClient(BaseLLMClient):
@@ -117,12 +120,18 @@ class AzureOpenAIClient(BaseLLMClient):
         if "stop" in kwargs:
             params["stop"] = kwargs["stop"]
 
+        # Log what we're sending
+        logger.info(f"[Azure API] model={model}, tools={len(tools) if tools else 0}, messages={len(messages)}, tool_choice={params.get('tool_choice', 'N/A')}")
+
         # Make the call
         response = await client.chat.completions.create(**params)
 
         # Parse response
         choice = response.choices[0]
         message = choice.message
+
+        # Log raw response
+        logger.info(f"[Azure API] finish_reason={choice.finish_reason}, has_tool_calls={bool(message.tool_calls)}, content_len={len(message.content or '')}")
 
         # Parse tool calls
         tool_calls = None

@@ -12,7 +12,7 @@ from .client import NotionClient
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(expose_as_tool=False)
 class NotionCreatePageAgent(StandardAgent):
     """Create a new page in Notion. Use when the user wants to add a note, document, or entry in Notion."""
 

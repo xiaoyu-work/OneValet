@@ -20,17 +20,18 @@ Usage:
 from .google_search import register_google_search_tools
 from .important_dates import register_important_dates_tools
 from .user_tools import register_user_tools
-from .notion import register_notion_tools
-from .google_workspace import register_google_workspace_tools
 
 
 def register_all_builtin_tools() -> None:
-    """Register all built-in tools with the global ToolRegistry."""
+    """Register all built-in tools with the global ToolRegistry.
+
+    Note: Notion and Google Workspace tools are no longer registered here.
+    They have been consolidated into NotionDomainAgent and
+    GoogleWorkspaceDomainAgent respectively.
+    """
     register_google_search_tools()
     register_important_dates_tools()
     register_user_tools()
-    register_notion_tools()
-    register_google_workspace_tools()
 
 
 __all__ = [
@@ -38,6 +39,4 @@ __all__ = [
     "register_google_search_tools",
     "register_important_dates_tools",
     "register_user_tools",
-    "register_notion_tools",
-    "register_google_workspace_tools",
 ]

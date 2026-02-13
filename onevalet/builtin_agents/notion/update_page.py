@@ -12,7 +12,7 @@ from .client import NotionClient
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(expose_as_tool=False)
 class NotionUpdatePageAgent(StandardAgent):
     """Update an existing Notion page. Use when the user wants to edit or modify content in Notion."""
 

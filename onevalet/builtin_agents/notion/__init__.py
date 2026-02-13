@@ -1,14 +1,16 @@
 """
 Notion integration for OneValet
 
-- Search, read pages, query databases: ReAct tools (see builtin_agents/tools/notion.py)
-- Create/update pages: Agents with approval flow (below)
+NotionDomainAgent handles all Notion operations (search, read, create, update)
+via an internal mini ReAct loop.
 """
 
+from .agent import NotionDomainAgent
 from .create_page import NotionCreatePageAgent
 from .update_page import NotionUpdatePageAgent
 
 __all__ = [
+    "NotionDomainAgent",
     "NotionCreatePageAgent",
     "NotionUpdatePageAgent",
 ]

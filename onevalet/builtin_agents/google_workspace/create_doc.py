@@ -11,7 +11,7 @@ from .client import GoogleWorkspaceClient
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(expose_as_tool=False)
 class GoogleDocsCreateAgent(StandardAgent):
     """Create a new Google Doc. Use when the user wants to write or create a document in Google Docs."""
 

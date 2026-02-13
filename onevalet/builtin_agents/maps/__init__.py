@@ -1,15 +1,12 @@
 """
-Maps agents for OneValet
+Maps domain agent for OneValet.
 
-Provides agents for place search, directions, and air quality.
+Provides a single MapsAgent that handles place search, directions, and air quality
+via an internal mini ReAct loop.
 """
 
-from .search import MapSearchAgent
-from .directions import DirectionsAgent
-from .air_quality import AirQualityAgent
+from .agent import MapsAgent
 
 __all__ = [
-    "MapSearchAgent",
-    "DirectionsAgent",
-    "AirQualityAgent",
+    "MapsAgent",
 ]
