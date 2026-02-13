@@ -791,16 +791,34 @@ class StandardAgent(BaseAgent):
             desc = input_field.description if input_field else field_name
             field_info.append(f"- {field_name}: {desc}")
 
-        prompt = f"""Extract field values from the user message. Return JSON with field names and values.
-Only include fields that are clearly mentioned in the message. If a field is not mentioned, don't include it.
+        # Build context from original request and already-collected fields
+        context_parts = []
+        task_instr = self.collected_fields.get("task_instruction") or self.context_hints.get("task_instruction")
+        if task_instr:
+            context_parts.append(f"Original request: \"{task_instr}\"")
+        known_field_names = {f.name for f in self.required_fields}
+        collected = {k: v for k, v in self.collected_fields.items()
+                     if k in known_field_names and v}
+        if collected:
+            context_parts.append("Already collected: " + ", ".join(f"{k}={v}" for k, v in collected.items()))
+        context_block = "\n".join(context_parts) + "\n" if context_parts else ""
 
-Fields to extract:
+        prompt = f"""Extract field values from the user message AND infer related values from context.
+
+RULES:
+1. Extract values explicitly stated in the user message.
+2. Infer values that can be calculated from context + extracted values.
+   - Duration + one date → calculate the other date.
+   - Example: original request says "三天" (3 days), user says start is "tomorrow" → end_date = start + 3 days.
+3. Return dates as YYYY-MM-DD when you can calculate them. Today is {datetime.now().strftime("%Y-%m-%d")}.
+4. Fill as many fields as possible. Do NOT leave a field empty if it can be inferred.
+
+{context_block}Fields to extract:
 {chr(10).join(field_info)}
 
 User message: "{user_input}"
 
-Return JSON only, e.g.: {{"field1": "value1", "field2": "value2"}}
-If no fields found, return: {{}}"""
+Return JSON only."""
 
         response = await self.llm_client.chat_completion(
             messages=[{"role": "user", "content": prompt}],

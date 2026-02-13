@@ -38,7 +38,13 @@ async def execute_agent_tool(
     """Execute an agent as a tool in the ReAct loop."""
     from .approval import build_approval_request
 
-    enriched_hints = dict(tool_call_args)
+    # Only pass task_instruction, not individual field guesses from the
+    # orchestrator LLM.  Agent-specific fields (destination, start_date, etc.)
+    # should go through the agent's own extract_fields() / InputField flow
+    # so the agent can properly enter WAITING_FOR_INPUT when data is missing.
+    enriched_hints = {}
+    if tool_call_args.get("task_instruction"):
+        enriched_hints["task_instruction"] = tool_call_args["task_instruction"]
     if orchestrator.database:
         enriched_hints["db"] = orchestrator.database
     if orchestrator.trigger_engine:

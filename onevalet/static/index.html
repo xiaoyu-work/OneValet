@@ -1,10 +1,12 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OneValet</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
   <style>
     #chat-messages::-webkit-scrollbar { width: 6px; }
     #chat-messages::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
@@ -13,6 +15,12 @@
     .typing-dot { animation: pulse-dot 1.4s infinite; }
     .typing-dot:nth-child(2) { animation-delay: 0.2s; }
     .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    .md-render p { margin: 0 0 0.5rem 0; }
+    .md-render ul, .md-render ol { margin: 0.25rem 0 0.5rem 1.25rem; }
+    .md-render code { background: #f3f4f6; padding: 0.05rem 0.3rem; border-radius: 0.25rem; font-size: 0.9em; }
+    .md-render pre { background: #111827; color: #f9fafb; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.5rem 0; }
+    .md-render pre code { background: transparent; padding: 0; }
+    .md-render a { color: #2563eb; text-decoration: underline; }
   </style>
 </head>
 <body class="h-full bg-gray-50 flex flex-col overflow-hidden">
@@ -117,7 +125,7 @@ function restoreChatHistory() {
     } else {
       bubble.className = 'bg-white shadow-sm border border-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5 max-w-[75%] text-sm leading-relaxed whitespace-pre-wrap text-gray-800';
     }
-    bubble.textContent = msg.content;
+    setBubbleContent(bubble, msg.role, msg.content);
     wrapper.appendChild(bubble);
     chatMessages.appendChild(wrapper);
   }
@@ -179,7 +187,7 @@ function appendMessage(role, content, save = true) {
   } else {
     bubble.className = 'bg-white shadow-sm border border-gray-100 rounded-2xl rounded-bl-md px-4 py-2.5 max-w-[75%] text-sm leading-relaxed whitespace-pre-wrap text-gray-800';
   }
-  bubble.textContent = content;
+  setBubbleContent(bubble, role, content);
 
   wrapper.appendChild(bubble);
   chatMessages.appendChild(wrapper);
@@ -373,7 +381,7 @@ async function sendMessage() {
         }
         const chunk = typeof event.data === 'object' ? (event.data.chunk || event.data.content || '') : event.data;
         fullText += chunk;
-        currentBubble.textContent = fullText;
+        setBubbleContent(currentBubble, "assistant", fullText);
         scrollToBottom();
         break;
       case 'message_end':
@@ -449,6 +457,27 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function renderMarkdown(content) {
+  const source = String(content || '');
+  if (window.marked && typeof window.marked.parse === 'function') {
+    const html = window.marked.parse(source, { gfm: true, breaks: true });
+    if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+      return window.DOMPurify.sanitize(html);
+    }
+    return html;
+  }
+  return escapeHtml(source).replace(/\n/g, '<br>');
+}
+
+function setBubbleContent(bubble, role, content) {
+  if (!bubble) return;
+  if (role === 'assistant') {
+    bubble.classList.add('md-render');
+    bubble.innerHTML = renderMarkdown(content);
+  } else {
+    bubble.textContent = content;
+  }
+}
 function showToast(message, type = 'success') {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
@@ -471,4 +500,6 @@ checkAppStatus();
 </script>
 </body>
 </html>
+
+
 

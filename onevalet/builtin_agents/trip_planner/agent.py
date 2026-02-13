@@ -8,12 +8,9 @@ This agent orchestrates multiple domains to produce executable itineraries:
 """
 
 from datetime import datetime
-import re
-from typing import Any, Dict
 
 from onevalet import InputField, valet
 from onevalet.agents.domain_agent import DomainAgent, DomainTool
-from onevalet.result import AgentStatus
 
 from onevalet.builtin_agents.travel.tools import (
     search_flights,
@@ -31,16 +28,6 @@ from onevalet.builtin_agents.calendar.tools import (
 from onevalet.builtin_agents.todo.tools import (
     create_task,
 )
-
-
-def _validate_date(value: str):
-    if not value:
-        return "Date is required in YYYY-MM-DD format."
-    try:
-        datetime.strptime(value, "%Y-%m-%d")
-        return None
-    except ValueError:
-        return "Use YYYY-MM-DD format (example: 2026-03-15)."
 
 
 async def _preview_create_event(args: dict, context) -> str:
@@ -76,34 +63,12 @@ async def _preview_create_task(args: dict, context) -> str:
 class TripPlannerAgent(DomainAgent):
     """Plan a complete trip itinerary with day-by-day schedule. Use when the user asks to plan a trip, make an itinerary, or organize a multi-day travel plan. Coordinates flights, hotels, weather, places, directions, and optionally creates calendar events and tasks."""
 
+    # Only destination is truly required. Everything else can be inferred
+    # by the ReAct LLM (dates from "三天", origin from user profile, etc.).
+    # Pattern: "Assume and proceed" — state assumptions, let user correct.
     destination = InputField(
         prompt="Which city or destination are you traveling to?",
         description="Trip destination city/area",
-    )
-    start_date = InputField(
-        prompt="What is your trip start date? (YYYY-MM-DD)",
-        description="Trip start date in YYYY-MM-DD",
-        validator=_validate_date,
-    )
-    end_date = InputField(
-        prompt="What is your trip end date? (YYYY-MM-DD)",
-        description="Trip end date in YYYY-MM-DD",
-        validator=_validate_date,
-    )
-    origin = InputField(
-        prompt="What city are you departing from?",
-        description="Origin city for flights",
-        required=False,
-    )
-    budget = InputField(
-        prompt="What is your total budget range for this trip?",
-        description="Budget range for planning",
-        required=False,
-    )
-    preferences = InputField(
-        prompt="Any preferences? (food, pace, neighborhoods, kid-friendly, nightlife, museums)",
-        description="Traveler preferences for itinerary",
-        required=False,
     )
 
     max_domain_turns = 8
@@ -111,131 +76,63 @@ class TripPlannerAgent(DomainAgent):
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a senior trip planner that builds realistic, executable itineraries.
 
-You can use tools from travel, maps, calendar, and todo domains.
-
 Today's date: {today} ({weekday})
 
-Workflow requirements:
-1. For itinerary requests, gather evidence first. Do not produce a full plan before at least:
-   - weather for destination
-   - place suggestions for the destination
-2. If user provides origin and dates, also gather flights and hotels.
-3. If key data is missing, ask concise clarifying questions.
-4. Build day-by-day schedules with morning/afternoon/evening blocks.
-5. Keep routing realistic: avoid long zig-zag travel within a day.
-6. Mark assumptions explicitly when user did not provide details.
-7. Only execute write actions (calendar/todo) after explicit user consent.
+## Assumptions — Proceed, Don't Ask
+When details are missing, make reasonable assumptions and proceed. State each assumption with "Assuming..." so the user can correct.
+- "三天行程" with no dates → Assuming departure tomorrow ({tomorrow}).
+- No origin city → assume the user's home city or a major hub nearby.
+- No budget → plan for mid-range.
+- No preferences → balanced mix of sightseeing, food, and culture.
+NEVER ask the user clarifying questions. Just assume and call tools.
 
-Output requirements:
-- Include "Plan Summary", "Day 1..N", "Estimated Budget", and "Assumptions".
-- Include references to the tool findings you used.
+## Tool Usage (CRITICAL)
+You MUST call tools to gather real data before producing any plan.
+Never generate a plan from your training data alone.
+
+On your FIRST turn, call ALL of these tools in parallel:
+1. check_weather — destination weather forecast
+2. search_places — attractions, restaurants, points of interest
+3. search_hotels — accommodation options
+4. search_flights — flight options (assume origin if not provided)
+
+You may also use:
+- get_directions — verify travel times between locations
+- query_events — check calendar for conflicts
+- create_event / create_task — only after explicit user approval
+
+Do NOT produce a text-only answer without calling tools first.
+
+## Plan Format — USE TOOL DATA
+Your itinerary MUST reference the actual data returned by tools. Include:
+- **Weather**: temperature, conditions, what to wear
+- **Places**: name, address, rating, opening hours, estimated visit time
+- **Hotels**: name, price per night, location
+- **Flights**: airline, departure/arrival times, price
+
+Structure:
+- **Assumptions** (dates, origin, budget, etc.)
+- **Weather Summary** (from check_weather)
+- **Day 1..N** with morning / afternoon / evening blocks — each POI with address and hours
+- **Accommodation Options** (from search_hotels)
+- **Flight Options** (from search_flights)
+- **Estimated Budget**
+
+Keep routing realistic: avoid long zig-zag travel within a day.
+Only execute write actions (calendar/todo) after explicit user consent.
 """
 
     def get_system_prompt(self) -> str:
         now = datetime.now()
+        from datetime import timedelta
+        tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         return self._SYSTEM_PROMPT_TEMPLATE.format(
             today=now.strftime("%Y-%m-%d"),
             weekday=now.strftime("%A"),
+            tomorrow=tomorrow,
         )
 
-    async def extract_fields(self, user_input: str) -> Dict[str, Any]:
-        """Deterministic extraction to avoid LLM hallucinating required fields."""
-        text = (user_input or "").strip()
-        if not text:
-            return {}
-
-        extracted: Dict[str, Any] = {}
-
-        # Explicit ISO dates only. Do not infer from vague phrases like "three days".
-        dates = re.findall(r"\b(20\d{2}-\d{2}-\d{2})\b", text)
-        if len(dates) >= 2:
-            extracted["start_date"] = dates[0]
-            extracted["end_date"] = dates[1]
-        elif len(dates) == 1:
-            if "start" in text.lower() or "from" in text.lower() or "开始" in text or "出发" in text:
-                extracted["start_date"] = dates[0]
-            elif "end" in text.lower() or "to" in text.lower() or "结束" in text or "返回" in text:
-                extracted["end_date"] = dates[0]
-
-        # Basic destination hints (Chinese/English travel phrases)
-        dest_patterns = [
-            r"去\s*([\u4e00-\u9fa5A-Za-z\s\-]+?)(?:\d|天|日|旅游|旅行|行程|$)",
-            r"到\s*([\u4e00-\u9fa5A-Za-z\s\-]+?)(?:\d|天|日|旅游|旅行|行程|$)",
-            r"to\s+([A-Za-z\s\-]+?)(?:\s+for\s+\d|\s+trip|\s+itinerary|$)",
-        ]
-        for pattern in dest_patterns:
-            m = re.search(pattern, text, flags=re.IGNORECASE)
-            if m:
-                city = m.group(1).strip(" ,，。")
-                if city:
-                    extracted["destination"] = city
-                    break
-
-        origin_match = re.search(r"from\s+([A-Za-z\s\-]+?)(?:\s+to|$)", text, flags=re.IGNORECASE)
-        if origin_match:
-            extracted["origin"] = origin_match.group(1).strip(" ,")
-        else:
-            zh_origin = re.search(r"从\s*([\u4e00-\u9fa5A-Za-z\s\-]+?)\s*(出发|到|去)", text)
-            if zh_origin:
-                extracted["origin"] = zh_origin.group(1).strip(" ,，。")
-
-        if re.search(r"\$|预算|budget|人民币|美元|CNY|USD", text, flags=re.IGNORECASE):
-            extracted["budget"] = text
-
-        if re.search(r"(喜欢|偏好|avoid|prefer|museum|nightlife|food|亲子|慢节奏)", text, flags=re.IGNORECASE):
-            extracted["preferences"] = text
-
-        # Fallback for destination only: allow superclass LLM extraction for city names,
-        # but never trust it for required date fields.
-        if "destination" not in extracted:
-            llm_extracted = await super().extract_fields(user_input)
-            if isinstance(llm_extracted, dict):
-                if llm_extracted.get("destination"):
-                    extracted["destination"] = llm_extracted.get("destination")
-                if llm_extracted.get("origin") and "origin" not in extracted:
-                    extracted["origin"] = llm_extracted.get("origin")
-
-        return extracted
-
     async def on_running(self, msg):
-        # Hard gate: never proceed if required fields are missing.
-        missing = self._get_missing_fields()
-        if missing:
-            return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
-                raw_message=self._get_next_prompt() or "Please provide the missing trip details.",
-                missing_fields=missing,
-                metadata={
-                    "requires_user_input": True,
-                    "missing_fields": missing,
-                },
-            )
-
-        # Cross-field date consistency check
-        try:
-            start = datetime.strptime(self.start_date, "%Y-%m-%d")
-            end = datetime.strptime(self.end_date, "%Y-%m-%d")
-            if end < start:
-                return self.make_result(
-                    status=AgentStatus.WAITING_FOR_INPUT,
-                    raw_message="Your end date is earlier than start date. Please provide valid dates in YYYY-MM-DD.",
-                    missing_fields=["start_date", "end_date"],
-                    metadata={
-                        "requires_user_input": True,
-                        "missing_fields": ["start_date", "end_date"],
-                    },
-                )
-        except Exception:
-            return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
-                raw_message="Please provide valid start and end dates in YYYY-MM-DD format.",
-                missing_fields=["start_date", "end_date"],
-                metadata={
-                    "requires_user_input": True,
-                    "missing_fields": ["start_date", "end_date"],
-                },
-            )
-
         return await super().on_running(msg)
 
     domain_tools = [
