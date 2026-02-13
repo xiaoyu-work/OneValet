@@ -459,7 +459,10 @@ function escapeHtml(str) {
 
 function renderMarkdown(content) {
   const source = String(content || '');
-  const normalized = source`r`n    .replace(/\r\n/g, "\n")`r`n    .replace(/\n{2,}/g, "\n")`r`n    .trim();
+  const normalized = source
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{2,}/g, '\n')
+    .trim();
   if (window.marked && typeof window.marked.parse === 'function') {
     const html = window.marked.parse(normalized, { gfm: true, breaks: false });
     if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
@@ -467,9 +470,8 @@ function renderMarkdown(content) {
     }
     return html;
   }
-  return escapeHtml(normalized).replace(/\n/g, "<br>");
+  return escapeHtml(normalized).replace(/\n/g, '<br>');
 }
-
 function setBubbleContent(bubble, role, content) {
   if (!bubble) return;
   if (role === 'assistant') {
@@ -501,6 +503,8 @@ checkAppStatus();
 </script>
 </body>
 </html>
+
+
 
 
 
