@@ -720,6 +720,34 @@ class Orchestrator:
                             data={},
                         )
                     break
+
+                # Short-circuit: if a single agent-tool returned a complete response,
+                # use it directly as the final answer — skip the extra LLM re-summary.
+                if (
+                    len(tool_calls) == 1
+                    and self._is_agent_tool(tool_calls[0].name)
+                    and isinstance(results[0], AgentToolResult)
+                    and results[0].completed
+                ):
+                    agent_text = results[0].result_text
+                    logger.info(
+                        f"[ReAct] turn={turn} agent_passthrough "
+                        f"({len(agent_text)} chars from {tool_calls[0].name})"
+                    )
+                    final_response = agent_text
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_START,
+                        data={"turn": turn},
+                    )
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_CHUNK,
+                        data={"chunk": agent_text},
+                    )
+                    yield AgentEvent(
+                        type=EventType.MESSAGE_END,
+                        data={},
+                    )
+                    break
         else:
             # max_turns reached: ask LLM for summary without tools
             messages.append({

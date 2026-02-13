@@ -15,10 +15,10 @@
     .typing-dot { animation: pulse-dot 1.4s infinite; }
     .typing-dot:nth-child(2) { animation-delay: 0.2s; }
     .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-    .md-render p { margin: 0 0 0.5rem 0; }
-    .md-render ul, .md-render ol { margin: 0.25rem 0 0.5rem 1.25rem; }
+    .md-render p { margin: 0 0 0.2rem 0; }
+    .md-render ul, .md-render ol { margin: 0.1rem 0 0.25rem 1.1rem; }
     .md-render code { background: #f3f4f6; padding: 0.05rem 0.3rem; border-radius: 0.25rem; font-size: 0.9em; }
-    .md-render pre { background: #111827; color: #f9fafb; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.5rem 0; }
+    .md-render pre { background: #111827; color: #f9fafb; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.25rem 0; }
     .md-render pre code { background: transparent; padding: 0; }
     .md-render a { color: #2563eb; text-decoration: underline; }
   </style>
@@ -459,14 +459,15 @@ function escapeHtml(str) {
 
 function renderMarkdown(content) {
   const source = String(content || '');
+  const normalized = source`r`n    .replace(/\r\n/g, "\n")`r`n    .replace(/\n{2,}/g, "\n")`r`n    .trim();
   if (window.marked && typeof window.marked.parse === 'function') {
-    const html = window.marked.parse(source, { gfm: true, breaks: true });
+    const html = window.marked.parse(normalized, { gfm: true, breaks: false });
     if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
       return window.DOMPurify.sanitize(html);
     }
     return html;
   }
-  return escapeHtml(source).replace(/\n/g, '<br>');
+  return escapeHtml(normalized).replace(/\n/g, "<br>");
 }
 
 function setBubbleContent(bubble, role, content) {
@@ -500,6 +501,9 @@ checkAppStatus();
 </script>
 </body>
 </html>
+
+
+
 
 
 

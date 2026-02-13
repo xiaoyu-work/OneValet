@@ -1,4 +1,4 @@
-"""
+﻿"""
 DomainAgent - Base class for domain-specific agents with internal ReAct loops.
 
 Each DomainAgent groups related API tools under a single agent that the orchestrator
@@ -13,8 +13,8 @@ Usage:
     from onevalet import valet
     from onevalet.agents.domain_agent import DomainAgent, DomainTool
 
-    @valet(capabilities=["travel"])
-    class TravelAgent(DomainAgent):
+    @valet(capabilities=["travel_planning"])
+    class TripPlannerAgent(DomainAgent):
         '''Plan travel, search flights, hotels, and weather.'''
 
         domain_system_prompt = "You are a travel planning assistant..."
@@ -503,3 +503,4 @@ class DomainAgent(StandardAgent):
                 for tc in response.tool_calls
             ]
         return msg
+
