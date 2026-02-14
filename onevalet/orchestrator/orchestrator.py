@@ -1518,13 +1518,28 @@ class Orchestrator:
         user_message: str,
         tool_schemas: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        """Plan tool policy dynamically with a router LLM call (no hardcoded intent map)."""
+        """Plan tool policy dynamically with a router LLM call (no hardcoded intent map).
+
+        The router sees ALL agents (Tier 1 + Tier 2) for routing decisions.
+        If it picks a Tier 2 agent, the selected schema is automatically
+        mapped to delegate_to_agent so the ReAct loop can invoke it.
+        """
         tool_names = [
             self._tool_name_from_schema(schema)
             for schema in tool_schemas
             if self._tool_name_from_schema(schema)
         ]
-        if not tool_names:
+
+        # Build mapping of Tier 2 agent names for routing
+        tier2_schemas = getattr(self, "_tier2_agent_schemas", [])
+        tier2_names = {
+            self._tool_name_from_schema(s)
+            for s in tier2_schemas
+            if self._tool_name_from_schema(s)
+        }
+        all_known_names = set(tool_names) | tier2_names
+
+        if not all_known_names:
             return {
                 "intent": "general",
                 "must_use_tools": False,
@@ -1541,8 +1556,15 @@ class Orchestrator:
             "retry_with_required_on_empty": False,
         }
 
+        # Show ALL tools/agents (including Tier 2) to the router
         tool_lines = []
         for schema in tool_schemas:
+            name = self._tool_name_from_schema(schema)
+            if not name or name == "delegate_to_agent":
+                continue
+            desc = schema.get("function", {}).get("description", "")
+            tool_lines.append(f"- {name}: {desc}")
+        for schema in tier2_schemas:
             name = self._tool_name_from_schema(schema)
             if not name:
                 continue
@@ -1574,7 +1596,7 @@ class Orchestrator:
         selected_names = [
             str(name)
             for name in selected_names_raw
-            if isinstance(name, str) and name in tool_names
+            if isinstance(name, str) and name in all_known_names
         ]
 
         must_use_tools = bool(router_json.get("must_use_tools"))
@@ -1592,15 +1614,30 @@ class Orchestrator:
         force_first_tool = router_json.get("force_first_tool")
         first_turn_tool_choice: Any = "auto"
 
-        if isinstance(force_first_tool, str) and force_first_tool in tool_names:
-            selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
-            first_turn_tool_choice = {
-                "type": "function",
-                "function": {"name": force_first_tool},
-            }
+        if isinstance(force_first_tool, str) and force_first_tool in all_known_names:
+            # If router picked a Tier 2 agent, route via delegate_to_agent
+            if force_first_tool in tier2_names:
+                selected_schemas = self._filter_tool_schemas(tool_schemas, ["delegate_to_agent"])
+                first_turn_tool_choice = {
+                    "type": "function",
+                    "function": {"name": "delegate_to_agent"},
+                }
+            else:
+                selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
+                first_turn_tool_choice = {
+                    "type": "function",
+                    "function": {"name": force_first_tool},
+                }
             must_use_tools = True
         elif selected_names:
-            selected_schemas = self._filter_tool_schemas(tool_schemas, selected_names)
+            # Map any Tier 2 names to delegate_to_agent
+            mapped_names = []
+            for n in selected_names:
+                if n in tier2_names:
+                    mapped_names.append("delegate_to_agent")
+                else:
+                    mapped_names.append(n)
+            selected_schemas = self._filter_tool_schemas(tool_schemas, mapped_names)
             if must_use_tools:
                 first_turn_tool_choice = "required"
         elif must_use_tools:
