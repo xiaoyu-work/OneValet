@@ -19,6 +19,7 @@ class ApprovalRequest:
     """Structured approval request per design doc section 13.2."""
     agent_name: str
     action_summary: str
+    risk_level: str = "write"  # "read", "write", "destructive"
     details: Dict[str, Any] = field(default_factory=dict)
     options: List[str] = field(default_factory=lambda: ["approve", "edit", "cancel"])
     timeout_minutes: int = 30
@@ -46,9 +47,17 @@ def build_approval_request(agent) -> ApprovalRequest:
     if hasattr(agent, "collected_fields"):
         details = dict(agent.collected_fields)
 
+    # Extract risk_level from agent's pending tool call if available
+    risk_level = "write"
+    if hasattr(agent, "_pending_tool_call") and agent._pending_tool_call:
+        _, tool, _ = agent._pending_tool_call
+        if hasattr(tool, "risk_level"):
+            risk_level = tool.risk_level
+
     return ApprovalRequest(
         agent_name=agent_name,
         action_summary=action_summary,
+        risk_level=risk_level,
         details=details,
     )
 

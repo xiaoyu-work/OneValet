@@ -140,6 +140,7 @@ class SessionConfig:
         auto_restore_on_start: Whether to restore sessions on server start
         lazy_restore: Whether to restore sessions on first request
         redis_url: Redis connection URL (if using redis backend)
+        waiting_timeout_seconds: Timeout for WAITING agents before cleanup (default: 5 min)
     """
     enabled: bool = True
     backend: Literal["memory", "redis"] = "memory"
@@ -149,6 +150,7 @@ class SessionConfig:
     auto_restore_on_start: bool = True
     lazy_restore: bool = True
     redis_url: Optional[str] = None
+    waiting_timeout_seconds: int = 300  # 5 minutes default for WAITING agents
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionConfig":
@@ -162,6 +164,7 @@ class SessionConfig:
             auto_restore_on_start=data.get("auto_restore_on_start", True),
             lazy_restore=data.get("lazy_restore", True),
             redis_url=data.get("redis_url"),
+            waiting_timeout_seconds=data.get("waiting_timeout_seconds", 300),
         )
 
 

@@ -256,8 +256,9 @@ class AgentPoolManager:
         self._agents: Dict[str, Dict[str, "StandardAgent"]] = {}
         self._lock = asyncio.Lock()
 
-        # Background task for auto-backup
+        # Background tasks
         self._backup_task: Optional[asyncio.Task] = None
+        self._cleanup_task: Optional[asyncio.Task] = None
 
     async def add_agent(
         self,
@@ -508,6 +509,91 @@ class AgentPoolManager:
         logger.info(f"Restored {total} agents for {len(tenants)} tenants")
         return total
 
+    async def cleanup_timed_out_agents(self, timeout_seconds: int = 300) -> List[str]:
+        """
+        Clean up agents stuck in WAITING states beyond the timeout.
+
+        Args:
+            timeout_seconds: Max seconds an agent can remain in WAITING state
+
+        Returns:
+            List of timed-out agent IDs
+        """
+        now = datetime.now()
+        timed_out_ids: List[str] = []
+
+        # Snapshot agents under the lock, then release before doing I/O
+        async with self._lock:
+            snapshot = [
+                (tenant_id, agent_id, agent)
+                for tenant_id, agents in self._agents.items()
+                for agent_id, agent in agents.items()
+            ]
+
+        for tenant_id, agent_id, agent in snapshot:
+            status_value = agent.status.value if hasattr(agent.status, 'value') else str(agent.status)
+            if status_value not in ("waiting_for_input", "waiting_for_approval"):
+                continue
+
+            elapsed = (now - agent.last_active).total_seconds()
+            if elapsed > timeout_seconds:
+                logger.warning(
+                    f"Agent {agent_id} timed out after {elapsed:.0f}s in {status_value} "
+                    f"(tenant={tenant_id}, timeout={timeout_seconds}s)"
+                )
+                try:
+                    from ..result import AgentStatus
+                    agent.transition_to(AgentStatus.ERROR)
+                    agent.error_message = f"Timed out after {elapsed:.0f}s in {status_value}"
+                except Exception:
+                    pass
+                await self.remove_agent(tenant_id, agent_id)
+                timed_out_ids.append(agent_id)
+
+        if timed_out_ids:
+            logger.info(f"Cleaned up {len(timed_out_ids)} timed-out agents: {timed_out_ids}")
+
+        return timed_out_ids
+
+    async def get_waiting_agent_for_session(
+        self,
+        tenant_id: str,
+        session_id: Optional[str] = None,
+    ) -> Optional["StandardAgent"]:
+        """
+        Get the WAITING agent bound to a specific session.
+
+        This provides deterministic session_id -> agent routing for
+        agents in WAITING_FOR_INPUT or WAITING_FOR_APPROVAL states.
+
+        Args:
+            tenant_id: Tenant identifier
+            session_id: Session identifier (stored in agent.context or agent.metadata)
+
+        Returns:
+            StandardAgent in a WAITING state for the session, or None
+        """
+        async with self._lock:
+            agents = self._agents.get(tenant_id, {})
+            for agent in agents.values():
+                status_value = agent.status.value if hasattr(agent.status, 'value') else str(agent.status)
+                if status_value not in ("waiting_for_input", "waiting_for_approval"):
+                    continue
+
+                if session_id is None:
+                    # No session filter - return first waiting agent
+                    return agent
+
+                # Check agent.context and agent.metadata for session_id match
+                agent_session = (
+                    getattr(agent, 'context', {}).get('session_id')
+                    or getattr(agent, 'metadata', {}).get('session_id')
+                )
+                if agent_session == session_id:
+                    return agent
+
+        return None
+
     async def start_auto_backup(self) -> None:
         """Start background auto-backup task"""
         if self._backup_task is not None:
@@ -521,6 +607,22 @@ class AgentPoolManager:
         self._backup_task = asyncio.create_task(backup_loop())
         logger.info("Started auto-backup task")
 
+    async def start_cleanup_loop(self) -> None:
+        """Start background cleanup loop for timed-out WAITING agents."""
+        if self._cleanup_task is not None:
+            return
+
+        async def cleanup_loop():
+            while True:
+                await asyncio.sleep(60)  # check every minute
+                try:
+                    await self.cleanup_timed_out_agents(self.config.waiting_timeout_seconds)
+                except Exception as e:
+                    logger.error(f"Error in cleanup loop: {e}")
+
+        self._cleanup_task = asyncio.create_task(cleanup_loop())
+        logger.info("Started WAITING agent cleanup loop")
+
     async def stop_auto_backup(self) -> None:
         """Stop background auto-backup task"""
         if self._backup_task:
@@ -531,6 +633,17 @@ class AgentPoolManager:
                 pass
             self._backup_task = None
             logger.info("Stopped auto-backup task")
+
+    async def stop_cleanup_loop(self) -> None:
+        """Stop background cleanup loop."""
+        if self._cleanup_task:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+            logger.info("Stopped WAITING agent cleanup loop")
 
     async def _backup_all(self) -> None:
         """Backup all in-memory agents to storage"""
@@ -549,4 +662,5 @@ class AgentPoolManager:
     async def close(self) -> None:
         """Clean up resources"""
         await self.stop_auto_backup()
+        await self.stop_cleanup_loop()
         await self._backend.close()

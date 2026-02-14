@@ -71,6 +71,8 @@ from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
 from .prompts import DEFAULT_SYSTEM_PROMPT
+from .audit_logger import AuditLogger
+from .tool_policy import ToolPolicyFilter
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -186,6 +188,7 @@ class Orchestrator:
         guardrails_checker: Optional[Any] = None,
         rate_limiter: Optional[Callable] = None,
         post_process_hooks: Optional[List[Callable]] = None,
+        tool_policy_filter: Optional[ToolPolicyFilter] = None,
     ):
         """
         Initialize Orchestrator.
@@ -244,6 +247,10 @@ class Orchestrator:
         self.guardrails_checker = guardrails_checker
         self.rate_limiter = rate_limiter
         self._post_process_hooks: List[Callable] = list(post_process_hooks or [])
+        self._tool_policy_filter = tool_policy_filter
+
+        # Audit logging
+        self._audit = AuditLogger()
 
         # State
         self._initialized = False
@@ -368,6 +375,13 @@ class Orchestrator:
         logger.info(
             f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
             f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
+        )
+        self._audit.log_policy_decision(
+            intent=policy["intent"],
+            must_use_tools=policy["must_use_tools"],
+            selected_tools=[self._tool_name_from_schema(s) or "" for s in selected_tool_schemas],
+            reason_code=str(policy.get("first_turn_tool_choice", "auto")),
+            tenant_id=tenant_id,
         )
 
         # Step 5: Build LLM messages
@@ -500,6 +514,13 @@ class Orchestrator:
             f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
             f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
         )
+        self._audit.log_policy_decision(
+            intent=policy["intent"],
+            must_use_tools=policy["must_use_tools"],
+            selected_tools=[self._tool_name_from_schema(s) or "" for s in selected_tool_schemas],
+            reason_code=str(policy.get("first_turn_tool_choice", "auto")),
+            tenant_id=tenant_id,
+        )
         messages = self._build_llm_messages(context, message)
 
         # Delegate to shared ReAct loop
@@ -614,6 +635,10 @@ class Orchestrator:
                     final_text = response.content or ""
                     final_response = final_text
                     logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
+                    self._audit.log_react_turn(
+                        turn=turn, tool_calls=[], final_answer=True,
+                        tenant_id=tenant_id,
+                    )
                     yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
                     yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_text})
                     yield AgentEvent(type=EventType.MESSAGE_END, data={})
@@ -681,6 +706,11 @@ class Orchestrator:
                                 "result_preview": error_text[:240],
                             },
                         )
+                        self._audit.log_tool_execution(
+                            tool_name=tc_name, args_summary=args_summary,
+                            success=False, duration_ms=tc_batch_duration,
+                            error=str(result), tenant_id=tenant_id,
+                        )
 
                     elif isinstance(result, AgentToolResult) and not result.completed:
                         logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
@@ -717,6 +747,11 @@ class Orchestrator:
                             type=EventType.STATE_CHANGE,
                             data={"agent_type": tc_name, "status": waiting_status},
                         )
+                        self._audit.log_tool_execution(
+                            tool_name=tc_name, args_summary=args_summary,
+                            success=True, duration_ms=tc_batch_duration,
+                            tenant_id=tenant_id,
+                        )
                         loop_broken = True
                         loop_broken_text = waiting_text
 
@@ -747,6 +782,19 @@ class Orchestrator:
                                 "tool_trace": tool_trace,
                             },
                         )
+                        self._audit.log_tool_execution(
+                            tool_name=tc_name, args_summary=args_summary,
+                            success=True, duration_ms=tc_batch_duration,
+                            tenant_id=tenant_id,
+                        )
+
+                # Audit: log turn summary
+                self._audit.log_react_turn(
+                    turn=turn,
+                    tool_calls=tool_names,
+                    final_answer=False,
+                    tenant_id=tenant_id,
+                )
 
                 if loop_broken:
                     final_response = loop_broken_text or ""
@@ -930,8 +978,11 @@ class Orchestrator:
         tool_name = tool_call.name
         try:
             args = tool_call.arguments if isinstance(tool_call.arguments, dict) else json.loads(tool_call.arguments)
-        except (json.JSONDecodeError, TypeError):
-            args = {}
+        except (json.JSONDecodeError, TypeError) as e:
+            return (
+                f"Error: Failed to parse arguments for tool '{tool_name}': {e}. "
+                "Please retry with valid JSON arguments."
+            )
 
         if self._is_agent_tool(tool_name):
             # Agent-Tool execution
@@ -1060,6 +1111,14 @@ class Orchestrator:
                 key=lambda a: getattr(a, "last_active", 0) or 0,
             )
 
+        reason = "explicit_target" if target_agent_id else "most_recent"
+        self._audit.log_route_decision(
+            tenant_id=tenant_id,
+            target_agent_id=agent.agent_id,
+            waiting_agents_count=len(waiting_agents),
+            reason=reason,
+        )
+
         try:
             msg = Message(
                 name=metadata.get("sender_name", ""),
@@ -1163,6 +1222,10 @@ class Orchestrator:
         # Agent-tools
         agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
         schemas.extend(agent_tool_schemas)
+
+        # Apply tool policy filter if configured
+        if self._tool_policy_filter:
+            schemas = self._tool_policy_filter.filter_tools(schemas)
 
         logger.info(f"[Tools] {len(schemas)} total available")
 

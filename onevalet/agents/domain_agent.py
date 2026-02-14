@@ -72,6 +72,7 @@ class DomainTool:
     parameters: Dict[str, Any]
     executor: Callable
     needs_approval: bool = False
+    risk_level: str = "read"  # "read", "write", "destructive"
     get_preview: Optional[Callable] = None
 
     def to_openai_schema(self) -> Dict[str, Any]:
@@ -208,9 +209,32 @@ class DomainAgent(StandardAgent):
                 )
                 continue
 
-            args = tc.arguments if isinstance(tc.arguments, dict) else {}
+            if isinstance(tc.arguments, dict):
+                args = tc.arguments
+            elif isinstance(tc.arguments, str):
+                try:
+                    args = json.loads(tc.arguments)
+                except (json.JSONDecodeError, ValueError) as e:
+                    error_text = (
+                        f"Error: Failed to parse arguments for tool '{tc.name}': {e}. "
+                        "Please retry with valid JSON arguments."
+                    )
+                    self._tool_trace.append(
+                        {"tool": tc.name, "status": "error", "summary": error_text[:240]}
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": error_text,
+                        }
+                    )
+                    continue
+            else:
+                args = {}
 
-            if tool.needs_approval:
+            requires_approval = tool.needs_approval or tool.risk_level in ("write", "destructive")
+            if requires_approval:
                 if tool.get_preview:
                     try:
                         preview = await tool.get_preview(args, self._build_tool_context())
@@ -219,6 +243,8 @@ class DomainAgent(StandardAgent):
                         preview = f"About to execute: {tc.name}({json.dumps(args, ensure_ascii=False)})"
                 else:
                     preview = f"About to execute: {tc.name}({json.dumps(args, ensure_ascii=False)})"
+                if tool.risk_level == "destructive":
+                    preview = f"[DESTRUCTIVE] {preview}"
 
                 self._pending_tool_call = (tc, tool, args)
                 self._remaining_tool_calls = list(tool_calls[i + 1 :])
