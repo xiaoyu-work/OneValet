@@ -39,9 +39,16 @@ class BaseAgent:
         response = await agent.reply(Message(...))
     """
 
-    # Class-level hooks (apply to all instances)
+    # Class-level hooks (apply to all instances of this specific class)
+    # Each subclass gets its own copy via __init_subclass__.
     _class_pre_reply_hooks: Dict[str, Callable] = OrderedDict()
     _class_post_reply_hooks: Dict[str, Callable] = OrderedDict()
+
+    def __init_subclass__(cls, **kwargs):
+        """Give each subclass its own hook dicts so they don't share state."""
+        super().__init_subclass__(**kwargs)
+        cls._class_pre_reply_hooks = OrderedDict(cls._class_pre_reply_hooks)
+        cls._class_post_reply_hooks = OrderedDict(cls._class_post_reply_hooks)
 
     def __init__(self, name: Optional[str] = None, **kwargs):
         """

@@ -91,13 +91,6 @@ class DomainAgent(StandardAgent):
     domain_system_prompt: str = ""
     domain_tools: List[DomainTool] = []
     max_domain_turns: int = 5
-    domain_router_prompt: str = (
-        "You are a domain tool routing policy engine. Return strict JSON only: "
-        "{\"must_use_tools\": boolean, \"force_first_tool\": string|null, \"reason_code\": string}. "
-        "Set must_use_tools=true when user intent needs tool data/action. "
-        "Set must_use_tools=false ONLY for clear non-tool scenarios: casual_chat, creative_writing, "
-        "language_translation, text_rewrite, pure_math."
-    )
 
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop."""
@@ -145,12 +138,6 @@ class DomainAgent(StandardAgent):
         """Core mini ReAct loop with domain tools."""
         tool_schemas = [t.to_openai_schema() for t in self.domain_tools]
         messages = self._react_messages
-        instruction = ""
-        for m in messages:
-            if m.get("role") == "user":
-                instruction = str(m.get("content", "") or "")
-                break
-        policy = await self._plan_first_turn_tool_policy(instruction, tool_schemas)
 
         if self._remaining_tool_calls:
             result = await self._execute_tool_calls(self._remaining_tool_calls, messages)
@@ -160,7 +147,9 @@ class DomainAgent(StandardAgent):
 
         for turn in range(self._react_turn, self.max_domain_turns):
             self._react_turn = turn + 1
-            tool_choice = policy["first_turn_tool_choice"] if turn == 0 else "auto"
+            # First turn: force tool use since orchestrator already routed here.
+            # Subsequent turns: let LLM decide freely.
+            tool_choice = "required" if turn == 0 and tool_schemas else "auto"
             response: LLMResponse = await self.llm_client.chat_completion(
                 messages=messages,
                 tools=tool_schemas if tool_schemas else None,
@@ -168,26 +157,14 @@ class DomainAgent(StandardAgent):
             )
 
             if not response.has_tool_calls:
-                if (
-                    turn == 0
-                    and policy["retry_with_required_on_empty"]
-                    and tool_schemas
-                    and tool_choice != "required"
-                ):
-                    response = await self.llm_client.chat_completion(
-                        messages=messages,
-                        tools=tool_schemas,
-                        tool_choice="required",
-                    )
-                if not response.has_tool_calls:
-                    return self.make_result(
-                        status=AgentStatus.COMPLETED,
-                        raw_message=response.content or "",
-                        metadata={
-                            "tool_trace": list(self._tool_trace),
-                            "tool_calls_count": len(self._tool_trace),
-                        },
-                    )
+                return self.make_result(
+                    status=AgentStatus.COMPLETED,
+                    raw_message=response.content or "",
+                    metadata={
+                        "tool_trace": list(self._tool_trace),
+                        "tool_calls_count": len(self._tool_trace),
+                    },
+                )
 
             messages.append(self._format_assistant_msg(response))
             result = await self._execute_tool_calls(response.tool_calls, messages)
@@ -386,100 +363,6 @@ class DomainAgent(StandardAgent):
             user_profile=self.context_hints.get("user_profile") if self.context_hints else None,
             context_hints=self.context_hints,
         )
-
-    @staticmethod
-    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-        raw = (text or "").strip()
-        if not raw:
-            return None
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
-
-    async def _plan_first_turn_tool_policy(
-        self,
-        instruction: str,
-        tool_schemas: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Plan first-turn tool policy with a lightweight router call."""
-        if not tool_schemas:
-            return {
-                "first_turn_tool_choice": "auto",
-                "retry_with_required_on_empty": False,
-            }
-
-        tool_names: List[str] = []
-        tool_lines: List[str] = []
-        for schema in tool_schemas:
-            function_data = schema.get("function", {}) if isinstance(schema, dict) else {}
-            name = function_data.get("name")
-            if not isinstance(name, str):
-                continue
-            desc = function_data.get("description", "")
-            tool_names.append(name)
-            tool_lines.append(f"- {name}: {desc}")
-
-        if not tool_names:
-            return {
-                "first_turn_tool_choice": "auto",
-                "retry_with_required_on_empty": False,
-            }
-
-        route_messages = [
-            {"role": "system", "content": self.domain_router_prompt},
-            {
-                "role": "user",
-                "content": (
-                    f"User instruction:\n{instruction}\n\n"
-                    f"Available tools:\n" + "\n".join(tool_lines) + "\n\n"
-                    "Return JSON only."
-                ),
-            },
-        ]
-        try:
-            route_response: LLMResponse = await self.llm_client.chat_completion(messages=route_messages)
-            route_json = self._extract_json_object(route_response.content or "")
-        except Exception:
-            route_json = None
-
-        if not route_json:
-            return {
-                "first_turn_tool_choice": "auto",
-                "retry_with_required_on_empty": False,
-            }
-
-        must_use_tools = bool(route_json.get("must_use_tools"))
-        reason_code = str(route_json.get("reason_code", "") or "").strip().lower()
-        no_tool_reasons = {
-            "casual_chat",
-            "creative_writing",
-            "language_translation",
-            "text_rewrite",
-            "pure_math",
-        }
-        if not must_use_tools and reason_code not in no_tool_reasons:
-            must_use_tools = True
-
-        force_first_tool = route_json.get("force_first_tool")
-        if isinstance(force_first_tool, str) and force_first_tool in tool_names:
-            return {
-                "first_turn_tool_choice": {
-                    "type": "function",
-                    "function": {"name": force_first_tool},
-                },
-                "retry_with_required_on_empty": True,
-            }
-        if must_use_tools:
-            return {
-                "first_turn_tool_choice": "required",
-                "retry_with_required_on_empty": True,
-            }
-        return {
-            "first_turn_tool_choice": "auto",
-            "retry_with_required_on_empty": False,
-        }
 
     @staticmethod
     def _format_assistant_msg(response: LLMResponse) -> Dict[str, Any]:

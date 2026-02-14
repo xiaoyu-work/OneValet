@@ -71,12 +71,16 @@ async def execute_agent_tool(
         logger.info(f"[AgentTool] {agent_type} status={result.status.value}")
     except Exception as e:
         logger.error(f"Agent execution failed for {agent_type}: {e}", exc_info=True)
+        await orchestrator.agent_pool.remove_agent(tenant_id, agent.agent_id)
         return AgentToolResult(
             completed=True,
             result_text=f"Error executing {agent_type}: {e}",
         )
 
     if result.status == AgentStatus.COMPLETED:
+        # Agent completed — remove from pool to prevent memory leak.
+        # It was added during create_agent() but is no longer needed.
+        await orchestrator.agent_pool.remove_agent(tenant_id, agent.agent_id)
         completed_meta = dict(result.metadata or {})
         completed_meta.setdefault("agent_status", AgentStatus.COMPLETED.value)
         return AgentToolResult(
@@ -111,6 +115,7 @@ async def execute_agent_tool(
         )
 
     if result.status == AgentStatus.ERROR:
+        await orchestrator.agent_pool.remove_agent(tenant_id, agent.agent_id)
         error_msg = result.error_message or result.raw_message or "Unknown error"
         error_meta = dict(result.metadata or {})
         error_meta.setdefault("agent_status", AgentStatus.ERROR.value)
@@ -120,6 +125,8 @@ async def execute_agent_tool(
             metadata=error_meta,
         )
 
+    # Any other terminal status — clean up from pool
+    await orchestrator.agent_pool.remove_agent(tenant_id, agent.agent_id)
     other_meta = dict(result.metadata or {})
     other_meta.setdefault("agent_status", result.status.value)
     return AgentToolResult(

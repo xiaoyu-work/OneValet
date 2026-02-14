@@ -65,7 +65,7 @@ from .models import (
     callback_handler,
 )
 from .pool import AgentPoolManager
-from .react_config import ReactLoopConfig, ReactLoopResult, ToolCallRecord, TokenUsage
+from .react_config import ReactLoopConfig, ToolCallRecord, TokenUsage
 from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
@@ -98,7 +98,7 @@ class Orchestrator:
     5. post_process() - Post-processing before response
 
     ReAct Loop:
-        The core react_loop() method implements the Reasoning + Acting pattern:
+        The _react_loop_events() method implements the Reasoning + Acting pattern:
         - LLM reasons about user request and decides which tools to call
         - Tools (regular + agent-tools) are executed concurrently
         - Results are fed back to the LLM for the next reasoning step
@@ -330,7 +330,7 @@ class Orchestrator:
         3. _check_pending_agents() - check for WAITING agents in pool
         4. _build_llm_messages() - system prompt + history + user message
         5. _build_tool_schemas() - merge regular Tools + Agent-Tools
-        6. react_loop() - ReAct reasoning loop
+        6. _react_loop_events() - ReAct reasoning loop
         7. post_process() - final processing
 
         Args:
@@ -372,28 +372,30 @@ class Orchestrator:
         # Step 5: Build LLM messages
         messages = self._build_llm_messages(context, message)
 
-        # Step 6: Run ReAct loop
-        loop_result = await self.react_loop(
+        # Step 6: Run ReAct loop (consume events silently)
+        exec_data: Dict[str, Any] = {}
+        async for event in self._react_loop_events(
             messages,
             selected_tool_schemas,
             tenant_id,
             first_turn_tool_choice=policy["first_turn_tool_choice"],
             retry_with_required_on_empty=policy["retry_with_required_on_empty"],
-        )
+        ):
+            if event.type == EventType.EXECUTION_END:
+                exec_data = event.data
 
-        # Step 7: Map ReactLoopResult -> AgentResult
+        # Step 7: Map loop results -> AgentResult
+        final_response = exec_data.get("final_response", "")
+        pending_approvals = exec_data.get("pending_approvals", [])
         result = AgentResult(
             agent_type=self.__class__.__name__,
             status=AgentStatus.COMPLETED,
-            raw_message=loop_result.response,
+            raw_message=final_response,
             metadata={
-                "react_turns": loop_result.turns,
-                "token_usage": {
-                    "input_tokens": loop_result.token_usage.input_tokens,
-                    "output_tokens": loop_result.token_usage.output_tokens,
-                },
-                "duration_ms": loop_result.duration_ms,
-                "tool_calls_count": len(loop_result.tool_calls),
+                "react_turns": exec_data.get("turns", 0),
+                "token_usage": exec_data.get("token_usage", {}),
+                "duration_ms": exec_data.get("duration_ms", 0),
+                "tool_calls_count": exec_data.get("tool_calls_count", 0),
                 "tool_policy": {
                     "intent": policy["intent"],
                     "must_use_tools": policy["must_use_tools"],
@@ -404,7 +406,7 @@ class Orchestrator:
             },
         )
 
-        if loop_result.pending_approvals:
+        if pending_approvals:
             result.status = AgentStatus.WAITING_FOR_APPROVAL
             result.metadata["pending_approvals"] = [
                 {
@@ -413,7 +415,7 @@ class Orchestrator:
                     "details": a.details,
                     "options": a.options,
                 }
-                for a in loop_result.pending_approvals
+                for a in pending_approvals
             ]
 
         # Step 8: Post-process
@@ -462,20 +464,24 @@ class Orchestrator:
         # Check pending agents
         agent_result = await self._check_pending_agents(tenant_id, message, context)
         if agent_result is not None:
-            agent_result = await self.post_process(agent_result, context)
-            yield AgentEvent(
-                type=EventType.MESSAGE_START,
-                data={"agent_type": agent_result.agent_type},
-            )
-            yield AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": agent_result.raw_message or ""},
-            )
-            yield AgentEvent(
-                type=EventType.MESSAGE_END,
-                data={},
-            )
-            return
+            # Agent still waiting -> return prompt directly, don't enter ReAct
+            if agent_result.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
+                agent_result = await self.post_process(agent_result, context)
+                yield AgentEvent(
+                    type=EventType.MESSAGE_START,
+                    data={"agent_type": agent_result.agent_type},
+                )
+                yield AgentEvent(
+                    type=EventType.MESSAGE_CHUNK,
+                    data={"chunk": agent_result.raw_message or ""},
+                )
+                yield AgentEvent(
+                    type=EventType.MESSAGE_END,
+                    data={},
+                )
+                return
+            # Agent completed -> feed result into ReAct loop as context
+            context["pending_agent_result"] = agent_result
 
         # Build tool schemas
         tool_schemas = self._build_tool_schemas()
@@ -487,307 +493,16 @@ class Orchestrator:
         )
         messages = self._build_llm_messages(context, message)
 
-        # Yield execution start
-        yield AgentEvent(
-            type=EventType.EXECUTION_START,
-            data={"tenant_id": tenant_id},
-        )
-
-        # Run ReAct loop with streaming events
-        start_time = time.monotonic()
-        turn = 0
-        all_tool_records: List[ToolCallRecord] = []
-        total_usage = TokenUsage()
-        pending_approvals = []
+        # Delegate to shared ReAct loop
         final_response = ""
-
-        logger.info(f"[ReAct] tenant={tenant_id} message={message[:80]!r}")
-
-        for turn in range(1, self._react_config.max_turns + 1):
-            # Context guard
-            messages = self._context_manager.trim_if_needed(messages)
-
-            # LLM call
-            try:
-                first_turn_choice = policy["first_turn_tool_choice"] if turn == 1 else "auto"
-                response = await self._llm_call_with_retry(
-                    messages,
-                    selected_tool_schemas,
-                    tool_choice=first_turn_choice,
-                )
-            except Exception as e:
-                yield AgentEvent(
-                    type=EventType.ERROR,
-                    data={"error": str(e), "error_type": type(e).__name__},
-                )
-                return
-
-            # Accumulate token usage
-            usage = getattr(response, "usage", None)
-            if usage:
-                total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
-                total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
-
-            tool_calls = response.tool_calls
-
-            if not tool_calls:
-                if (
-                    turn == 1
-                    and policy["retry_with_required_on_empty"]
-                    and selected_tool_schemas
-                    and policy["first_turn_tool_choice"] != "required"
-                ):
-                    response = await self._llm_call_with_retry(
-                        messages,
-                        selected_tool_schemas,
-                        tool_choice="required",
-                    )
-                    usage_retry = getattr(response, "usage", None)
-                    if usage_retry:
-                        total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
-                        total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
-                    tool_calls = response.tool_calls
-
-                if not tool_calls:
-                    # Final answer
-                    final_text = response.content or ""
-                    final_response = final_text
-                    logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_START,
-                        data={"turn": turn},
-                    )
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_CHUNK,
-                        data={"chunk": final_text},
-                    )
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_END,
-                        data={},
-                    )
-                    break
-            if tool_calls:
-                # Append assistant message with tool_calls
-                messages.append(self._assistant_message_from_response(response))
-
-                # Execute all tool calls concurrently
-                tool_names = [tc.name for tc in tool_calls]
-                logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
-                loop_broken = False
-                loop_broken_text = None
-                for tc in tool_calls:
-                    yield AgentEvent(
-                        type=EventType.TOOL_CALL_START,
-                        data={
-                            "tool_name": tc.name,
-                            "call_id": tc.id,
-                        },
-                    )
-
-                results = await asyncio.gather(
-                    *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
-                    return_exceptions=True,
-                )
-
-                for tc, result in zip(tool_calls, results):
-                    tc_name = tc.name
-                    is_agent = self._is_agent_tool(tc_name)
-                    kind = "agent" if is_agent else "tool"
-
-                    if isinstance(result, BaseException):
-                        logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
-                        error_text = f"Error: {result}"
-                        messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={}, success=False,
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": kind,
-                                "success": False,
-                                "error": str(result),
-                                "result_preview": error_text[:240],
-                            },
-                        )
-
-                    elif (
-                        isinstance(result, AgentToolResult)
-                        and isinstance(result.metadata, dict)
-                        and result.metadata.get("requires_user_input")
-                    ):
-                        logger.info(f"[ReAct]   agent={tc_name} FORCED_WAIT_BY_METADATA")
-                        waiting_text = result.result_text or "More information is required."
-                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={}, result_status="WAITING_FOR_INPUT",
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": "agent",
-                                "success": True,
-                                "waiting": True,
-                                "status": "WAITING_FOR_INPUT",
-                                "result_preview": waiting_text[:240],
-                                "tool_trace": result.metadata.get("tool_trace") or [],
-                            },
-                        )
-                        loop_broken = True
-                        loop_broken_text = waiting_text
-
-                    elif isinstance(result, AgentToolResult) and not result.completed:
-                        logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
-                        if result.agent:
-                            await self.agent_pool.add_agent(result.agent)
-                        if result.approval_request:
-                            pending_approvals.append(result.approval_request)
-                        waiting_text = result.result_text or "Agent is waiting for input."
-                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                        waiting_status = (
-                            "WAITING_FOR_APPROVAL" if result.approval_request
-                            else "WAITING_FOR_INPUT"
-                        )
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={}, result_status=waiting_status,
-                        ))
-                        tool_trace = []
-                        if isinstance(result.metadata, dict):
-                            tool_trace = result.metadata.get("tool_trace") or []
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": "agent",
-                                "success": True,
-                                "waiting": True,
-                                "status": waiting_status,
-                                "result_preview": waiting_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                        yield AgentEvent(
-                            type=EventType.STATE_CHANGE,
-                            data={"agent_type": tc_name, "status": waiting_status},
-                        )
-                        loop_broken = True
-                        loop_broken_text = waiting_text
-
-                    else:
-                        if isinstance(result, AgentToolResult):
-                            result_text = result.result_text
-                            metadata = result.metadata if isinstance(result.metadata, dict) else {}
-                            tool_trace = metadata.get("tool_trace") or []
-                        else:
-                            result_text = str(result) if result is not None else ""
-                            tool_trace = []
-                        result_text = self._context_manager.truncate_tool_result(result_text)
-                        logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
-                        messages.append(self._build_tool_result_message(tc.id, result_text))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary={}, result_chars=len(result_text),
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": kind,
-                                "success": True,
-                                "result_preview": result_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                if loop_broken:
-                    final_response = loop_broken_text or ""
-                    # Yield the waiting agent's prompt to the user
-                    if loop_broken_text:
-                        yield AgentEvent(
-                            type=EventType.MESSAGE_START,
-                            data={"turn": turn},
-                        )
-                        yield AgentEvent(
-                            type=EventType.MESSAGE_CHUNK,
-                            data={"chunk": loop_broken_text},
-                        )
-                        yield AgentEvent(
-                            type=EventType.MESSAGE_END,
-                            data={},
-                        )
-                    break
-
-                # Short-circuit: if a single agent-tool returned a complete response,
-                # use it directly as the final answer — skip the extra LLM re-summary.
-                if (
-                    len(tool_calls) == 1
-                    and self._is_agent_tool(tool_calls[0].name)
-                    and isinstance(results[0], AgentToolResult)
-                    and results[0].completed
-                ):
-                    agent_text = results[0].result_text
-                    logger.info(
-                        f"[ReAct] turn={turn} agent_passthrough "
-                        f"({len(agent_text)} chars from {tool_calls[0].name})"
-                    )
-                    final_response = agent_text
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_START,
-                        data={"turn": turn},
-                    )
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_CHUNK,
-                        data={"chunk": agent_text},
-                    )
-                    yield AgentEvent(
-                        type=EventType.MESSAGE_END,
-                        data={},
-                    )
-                    break
-        else:
-            # max_turns reached: ask LLM for summary without tools
-            messages.append({
-                "role": "user",
-                "content": (
-                    "You have used all available turns. Please provide your best "
-                    "final answer based on the information gathered so far."
-                ),
-            })
-            try:
-                response = await self._llm_call_with_retry(messages, tool_schemas=None)
-                final_text = response.content or ""
-            except Exception:
-                final_text = "I was unable to complete the request within the allowed turns."
-
-            final_response = final_text
-
-            yield AgentEvent(
-                type=EventType.MESSAGE_START,
-                data={"turn": turn},
-            )
-            yield AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": final_text},
-            )
-            yield AgentEvent(
-                type=EventType.MESSAGE_END,
-                data={},
-            )
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-
-        yield AgentEvent(
-            type=EventType.EXECUTION_END,
-            data={
-                "duration_ms": duration_ms,
-                "turns": turn,
-                "tool_calls_count": len(all_tool_records),
-            },
-        )
+        async for event in self._react_loop_events(
+            messages, selected_tool_schemas, tenant_id,
+            first_turn_tool_choice=policy["first_turn_tool_choice"],
+            retry_with_required_on_empty=policy["retry_with_required_on_empty"],
+        ):
+            if event.type == EventType.EXECUTION_END:
+                final_response = event.data.get("final_response", "")
+            yield event
 
         # Save conversation history to momex (background, non-blocking)
         session_id = context.get("session_id", tenant_id)
@@ -815,48 +530,54 @@ class Orchestrator:
     # REACT LOOP
     # ==========================================================================
 
-    async def react_loop(
+    async def _react_loop_events(
         self,
         messages: List[Dict[str, Any]],
         tool_schemas: List[Dict[str, Any]],
         tenant_id: str,
         first_turn_tool_choice: Any = "auto",
         retry_with_required_on_empty: bool = False,
-    ) -> ReactLoopResult:
-        """
-        Core ReAct (Reasoning + Acting) loop.
+    ) -> AsyncIterator[AgentEvent]:
+        """Unified ReAct loop implementation yielding streaming events.
 
-        Iterates up to max_turns times:
-        1. Trim context if needed
-        2. Call LLM with messages + tool schemas
-        3. If no tool_calls -> final answer, return
-        4. If tool_calls -> execute all concurrently
-        5. Append results to messages, continue
+        Both stream_message() and handle_message() delegate to this single
+        implementation, eliminating the previous code duplication between
+        the inline stream_message loop and react_loop().
 
-        Args:
-            messages: Initial LLM message list (system + history + user)
-            tool_schemas: Combined regular tool + agent-tool schemas
-            tenant_id: Tenant identifier for tool execution context
-
-        Returns:
-            ReactLoopResult with response, turns, tool records, token usage, etc.
+        The final EXECUTION_END event carries all metadata (final_response,
+        pending_approvals, token_usage, tool_calls records, etc.) so callers
+        can build AgentResult or persist to memory as needed.
         """
         start_time = time.monotonic()
+        turn = 0
         all_tool_records: List[ToolCallRecord] = []
         total_usage = TokenUsage()
         pending_approvals = []
         final_response = ""
-        turns_executed = 0
+
+        logger.info(f"[ReAct] tenant={tenant_id}")
+
+        yield AgentEvent(
+            type=EventType.EXECUTION_START,
+            data={"tenant_id": tenant_id},
+        )
 
         for turn in range(1, self._react_config.max_turns + 1):
-            turns_executed = turn
-
             # Context guard
             messages = self._context_manager.trim_if_needed(messages)
 
-            # LLM call with retry
-            tool_choice = first_turn_tool_choice if turn == 1 else "auto"
-            response = await self._llm_call_with_retry(messages, tool_schemas, tool_choice=tool_choice)
+            # LLM call
+            try:
+                tool_choice = first_turn_tool_choice if turn == 1 else "auto"
+                response = await self._llm_call_with_retry(
+                    messages, tool_schemas, tool_choice=tool_choice,
+                )
+            except Exception as e:
+                yield AgentEvent(
+                    type=EventType.ERROR,
+                    data={"error": str(e), "error_type": type(e).__name__},
+                )
+                return
 
             # Accumulate token usage
             usage = getattr(response, "usage", None)
@@ -866,7 +587,7 @@ class Orchestrator:
 
             tool_calls = response.tool_calls
 
-            # No tool calls -> final answer
+            # No tool calls: retry once if policy says so, else final answer
             if not tool_calls:
                 if (
                     turn == 1
@@ -874,122 +595,210 @@ class Orchestrator:
                     and tool_schemas
                     and first_turn_tool_choice != "required"
                 ):
-                    response = await self._llm_call_with_retry(messages, tool_schemas, tool_choice="required")
+                    response = await self._llm_call_with_retry(
+                        messages, tool_schemas, tool_choice="required",
+                    )
                     usage_retry = getattr(response, "usage", None)
                     if usage_retry:
                         total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
                         total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
                     tool_calls = response.tool_calls
 
-            if not tool_calls:
-                final_response = response.content or ""
-                break
+                if not tool_calls:
+                    final_text = response.content or ""
+                    final_response = final_text
+                    logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
+                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_text})
+                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                    break
 
-            # Append assistant message with tool_calls to conversation
-            messages.append(self._assistant_message_from_response(response))
-            tc_batch_start = time.monotonic()
-            results = await asyncio.gather(
-                *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
-                return_exceptions=True,
-            )
-            tc_batch_duration = int((time.monotonic() - tc_batch_start) * 1000)
+            if tool_calls:
+                # Append assistant message with tool_calls
+                messages.append(self._assistant_message_from_response(response))
 
-            # Capture token attribution for this turn's tool calls
-            turn_tokens = None
-            if usage:
-                turn_tokens = TokenUsage(
-                    input_tokens=getattr(usage, "prompt_tokens", 0),
-                    output_tokens=getattr(usage, "completion_tokens", 0),
+                tool_names = [tc.name for tc in tool_calls]
+                logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
+
+                # Yield tool call start events
+                for tc in tool_calls:
+                    yield AgentEvent(
+                        type=EventType.TOOL_CALL_START,
+                        data={"tool_name": tc.name, "call_id": tc.id},
+                    )
+
+                # Execute all tool calls concurrently
+                tc_batch_start = time.monotonic()
+                results = await asyncio.gather(
+                    *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
+                    return_exceptions=True,
                 )
+                tc_batch_duration = int((time.monotonic() - tc_batch_start) * 1000)
 
-            loop_broken = False
-            for tc, result in zip(tool_calls, results):
-                tc_name = tc.name
+                # Token attribution for this turn
+                turn_tokens = None
+                if usage:
+                    turn_tokens = TokenUsage(
+                        input_tokens=getattr(usage, "prompt_tokens", 0),
+                        output_tokens=getattr(usage, "completion_tokens", 0),
+                    )
 
-                try:
-                    args_summary = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
-                except (json.JSONDecodeError, TypeError):
-                    args_summary = {}
-                args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
+                loop_broken = False
+                loop_broken_text = None
 
-                if isinstance(result, BaseException):
-                    error_text = f"Error executing {tc_name}: {result}"
-                    messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
-                    all_tool_records.append(ToolCallRecord(
-                        name=tc_name,
-                        args_summary=args_summary,
-                        duration_ms=tc_batch_duration,
-                        success=False,
-                        result_chars=len(error_text),
-                        token_attribution=turn_tokens,
-                    ))
+                for tc, result in zip(tool_calls, results):
+                    tc_name = tc.name
+                    is_agent = self._is_agent_tool(tc_name)
+                    kind = "agent" if is_agent else "tool"
 
-                elif (
-                    isinstance(result, AgentToolResult)
-                    and isinstance(result.metadata, dict)
-                    and result.metadata.get("requires_user_input")
-                ):
-                    waiting_text = result.result_text or "More information is required."
-                    messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                    all_tool_records.append(ToolCallRecord(
-                        name=tc_name,
-                        args_summary=args_summary,
-                        duration_ms=tc_batch_duration,
-                        success=True,
-                        result_status="WAITING_FOR_INPUT",
-                        result_chars=len(waiting_text),
-                        token_attribution=turn_tokens,
-                    ))
-                    final_response = waiting_text
-                    loop_broken = True
-                elif isinstance(result, AgentToolResult) and not result.completed:
-                    if result.agent:
-                        await self.agent_pool.add_agent(result.agent)
-                    if result.approval_request:
-                        pending_approvals.append(result.approval_request)
+                    try:
+                        args_summary = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
+                    except (json.JSONDecodeError, TypeError):
+                        args_summary = {}
+                    args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
 
-                    waiting_text = result.result_text or "Agent is waiting for further input."
-                    messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                    all_tool_records.append(ToolCallRecord(
-                        name=tc_name,
-                        args_summary=args_summary,
-                        duration_ms=tc_batch_duration,
-                        success=True,
-                        result_status="WAITING_FOR_APPROVAL" if result.approval_request else "WAITING_FOR_INPUT",
-                        result_chars=len(waiting_text),
-                        token_attribution=turn_tokens,
-                    ))
-                    final_response = waiting_text
-                    loop_broken = True
+                    if isinstance(result, BaseException):
+                        logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
+                        error_text = f"Error executing {tc_name}: {result}"
+                        messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary=args_summary,
+                            duration_ms=tc_batch_duration, success=False,
+                            result_chars=len(error_text), token_attribution=turn_tokens,
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={
+                                "tool_name": tc_name, "call_id": tc.id,
+                                "kind": kind, "success": False,
+                                "error": str(result),
+                                "result_preview": error_text[:240],
+                            },
+                        )
 
-                else:
-                    if isinstance(result, AgentToolResult):
-                        result_text = result.result_text
+                    elif (
+                        isinstance(result, AgentToolResult)
+                        and isinstance(result.metadata, dict)
+                        and result.metadata.get("requires_user_input")
+                    ):
+                        logger.info(f"[ReAct]   agent={tc_name} FORCED_WAIT_BY_METADATA")
+                        waiting_text = result.result_text or "More information is required."
+                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary=args_summary,
+                            duration_ms=tc_batch_duration, success=True,
+                            result_status="WAITING_FOR_INPUT",
+                            result_chars=len(waiting_text), token_attribution=turn_tokens,
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={
+                                "tool_name": tc_name, "call_id": tc.id,
+                                "kind": "agent", "success": True,
+                                "waiting": True, "status": "WAITING_FOR_INPUT",
+                                "result_preview": waiting_text[:240],
+                                "tool_trace": result.metadata.get("tool_trace") or [],
+                            },
+                        )
+                        loop_broken = True
+                        loop_broken_text = waiting_text
+
+                    elif isinstance(result, AgentToolResult) and not result.completed:
+                        logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
+                        if result.agent:
+                            await self.agent_pool.add_agent(result.agent)
+                        if result.approval_request:
+                            pending_approvals.append(result.approval_request)
+                        waiting_text = result.result_text or "Agent is waiting for input."
+                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
+                        waiting_status = (
+                            "WAITING_FOR_APPROVAL" if result.approval_request
+                            else "WAITING_FOR_INPUT"
+                        )
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary=args_summary,
+                            duration_ms=tc_batch_duration, success=True,
+                            result_status=waiting_status,
+                            result_chars=len(waiting_text), token_attribution=turn_tokens,
+                        ))
+                        tool_trace = []
+                        if isinstance(result.metadata, dict):
+                            tool_trace = result.metadata.get("tool_trace") or []
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={
+                                "tool_name": tc_name, "call_id": tc.id,
+                                "kind": "agent", "success": True,
+                                "waiting": True, "status": waiting_status,
+                                "result_preview": waiting_text[:240],
+                                "tool_trace": tool_trace,
+                            },
+                        )
+                        yield AgentEvent(
+                            type=EventType.STATE_CHANGE,
+                            data={"agent_type": tc_name, "status": waiting_status},
+                        )
+                        loop_broken = True
+                        loop_broken_text = waiting_text
+
                     else:
-                        result_text = str(result) if result is not None else ""
+                        if isinstance(result, AgentToolResult):
+                            result_text = result.result_text
+                            r_meta = result.metadata if isinstance(result.metadata, dict) else {}
+                            tool_trace = r_meta.get("tool_trace") or []
+                        else:
+                            result_text = str(result) if result is not None else ""
+                            tool_trace = []
+                        result_chars_original = len(result_text)
+                        result_text = self._context_manager.truncate_tool_result(result_text)
+                        logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
+                        messages.append(self._build_tool_result_message(tc.id, result_text))
+                        all_tool_records.append(ToolCallRecord(
+                            name=tc_name, args_summary=args_summary,
+                            duration_ms=tc_batch_duration, success=True,
+                            result_status="COMPLETED" if isinstance(result, AgentToolResult) else None,
+                            result_chars=result_chars_original, token_attribution=turn_tokens,
+                        ))
+                        yield AgentEvent(
+                            type=EventType.TOOL_RESULT,
+                            data={
+                                "tool_name": tc_name, "call_id": tc.id,
+                                "kind": kind, "success": True,
+                                "result_preview": result_text[:240],
+                                "tool_trace": tool_trace,
+                            },
+                        )
 
-                    result_chars_original = len(result_text)
-                    result_text = self._context_manager.truncate_tool_result(result_text)
-                    messages.append(self._build_tool_result_message(tc.id, result_text))
+                if loop_broken:
+                    final_response = loop_broken_text or ""
+                    if pending_approvals:
+                        pending_approvals = collect_batch_approvals(pending_approvals)
+                    if loop_broken_text:
+                        yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": loop_broken_text})
+                        yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                    break
 
-                    all_tool_records.append(ToolCallRecord(
-                        name=tc_name,
-                        args_summary=args_summary,
-                        duration_ms=tc_batch_duration,
-                        success=True,
-                        result_status="COMPLETED" if isinstance(result, AgentToolResult) else None,
-                        result_chars=result_chars_original,
-                        token_attribution=turn_tokens,
-                    ))
-            if loop_broken:
-                if pending_approvals:
-                    pending_approvals = collect_batch_approvals(pending_approvals)
-                # Return the waiting agent's prompt directly Ã¢â‚¬â€ no extra LLM call
-                # final_response was already set when loop_broken was triggered
-                break
+                # Agent passthrough: single completed agent-tool skips LLM re-summary
+                if (
+                    len(tool_calls) == 1
+                    and self._is_agent_tool(tool_calls[0].name)
+                    and isinstance(results[0], AgentToolResult)
+                    and results[0].completed
+                ):
+                    agent_text = results[0].result_text
+                    logger.info(
+                        f"[ReAct] turn={turn} agent_passthrough "
+                        f"({len(agent_text)} chars from {tool_calls[0].name})"
+                    )
+                    final_response = agent_text
+                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": agent_text})
+                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                    break
 
         else:
-            # max_turns reached without a final answer
+            # max_turns reached: ask LLM for summary without tools
             messages.append({
                 "role": "user",
                 "content": (
@@ -999,23 +808,35 @@ class Orchestrator:
             })
             try:
                 response = await self._llm_call_with_retry(messages, tool_schemas=None)
-                final_response = response.content or ""
+                final_text = response.content or ""
                 usage = getattr(response, "usage", None)
                 if usage:
                     total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
                     total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
             except Exception:
-                final_response = "I was unable to complete the request within the allowed turns."
+                final_text = "I was unable to complete the request within the allowed turns."
+
+            final_response = final_text
+            yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+            yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_text})
+            yield AgentEvent(type=EventType.MESSAGE_END, data={})
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
-        return ReactLoopResult(
-            response=final_response,
-            turns=turns_executed,
-            tool_calls=all_tool_records,
-            token_usage=total_usage,
-            duration_ms=duration_ms,
-            pending_approvals=pending_approvals,
+        yield AgentEvent(
+            type=EventType.EXECUTION_END,
+            data={
+                "duration_ms": duration_ms,
+                "turns": turn,
+                "tool_calls_count": len(all_tool_records),
+                "final_response": final_response,
+                "pending_approvals": pending_approvals,
+                "token_usage": {
+                    "input_tokens": total_usage.input_tokens,
+                    "output_tokens": total_usage.output_tokens,
+                },
+                "tool_calls": all_tool_records,
+            },
         )
 
     # ==========================================================================
