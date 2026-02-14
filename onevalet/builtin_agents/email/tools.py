@@ -89,7 +89,11 @@ async def search_emails(args: dict, context) -> str:
     date_range = args.get("date_range")
     accounts = args.get("accounts")
     max_results = args.get("max_results", 15)
-    include_categories = args.get("include_categories")
+    category = args.get("category", "primary")
+    if category and category.lower() != "all":
+        include_categories = [category.lower()]
+    else:
+        include_categories = args.get("include_categories")
 
     if isinstance(accounts, str):
         accounts = [accounts]

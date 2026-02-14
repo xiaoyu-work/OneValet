@@ -95,6 +95,10 @@ in your text response WITHOUT calling any tools.
                         "type": "integer",
                         "description": "Max results to return (default: 15)",
                     },
+                    "category": {
+                        "type": "string",
+                        "description": "Inbox category filter: 'primary' (default), 'social', 'promotions', 'updates', or 'all'",
+                    },
                 },
                 "required": [],
             },

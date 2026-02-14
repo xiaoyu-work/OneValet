@@ -27,6 +27,7 @@ Usage:
             return await self.run_domain_react(msg)
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -91,6 +92,8 @@ class DomainAgent(StandardAgent):
     domain_system_prompt: str = ""
     domain_tools: List[DomainTool] = []
     max_domain_turns: int = 5
+    tool_timeout: float = 30.0  # seconds per tool call
+    max_tool_result_chars: int = 4000  # truncate tool results beyond this
 
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop."""
@@ -237,22 +240,38 @@ class DomainAgent(StandardAgent):
                 )
 
             try:
-                result_text = await tool.executor(args, self._build_tool_context())
+                result_text = await asyncio.wait_for(
+                    tool.executor(args, self._build_tool_context()),
+                    timeout=self.tool_timeout,
+                )
+                result_str = str(result_text)
+                if len(result_str) > self.max_tool_result_chars:
+                    result_str = result_str[: self.max_tool_result_chars] + "\n...[truncated]"
                 self._tool_trace.append(
                     {
                         "tool": tc.name,
                         "status": "ok",
-                        "summary": str(result_text)[:240],
+                        "summary": result_str[:240],
                     }
                 )
-            except Exception as e:
-                logger.error(f"Domain tool {tc.name} failed: {e}", exc_info=True)
-                result_text = f"Error executing {tc.name}: {e}"
+            except asyncio.TimeoutError:
+                logger.error(f"Domain tool {tc.name} timed out after {self.tool_timeout}s")
+                result_str = f"Error: tool '{tc.name}' timed out after {self.tool_timeout}s"
                 self._tool_trace.append(
                     {
                         "tool": tc.name,
                         "status": "error",
-                        "summary": str(result_text)[:240],
+                        "summary": result_str[:240],
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Domain tool {tc.name} failed: {e}", exc_info=True)
+                result_str = f"Error executing {tc.name}: {e}"
+                self._tool_trace.append(
+                    {
+                        "tool": tc.name,
+                        "status": "error",
+                        "summary": result_str[:240],
                     }
                 )
 
@@ -260,7 +279,7 @@ class DomainAgent(StandardAgent):
                 {
                     "role": "tool",
                     "tool_call_id": tc.id,
-                    "content": str(result_text),
+                    "content": result_str,
                 }
             )
 
@@ -322,22 +341,38 @@ class DomainAgent(StandardAgent):
         self._pending_tool_call = None
 
         try:
-            result_text = await tool.executor(args, self._build_tool_context())
+            result_text = await asyncio.wait_for(
+                tool.executor(args, self._build_tool_context()),
+                timeout=self.tool_timeout,
+            )
+            result_str = str(result_text)
+            if len(result_str) > self.max_tool_result_chars:
+                result_str = result_str[: self.max_tool_result_chars] + "\n...[truncated]"
             self._tool_trace.append(
                 {
                     "tool": tc.name,
                     "status": "ok",
-                    "summary": str(result_text)[:240],
+                    "summary": result_str[:240],
                 }
             )
-        except Exception as e:
-            logger.error(f"Approved tool {tc.name} failed: {e}", exc_info=True)
-            result_text = f"Error executing {tc.name}: {e}"
+        except asyncio.TimeoutError:
+            logger.error(f"Approved tool {tc.name} timed out after {self.tool_timeout}s")
+            result_str = f"Error: tool '{tc.name}' timed out after {self.tool_timeout}s"
             self._tool_trace.append(
                 {
                     "tool": tc.name,
                     "status": "error",
-                    "summary": str(result_text)[:240],
+                    "summary": result_str[:240],
+                }
+            )
+        except Exception as e:
+            logger.error(f"Approved tool {tc.name} failed: {e}", exc_info=True)
+            result_str = f"Error executing {tc.name}: {e}"
+            self._tool_trace.append(
+                {
+                    "tool": tc.name,
+                    "status": "error",
+                    "summary": result_str[:240],
                 }
             )
 
@@ -345,7 +380,7 @@ class DomainAgent(StandardAgent):
             {
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": str(result_text),
+                "content": result_str,
             }
         )
         return await self._run_react()

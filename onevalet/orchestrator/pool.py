@@ -254,6 +254,7 @@ class AgentPoolManager:
 
         # In-memory cache for fast access
         self._agents: Dict[str, Dict[str, "StandardAgent"]] = {}
+        self._lock = asyncio.Lock()
 
         # Background task for auto-backup
         self._backup_task: Optional[asyncio.Task] = None
@@ -291,9 +292,10 @@ class AgentPoolManager:
             await self._backend.save_agent(tenant_id, entry)
 
         # Cache in memory
-        if tenant_id not in self._agents:
-            self._agents[tenant_id] = {}
-        self._agents[tenant_id][agent.agent_id] = agent
+        async with self._lock:
+            if tenant_id not in self._agents:
+                self._agents[tenant_id] = {}
+            self._agents[tenant_id][agent.agent_id] = agent
 
         logger.debug(f"Added agent {agent.agent_id} for tenant {tenant_id}")
 
@@ -343,9 +345,10 @@ class AgentPoolManager:
         Returns:
             List of StandardAgent instances
         """
-        if tenant_id in self._agents:
-            return list(self._agents[tenant_id].values())
-        return []
+        async with self._lock:
+            if tenant_id in self._agents:
+                return list(self._agents[tenant_id].values())
+            return []
 
     async def list_agent_entries(self, tenant_id: str = "default") -> List[AgentPoolEntry]:
         """
@@ -387,9 +390,10 @@ class AgentPoolManager:
             await self._backend.save_agent(tenant_id, entry)
 
         # Update memory cache
-        if tenant_id not in self._agents:
-            self._agents[tenant_id] = {}
-        self._agents[tenant_id][agent.agent_id] = agent
+        async with self._lock:
+            if tenant_id not in self._agents:
+                self._agents[tenant_id] = {}
+            self._agents[tenant_id][agent.agent_id] = agent
 
     async def remove_agent(
         self,
@@ -405,18 +409,20 @@ class AgentPoolManager:
         """
         await self._backend.remove_agent(tenant_id, agent_id)
 
-        if tenant_id in self._agents and agent_id in self._agents[tenant_id]:
-            del self._agents[tenant_id][agent_id]
-            if not self._agents[tenant_id]:
-                del self._agents[tenant_id]
+        async with self._lock:
+            if tenant_id in self._agents and agent_id in self._agents[tenant_id]:
+                del self._agents[tenant_id][agent_id]
+                if not self._agents[tenant_id]:
+                    del self._agents[tenant_id]
 
         logger.debug(f"Removed agent {agent_id} for tenant {tenant_id}")
 
     async def clear_tenant(self, tenant_id: str = "default") -> None:
         """Clear all agents for a tenant"""
         await self._backend.clear_tenant(tenant_id)
-        if tenant_id in self._agents:
-            del self._agents[tenant_id]
+        async with self._lock:
+            if tenant_id in self._agents:
+                del self._agents[tenant_id]
 
     def has_agents_in_memory(self, tenant_id: str = "default") -> bool:
         """Check if tenant has agents loaded in memory"""
@@ -445,8 +451,9 @@ class AgentPoolManager:
         """
         entries = await self._backend.list_agents(tenant_id)
 
-        if tenant_id not in self._agents:
-            self._agents[tenant_id] = {}
+        async with self._lock:
+            if tenant_id not in self._agents:
+                self._agents[tenant_id] = {}
 
         restored = 0
         for entry in entries:
@@ -463,7 +470,8 @@ class AgentPoolManager:
 
             try:
                 agent = agent_factory(entry)
-                self._agents[tenant_id][entry.agent_id] = agent
+                async with self._lock:
+                    self._agents[tenant_id][entry.agent_id] = agent
                 restored += 1
             except Exception as e:
                 logger.error(f"Failed to restore agent {entry.agent_id}: {e}")
@@ -526,12 +534,17 @@ class AgentPoolManager:
 
     async def _backup_all(self) -> None:
         """Backup all in-memory agents to storage"""
-        for tenant_id, agents in self._agents.items():
-            for agent_id, agent in agents.items():
-                try:
-                    await self.update_agent(agent)
-                except Exception as e:
-                    logger.error(f"Failed to backup agent {agent_id}: {e}")
+        async with self._lock:
+            snapshot = [
+                agent
+                for agents in self._agents.values()
+                for agent in agents.values()
+            ]
+        for agent in snapshot:
+            try:
+                await self.update_agent(agent)
+            except Exception as e:
+                logger.error(f"Failed to backup agent {agent.agent_id}: {e}")
 
     async def close(self) -> None:
         """Clean up resources"""

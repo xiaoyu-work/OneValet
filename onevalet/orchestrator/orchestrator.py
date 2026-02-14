@@ -47,6 +47,7 @@ Example (hooks, no subclass):
 
 import json
 import asyncio
+import dataclasses
 import logging
 import re
 import time
@@ -387,9 +388,18 @@ class Orchestrator:
         # Step 7: Map loop results -> AgentResult
         final_response = exec_data.get("final_response", "")
         pending_approvals = exec_data.get("pending_approvals", [])
+        result_status = exec_data.get("result_status")
+
+        if pending_approvals:
+            status = AgentStatus.WAITING_FOR_APPROVAL
+        elif result_status == "WAITING_FOR_INPUT":
+            status = AgentStatus.WAITING_FOR_INPUT
+        else:
+            status = AgentStatus.COMPLETED
+
         result = AgentResult(
             agent_type=self.__class__.__name__,
-            status=AgentStatus.COMPLETED,
+            status=status,
             raw_message=final_response,
             metadata={
                 "react_turns": exec_data.get("turns", 0),
@@ -407,7 +417,6 @@ class Orchestrator:
         )
 
         if pending_approvals:
-            result.status = AgentStatus.WAITING_FOR_APPROVAL
             result.metadata["pending_approvals"] = [
                 {
                     "agent_name": a.agent_name,
@@ -495,36 +504,32 @@ class Orchestrator:
 
         # Delegate to shared ReAct loop
         final_response = ""
+        exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
             messages, selected_tool_schemas, tenant_id,
             first_turn_tool_choice=policy["first_turn_tool_choice"],
             retry_with_required_on_empty=policy["retry_with_required_on_empty"],
         ):
             if event.type == EventType.EXECUTION_END:
-                final_response = event.data.get("final_response", "")
+                exec_data = event.data
+                final_response = exec_data.get("final_response", "")
             yield event
 
-        # Save conversation history to momex (background, non-blocking)
-        session_id = context.get("session_id", tenant_id)
-        if message:
-            self.momex.save_message(
-                tenant_id=tenant_id, session_id=session_id,
-                content=message, role="user",
-            )
-        if final_response:
-            self.momex.save_message(
-                tenant_id=tenant_id, session_id=session_id,
-                content=final_response, role="assistant",
-            )
-        if message or final_response:
-            conv_messages = []
-            if message:
-                conv_messages.append({"role": "user", "content": message})
-            if final_response:
-                conv_messages.append({"role": "assistant", "content": final_response})
-            asyncio.create_task(
-                self.momex.add(tenant_id=tenant_id, messages=conv_messages, infer=True)
-            )
+        # Post-process: momex save, guardrails output, hooks
+        pending_approvals = exec_data.get("pending_approvals", [])
+        result_status = exec_data.get("result_status")
+        if pending_approvals:
+            status = AgentStatus.WAITING_FOR_APPROVAL
+        elif result_status == "WAITING_FOR_INPUT":
+            status = AgentStatus.WAITING_FOR_INPUT
+        else:
+            status = AgentStatus.COMPLETED
+        result = AgentResult(
+            agent_type=self.__class__.__name__,
+            status=status,
+            raw_message=final_response,
+        )
+        await self.post_process(result, context)
 
     # ==========================================================================
     # REACT LOOP
@@ -554,6 +559,7 @@ class Orchestrator:
         total_usage = TokenUsage()
         pending_approvals = []
         final_response = ""
+        result_status = None
 
         logger.info(f"[ReAct] tenant={tenant_id}")
 
@@ -676,33 +682,6 @@ class Orchestrator:
                             },
                         )
 
-                    elif (
-                        isinstance(result, AgentToolResult)
-                        and isinstance(result.metadata, dict)
-                        and result.metadata.get("requires_user_input")
-                    ):
-                        logger.info(f"[ReAct]   agent={tc_name} FORCED_WAIT_BY_METADATA")
-                        waiting_text = result.result_text or "More information is required."
-                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary=args_summary,
-                            duration_ms=tc_batch_duration, success=True,
-                            result_status="WAITING_FOR_INPUT",
-                            result_chars=len(waiting_text), token_attribution=turn_tokens,
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name, "call_id": tc.id,
-                                "kind": "agent", "success": True,
-                                "waiting": True, "status": "WAITING_FOR_INPUT",
-                                "result_preview": waiting_text[:240],
-                                "tool_trace": result.metadata.get("tool_trace") or [],
-                            },
-                        )
-                        loop_broken = True
-                        loop_broken_text = waiting_text
-
                     elif isinstance(result, AgentToolResult) and not result.completed:
                         logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
                         if result.agent:
@@ -771,6 +750,7 @@ class Orchestrator:
 
                 if loop_broken:
                     final_response = loop_broken_text or ""
+                    result_status = "WAITING_FOR_APPROVAL" if pending_approvals else "WAITING_FOR_INPUT"
                     if pending_approvals:
                         pending_approvals = collect_batch_approvals(pending_approvals)
                     if loop_broken_text:
@@ -830,12 +810,13 @@ class Orchestrator:
                 "turns": turn,
                 "tool_calls_count": len(all_tool_records),
                 "final_response": final_response,
+                "result_status": result_status,
                 "pending_approvals": pending_approvals,
                 "token_usage": {
                     "input_tokens": total_usage.input_tokens,
                     "output_tokens": total_usage.output_tokens,
                 },
-                "tool_calls": all_tool_records,
+                "tool_calls": [dataclasses.asdict(r) for r in all_tool_records],
             },
         )
 
@@ -1041,42 +1022,69 @@ class Orchestrator:
     ) -> Optional[AgentResult]:
         """Check Pool for WAITING agents and route message to them.
 
-        If there's an agent in WAITING_FOR_INPUT or WAITING_FOR_APPROVAL state,
-        route the user's message to that agent.
+        If there are agents in WAITING_FOR_INPUT or WAITING_FOR_APPROVAL state,
+        route the user's message to the appropriate agent:
+        - If metadata contains target_agent_id, route to that specific agent
+        - Otherwise pick the most recently active waiting agent
+        - Log a warning when multiple agents are waiting without explicit routing
 
         Returns:
             AgentResult if a pending agent handled the message, None otherwise.
         """
         agents = await self.agent_pool.list_agents(tenant_id)
-        for agent in agents:
-            if agent.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
-                try:
-                    metadata = context.get("metadata", {})
-                    msg = Message(
-                        name=metadata.get("sender_name", ""),
-                        content=message,
-                        role=metadata.get("sender_role", "user"),
-                        metadata=metadata,
-                    )
-                    result = await agent.reply(msg)
-                    agent.status = result.status
+        waiting_agents = [
+            a for a in agents
+            if a.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL)
+        ]
 
-                    # Update or remove from pool
-                    if agent.status in AgentStatus.terminal_states():
-                        await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
-                    else:
-                        await self.agent_pool.update_agent(agent)
+        if not waiting_agents:
+            return None
 
-                    return result
-                except Exception as e:
-                    logger.error(f"Failed to route to pending agent {agent.agent_id}: {e}")
-                    return AgentResult(
-                        agent_type=agent.agent_type,
-                        status=AgentStatus.ERROR,
-                        error_message=str(e),
-                        agent_id=agent.agent_id,
-                    )
-        return None
+        # Pick the target agent
+        metadata = context.get("metadata", {})
+        target_agent_id = metadata.get("target_agent_id")
+
+        if target_agent_id:
+            agent = next((a for a in waiting_agents if a.agent_id == target_agent_id), None)
+            if agent is None:
+                logger.warning(f"target_agent_id={target_agent_id} not found among waiting agents")
+                return None
+        else:
+            if len(waiting_agents) > 1:
+                logger.warning(
+                    f"Multiple waiting agents for tenant={tenant_id} without explicit routing: "
+                    f"{[a.agent_id for a in waiting_agents]}. Picking most recently active."
+                )
+            agent = max(
+                waiting_agents,
+                key=lambda a: getattr(a, "last_active", 0) or 0,
+            )
+
+        try:
+            msg = Message(
+                name=metadata.get("sender_name", ""),
+                content=message,
+                role=metadata.get("sender_role", "user"),
+                metadata=metadata,
+            )
+            result = await agent.reply(msg)
+            agent.status = result.status
+
+            # Update or remove from pool
+            if agent.status in AgentStatus.terminal_states():
+                await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
+            else:
+                await self.agent_pool.update_agent(agent)
+
+            return result
+        except Exception as e:
+            logger.error(f"Failed to route to pending agent {agent.agent_id}: {e}")
+            return AgentResult(
+                agent_type=agent.agent_type,
+                status=AgentStatus.ERROR,
+                error_message=str(e),
+                agent_id=agent.agent_id,
+            )
 
     def _build_llm_messages(
         self,
@@ -1559,6 +1567,15 @@ class Orchestrator:
             return None
 
         try:
+            # Enforce max agents per user
+            active = await self.agent_pool.list_agents(tenant_id)
+            if len(active) >= self.config.max_agents_per_user:
+                logger.warning(
+                    f"Max agents per user ({self.config.max_agents_per_user}) "
+                    f"reached for tenant {tenant_id}"
+                )
+                return None
+
             agent = self._agent_registry.create_agent(
                 name=agent_type,
                 tenant_id=tenant_id,

@@ -185,7 +185,7 @@ class OrchestratorConfig:
     session: SessionConfig = field(default_factory=SessionConfig)
     default_timeout_seconds: int = 300
     max_agents_per_user: int = 10
-    enable_workflows: bool = True
+    enable_workflows: bool = True  # TODO: workflow execution not yet implemented
     enable_streaming: bool = True
     default_agent_type: str = ""
 

@@ -115,6 +115,13 @@ function restoreChatHistory() {
   const placeholder = document.getElementById('chat-placeholder');
   if (placeholder) placeholder.remove();
   for (const msg of chatHistory) {
+    if (msg.role === 'tool') {
+      appendToolIndicator(msg.toolName, msg.callId);
+      if (msg.result) {
+        completeToolIndicator(msg.callId, msg.result);
+      }
+      continue;
+    }
     const wrapper = document.createElement('div');
     wrapper.className = 'max-w-3xl mx-auto flex ' + (msg.role === 'user' ? 'justify-end' : 'justify-start');
     const bubble = document.createElement('div');
@@ -397,12 +404,21 @@ async function sendMessage() {
         const name = typeof event.data === 'object' ? (event.data.tool_name || event.data.name || 'tool') : event.data;
         const callId = event.data?.call_id || null;
         appendToolIndicator(name, callId);
+        chatHistory.push({ role: 'tool', toolName: name, callId: callId, result: null });
+        saveChatHistory();
         break;
       }
       case 'tool_call_end':
       case 'tool_result': {
         const callId = event.data?.call_id || null;
         completeToolIndicator(callId, event.data || {});
+        for (let i = chatHistory.length - 1; i >= 0; i--) {
+          if (chatHistory[i].role === 'tool' && chatHistory[i].callId === callId) {
+            chatHistory[i].result = event.data || {};
+            break;
+          }
+        }
+        saveChatHistory();
         break;
       }
       case 'state_change':
@@ -461,7 +477,7 @@ function renderMarkdown(content) {
   const source = String(content || '');
   const normalized = source
     .replace(/\r\n/g, '\n')
-    .replace(/\n{2,}/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
   if (window.marked && typeof window.marked.parse === 'function') {
     const html = window.marked.parse(normalized, { gfm: true, breaks: false });
@@ -476,6 +492,7 @@ function setBubbleContent(bubble, role, content) {
   if (!bubble) return;
   if (role === 'assistant') {
     bubble.classList.add('md-render');
+    bubble.classList.remove('whitespace-pre-wrap');
     bubble.innerHTML = renderMarkdown(content);
   } else {
     bubble.textContent = content;

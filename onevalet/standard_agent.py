@@ -965,10 +965,7 @@ Return JSON only."""
 
         self._streaming_enabled = True
 
-        # Start streaming in background
-        stream_task = asyncio.create_task(self._stream_engine.stream(mode))
-
-        # Execute reply in background
+        # Execute reply in background (emits events to stream engine)
         reply_task = asyncio.create_task(self._execute_with_streaming(msg))
 
         # Yield events as they come
@@ -1101,10 +1098,11 @@ Return JSON only."""
     @property
     def recalled_memories(self) -> List[Dict[str, Any]]:
         """
-        Get recalled memories injected by orchestrator.
+        Get recalled memories for this agent.
 
-        When enable_memory=true in agent config, the orchestrator automatically
-        recalls relevant memories before calling the agent and injects them here.
+        Memories can be set externally via set_recalled_memories().
+        The orchestrator provides a recall_memory tool for on-demand LLM queries
+        rather than auto-injecting memories before each agent call.
 
         Each memory dict contains:
             - memory: The memory text
