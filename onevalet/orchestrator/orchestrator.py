@@ -373,21 +373,9 @@ class Orchestrator:
             # word as a brand-new request and spawn unnecessary follow-up agents.
             return await self.post_process(agent_result, context)
 
-        # Step 4: Build tool schemas
+        # Step 4: Build tool schemas (all lightweight — ReAct picks directly)
         tool_schemas = self._build_tool_schemas()
-        policy = await self._plan_tool_policy(message, tool_schemas)
-        selected_tool_schemas = policy["tool_schemas"]
-        logger.info(
-            f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
-            f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
-        )
-        self._audit.log_policy_decision(
-            intent=policy["intent"],
-            must_use_tools=policy["must_use_tools"],
-            selected_tools=[self._tool_name_from_schema(s) or "" for s in selected_tool_schemas],
-            reason_code=str(policy.get("first_turn_tool_choice", "auto")),
-            tenant_id=tenant_id,
-        )
+        logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
 
         # Step 5: Build LLM messages
         messages = self._build_llm_messages(context, message)
@@ -396,10 +384,8 @@ class Orchestrator:
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
             messages,
-            selected_tool_schemas,
+            tool_schemas,
             tenant_id,
-            first_turn_tool_choice=policy["first_turn_tool_choice"],
-            retry_with_required_on_empty=policy["retry_with_required_on_empty"],
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
@@ -425,13 +411,7 @@ class Orchestrator:
                 "token_usage": exec_data.get("token_usage", {}),
                 "duration_ms": exec_data.get("duration_ms", 0),
                 "tool_calls_count": exec_data.get("tool_calls_count", 0),
-                "tool_policy": {
-                    "intent": policy["intent"],
-                    "must_use_tools": policy["must_use_tools"],
-                    "first_turn_tool_choice": policy["first_turn_tool_choice"],
-                    "selected_tool_count": len(selected_tool_schemas),
-                    "total_tool_count": len(tool_schemas),
-                },
+                "total_tool_count": len(tool_schemas),
             },
         )
 
@@ -512,30 +492,16 @@ class Orchestrator:
             )
             return
 
-        # Build tool schemas
+        # Build tool schemas (all lightweight — ReAct picks directly)
         tool_schemas = self._build_tool_schemas()
-        policy = await self._plan_tool_policy(message, tool_schemas)
-        selected_tool_schemas = policy["tool_schemas"]
-        logger.info(
-            f"[ToolPolicy] intent={policy['intent']} must_use_tools={policy['must_use_tools']} "
-            f"selected={len(selected_tool_schemas)}/{len(tool_schemas)} first_turn_choice={policy['first_turn_tool_choice']}"
-        )
-        self._audit.log_policy_decision(
-            intent=policy["intent"],
-            must_use_tools=policy["must_use_tools"],
-            selected_tools=[self._tool_name_from_schema(s) or "" for s in selected_tool_schemas],
-            reason_code=str(policy.get("first_turn_tool_choice", "auto")),
-            tenant_id=tenant_id,
-        )
+        logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
         messages = self._build_llm_messages(context, message)
 
         # Delegate to shared ReAct loop
         final_response = ""
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
-            messages, selected_tool_schemas, tenant_id,
-            first_turn_tool_choice=policy["first_turn_tool_choice"],
-            retry_with_required_on_empty=policy["retry_with_required_on_empty"],
+            messages, tool_schemas, tenant_id,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
