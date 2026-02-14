@@ -1031,7 +1031,7 @@ class Orchestrator:
                 "Please retry with valid JSON arguments."
             )
 
-        # Change F: delegate_to_agent meta-tool
+        # delegate_to_agent meta-tool for Tier 2 agents
         if tool_name == "delegate_to_agent":
             agent_name = args.get("agent_name", "")
             task_instruction = args.get("task_instruction", "")
@@ -1357,8 +1357,9 @@ class Orchestrator:
     def _build_tool_schemas(self) -> List[Dict[str, Any]]:
         """Build combined tool schemas: regular tools + agent-tools.
 
-        Agent-tools are split into two tiers (Change F):
-        - Tier 1: First N agents included as full tool schemas
+        All agent-tool schemas are lightweight (name + description +
+        task_instruction only).  They are split into two tiers:
+        - Tier 1: First N agents included directly as tool schemas
         - Tier 2: Remaining agents accessible via delegate_to_agent meta-tool
         """
         schemas: List[Dict[str, Any]] = []
@@ -1371,7 +1372,7 @@ class Orchestrator:
         for tool in all_tools:
             schemas.append(tool.to_openai_schema())
 
-        # Agent-tools: split into Tier 1 (full schemas) and Tier 2 (catalog only)
+        # Agent-tools: split into Tier 1 and Tier 2
         agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
         tier1_schemas = agent_tool_schemas[:self.TIER1_AGENT_TOOL_LIMIT]
         self._tier2_agent_schemas = agent_tool_schemas[self.TIER1_AGENT_TOOL_LIMIT:]

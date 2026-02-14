@@ -256,42 +256,15 @@ _TYPE_MAP = {
 
 
 def generate_tool_schema(agent_cls: Type) -> Dict[str, Any]:
-    """Generate OpenAI function-calling tool schema from a @valet decorated agent class.
+    """Generate a lightweight OpenAI function-calling tool schema for agent routing.
 
-    Maps:
-    - Agent docstring -> tool description
-    - InputField list -> JSON Schema properties (name, type, description, required)
-    - Adds task_instruction parameter for natural language instructions
+    Only exposes name, description, and a single task_instruction parameter.
+    The orchestrator ReAct loop uses this to pick the right agent; the agent's
+    own internal ReAct loop handles parameter extraction and tool execution.
     """
     metadata: AgentMetadata = getattr(agent_cls, "_valet_metadata", None)
     if metadata is None:
         raise ValueError(f"{agent_cls.__name__} is not decorated with @valet")
-
-    properties: Dict[str, Any] = {}
-    required: List[str] = []
-
-    for inp in metadata.inputs:
-        # Determine JSON Schema type from the default value or fallback to string
-        type_name = type(inp.default).__name__ if inp.default is not None else "str"
-        json_type = _TYPE_MAP.get(type_name, "string")
-
-        prop: Dict[str, Any] = {
-            "type": json_type,
-            "description": inp.description,
-        }
-        properties[inp.name] = prop
-
-        if inp.required:
-            required.append(inp.name)
-
-    # Add task_instruction parameter
-    properties["task_instruction"] = {
-        "type": "string",
-        "description": (
-            "Natural language instructions for the agent. "
-            "Use this to pass context that doesn't map to specific input fields."
-        ),
-    }
 
     return {
         "type": "function",
@@ -300,8 +273,13 @@ def generate_tool_schema(agent_cls: Type) -> Dict[str, Any]:
             "description": metadata.description,
             "parameters": {
                 "type": "object",
-                "properties": properties,
-                "required": required,
+                "properties": {
+                    "task_instruction": {
+                        "type": "string",
+                        "description": "What the user wants this agent to do.",
+                    },
+                },
+                "required": ["task_instruction"],
             },
         },
     }
@@ -310,9 +288,9 @@ def generate_tool_schema(agent_cls: Type) -> Dict[str, Any]:
 def enhance_agent_tool_schema(agent_cls: Type, schema: Dict[str, Any]) -> Dict[str, Any]:
     """Enhance auto-generated schema before exposing to LLM.
 
-    1. Inject validator constraints into parameter descriptions
-    2. Surface approval requirement in tool description
-    3. Add task_instruction usage guidance
+    With lightweight schemas (name + description + task_instruction only),
+    the main enhancement is surfacing the approval requirement in the
+    tool description so the orchestrator LLM is aware of it.
     """
     from ..standard_agent import StandardAgent
 
@@ -321,16 +299,8 @@ def enhance_agent_tool_schema(agent_cls: Type, schema: Dict[str, Any]) -> Dict[s
         return schema
 
     func = schema.get("function", {})
-    props = func.get("parameters", {}).get("properties", {})
 
-    # 1. Inject validator constraints into parameter descriptions
-    for inp in metadata.inputs:
-        if inp.validator_description and inp.name in props:
-            existing = props[inp.name].get("description", "")
-            props[inp.name]["description"] = f"{existing} ({inp.validator_description})"
-
-    # 2. Surface approval requirement in tool description
-    # Check if the agent class overrides needs_approval from StandardAgent
+    # Surface approval requirement in tool description
     if (
         hasattr(agent_cls, "needs_approval")
         and agent_cls.needs_approval is not StandardAgent.needs_approval

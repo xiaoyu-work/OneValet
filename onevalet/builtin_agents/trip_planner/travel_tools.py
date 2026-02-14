@@ -112,7 +112,7 @@ async def search_flights(args: dict, context: DomainToolContext) -> str:
         return "Error: origin, destination, and date are all required."
 
     if not os.getenv("AMADEUS_API_KEY") or not os.getenv("AMADEUS_API_SECRET"):
-        return "Amadeus API credentials not configured. Please contact support."
+        return "Flight search unavailable: AMADEUS_API_KEY and AMADEUS_API_SECRET not set. Please configure them in Settings > API Keys."
 
     token = await _get_amadeus_token()
     if not token:
@@ -245,7 +245,7 @@ async def search_hotels(args: dict, context: DomainToolContext) -> str:
             return f"Invalid date format: {check_in}. Use YYYY-MM-DD."
 
     if not os.getenv("AMADEUS_API_KEY") or not os.getenv("AMADEUS_API_SECRET"):
-        return "Amadeus API credentials not configured. Please contact support."
+        return "Hotel search unavailable: AMADEUS_API_KEY and AMADEUS_API_SECRET not set. Please configure them in Settings > API Keys."
 
     token = await _get_amadeus_token()
     if not token:

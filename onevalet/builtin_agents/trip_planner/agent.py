@@ -12,7 +12,7 @@ from datetime import datetime
 from onevalet import InputField, valet
 from onevalet.agents.domain_agent import DomainAgent, DomainTool
 
-from onevalet.builtin_agents.travel.tools import (
+from .travel_tools import (
     search_flights,
     search_hotels,
     check_weather,
