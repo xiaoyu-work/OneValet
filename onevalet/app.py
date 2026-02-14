@@ -115,6 +115,9 @@ class OneValet:
         self._momex = None
         self._agent_registry = None
         self._orchestrator = None
+        self._event_bus = None
+        self._trigger_engine = None
+        self._email_handler = None
 
     async def _ensure_initialized(self) -> None:
         """Lazy initialization — runs once on first chat()/stream() call."""
@@ -212,7 +215,31 @@ class OneValet:
         llm_registry.register("default", self._llm_client)
         llm_registry.set_default("default")
 
-        # 7. Orchestrator
+        # 7. TriggerEngine + EventBus + Notifications
+        from .triggers import (
+            TriggerEngine, EventBus, OrchestratorExecutor,
+            PipelineExecutor, CallbackNotification, EmailEventHandler,
+        )
+
+        # EventBus (Redis Streams) — optional, requires redis config
+        redis_url = cfg.get("redis", {}).get("url") if isinstance(cfg.get("redis"), dict) else cfg.get("redis")
+        if redis_url:
+            self._event_bus = EventBus(redis_url=redis_url)
+            await self._event_bus.initialize()
+            logger.info(f"EventBus initialized (redis: {redis_url})")
+
+        # TriggerEngine
+        self._trigger_engine = TriggerEngine()
+
+        # CallbackNotification — if callbacks.notify_url configured
+        callback_url = cfg.get("callbacks", {}).get("notify_url") if isinstance(cfg.get("callbacks"), dict) else None
+        callback_notification = None
+        if callback_url:
+            callback_notification = CallbackNotification(callback_url=callback_url)
+            self._trigger_engine._notifications.append(callback_notification)
+            logger.info(f"CallbackNotification configured: {callback_url}")
+
+        # 8. Orchestrator
         from .orchestrator import Orchestrator
         self._orchestrator = Orchestrator(
             momex=self._momex,
@@ -221,10 +248,32 @@ class OneValet:
             credential_store=self._credential_store,
             database=self._database,
             system_prompt=cfg.get("system_prompt", ""),
+            trigger_engine=self._trigger_engine,
         )
         await self._orchestrator.initialize()
 
-        # 8. Load API key credentials into env vars for agent access
+        # Register executors with TriggerEngine
+        orchestrator_executor = OrchestratorExecutor(self._orchestrator)
+        self._trigger_engine.register_executor("orchestrator", orchestrator_executor)
+
+        pipeline_executor = PipelineExecutor(
+            orchestrator=self._orchestrator,
+            llm_client=self._llm_client,
+            notification=callback_notification,
+        )
+        self._trigger_engine.register_executor("pipeline", pipeline_executor)
+
+        # EmailEventHandler — if EventBus and callback_url are configured
+        if self._event_bus and callback_url:
+            self._email_handler = EmailEventHandler(
+                llm_client=self._llm_client,
+                event_bus=self._event_bus,
+                callback_url=callback_url,
+            )
+            await self._email_handler.start()
+            logger.info("EmailEventHandler started")
+
+        # 9. Load API key credentials into env vars for agent access
         await self._load_api_keys_to_env()
 
         self._initialized = True
@@ -276,6 +325,8 @@ class OneValet:
         try:
             if self._orchestrator:
                 await self._orchestrator.shutdown()
+            if self._event_bus:
+                await self._event_bus.close()
             if self._database:
                 await self._database.close()
         except Exception as e:
@@ -288,6 +339,9 @@ class OneValet:
             self._momex = None
             self._agent_registry = None
             self._orchestrator = None
+            self._event_bus = None
+            self._trigger_engine = None
+            self._email_handler = None
             logger.info("OneValet shut down")
 
     async def chat(

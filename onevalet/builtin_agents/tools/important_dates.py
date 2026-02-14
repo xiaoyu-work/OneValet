@@ -12,6 +12,7 @@ object with these async methods:
     - create_important_date(user_id, data) -> dict | None
     - update_important_date(user_id, date_id, updates) -> dict | None
     - delete_important_date(user_id, date_id) -> bool
+    - get_today_reminders(user_id) -> list[dict]
 
 If the store is not provided, the tools return an error message.
 """
@@ -292,6 +293,54 @@ async def delete_important_date_executor(args: dict, context: ToolExecutionConte
         return f"Error deleting: {e}"
 
 
+_DATE_TYPE_EMOJI = {
+    "birthday": "\U0001f382",    # 🎂
+    "anniversary": "\U0001f48d", # 💍
+    "holiday": "\U0001f389",     # 🎉
+}
+_DEFAULT_EMOJI = "\U0001f4c5"    # 📅
+
+
+async def get_today_reminders_executor(args: dict, context: ToolExecutionContext = None) -> str:
+    """Get today's important-date reminders for the daily digest."""
+    if not context or not context.user_id:
+        return "Error: User ID not available"
+
+    store = _get_store(context)
+    if not store:
+        return "Error: Important dates storage not configured"
+
+    try:
+        reminders = await store.get_today_reminders(user_id=context.user_id)
+        if not reminders:
+            return "No important-date reminders for today."
+
+        output = []
+        for d in reminders:
+            emoji = _DATE_TYPE_EMOJI.get(d.get("date_type", ""), _DEFAULT_EMOJI)
+            title = d.get("title", "Event")
+            days_until = d.get("days_until", 0)
+            person = d.get("person_name") or ""
+
+            if days_until == 0:
+                timing = "TODAY"
+            elif days_until == 1:
+                timing = "tomorrow"
+            else:
+                timing = f"in {days_until} days"
+
+            line = f"{emoji} {title}: {timing}"
+            if person and person.lower() not in title.lower():
+                line += f" ({person})"
+            output.append(line)
+
+        return f"Important-date reminders ({len(reminders)}):\n" + "\n".join(output)
+
+    except Exception as e:
+        logger.error(f"Error getting today reminders: {e}", exc_info=True)
+        return f"Error retrieving reminders: {e}"
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -412,6 +461,21 @@ def register_important_dates_tools() -> None:
             "required": ["search_term"],
         },
         executor=delete_important_date_executor,
+        category=ToolCategory.USER,
+    ))
+
+    registry.register(ToolDefinition(
+        name="get_today_reminders",
+        description=(
+            "Get today's important-date reminders for the daily digest. "
+            "Returns dates whose remind_days_before window includes today."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+        executor=get_today_reminders_executor,
         category=ToolCategory.USER,
     ))
 

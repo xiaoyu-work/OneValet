@@ -18,7 +18,10 @@ from .models import (
 from .engine import TriggerEngine
 from .event_bus import EventBus, Event
 from .executor import OrchestratorExecutor
+from .pipeline import PipelineExecutor
 from .notification import SMSNotification, PushNotification
+from .callback import CallbackNotification
+from .email_handler import EmailEventHandler
 
 __all__ = [
     # Models
@@ -36,7 +39,11 @@ __all__ = [
     "Event",
     # Executors
     "OrchestratorExecutor",
+    "PipelineExecutor",
+    # Email
+    "EmailEventHandler",
     # Notifications
     "SMSNotification",
     "PushNotification",
+    "CallbackNotification",
 ]
