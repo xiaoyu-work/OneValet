@@ -66,7 +66,10 @@ from .models import (
     callback_handler,
 )
 from .pool import AgentPoolManager
-from .react_config import ReactLoopConfig, ToolCallRecord, TokenUsage
+from .react_config import (
+    ReactLoopConfig, ToolCallRecord, TokenUsage,
+    COMPLETE_TASK_TOOL_NAME, COMPLETE_TASK_SCHEMA, CompleteTaskResult,
+)
 from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
@@ -603,39 +606,128 @@ class Orchestrator:
 
             tool_calls = response.tool_calls
 
-            # No tool calls: retry once if policy says so, else final answer
+            # No tool calls → LLM forgot to call complete_task.
+            # Retry up to max_complete_task_retries times with tool_choice="required".
             if not tool_calls:
-                if (
-                    turn == 1
-                    and retry_with_required_on_empty
-                    and tool_schemas
-                    and first_turn_tool_choice != "required"
-                ):
-                    response = await self._llm_call_with_retry(
-                        messages, tool_schemas, tool_choice="required",
+                max_retries = self._react_config.max_complete_task_retries
+                for retry in range(1, max_retries + 1):
+                    grace_msg = (
+                        "You must call the `complete_task` tool with your final "
+                        "response in the `result` parameter to finish. Do not "
+                        "respond with plain text. Call `complete_task` now."
                     )
+                    logger.warning(
+                        f"[ReAct] turn={turn} no tool calls, "
+                        f"grace retry {retry}/{max_retries}"
+                    )
+                    messages.append(self._assistant_message_from_response(response))
+                    messages.append({"role": "user", "content": grace_msg})
+                    try:
+                        response = await self._llm_call_with_retry(
+                            messages, tool_schemas, tool_choice="required",
+                        )
+                    except Exception as e:
+                        yield AgentEvent(
+                            type=EventType.ERROR,
+                            data={"error": str(e), "error_type": type(e).__name__},
+                        )
+                        return
                     usage_retry = getattr(response, "usage", None)
                     if usage_retry:
                         total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
                         total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
                     tool_calls = response.tool_calls
+                    if tool_calls:
+                        break  # success — proceed to tool execution
 
+                # Exhausted all retries — ask LLM to produce a user-friendly
+                # error message (no tools, so it can only return text).
                 if not tool_calls:
-                    final_text = response.content or ""
-                    final_response = final_text
-                    logger.info(f"[ReAct] turn={turn} final_answer ({len(final_text)} chars)")
+                    logger.error(
+                        f"[ReAct] turn={turn} exhausted {max_retries} "
+                        f"grace retries, LLM still did not call complete_task"
+                    )
+                    messages.append(self._assistant_message_from_response(response))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "There was an internal issue processing your request. "
+                            "Generate a short, friendly apology to the user in "
+                            "their language, and suggest they try again later."
+                        ),
+                    })
+                    try:
+                        fallback_resp = await self._llm_call_with_retry(
+                            messages, tool_schemas=[], tool_choice=None,
+                        )
+                        final_response = (
+                            getattr(fallback_resp, "content", None)
+                            or fallback_resp.choices[0].message.content
+                            or "Sorry, something went wrong. Please try again later."
+                        )
+                    except Exception:
+                        final_response = "Sorry, something went wrong. Please try again later."
                     self._audit.log_react_turn(
                         turn=turn, tool_calls=[], final_answer=True,
                         tenant_id=tenant_id,
                     )
                     yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_text})
+                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
                     yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    break
+                    return
 
             if tool_calls:
                 # Append assistant message with tool_calls
                 messages.append(self._assistant_message_from_response(response))
+
+                # ----------------------------------------------------------
+                # Intercept complete_task: handle synchronously, skip execution
+                # ----------------------------------------------------------
+                complete_task_result: Optional[CompleteTaskResult] = None
+                remaining_tool_calls = []
+                for tc in tool_calls:
+                    if tc.name == COMPLETE_TASK_TOOL_NAME:
+                        try:
+                            _ct_args = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
+                        except (json.JSONDecodeError, TypeError):
+                            _ct_args = {}
+                        _ct_text = _ct_args.get("result", "")
+                        if _ct_text:
+                            complete_task_result = CompleteTaskResult(result=_ct_text)
+                            messages.append(self._build_tool_result_message(tc.id, "Task completed."))
+                            all_tool_records.append(ToolCallRecord(
+                                name=COMPLETE_TASK_TOOL_NAME,
+                                args_summary={"result": _ct_text[:100]},
+                                duration_ms=0, success=True,
+                                result_status="COMPLETED",
+                                result_chars=len(_ct_text),
+                            ))
+                            logger.info(f"[ReAct] turn={turn} complete_task called ({len(_ct_text)} chars)")
+                        else:
+                            # Missing result — append error, let LLM retry
+                            messages.append(self._build_tool_result_message(
+                                tc.id,
+                                'Error: "result" argument is required for complete_task.',
+                                is_error=True,
+                            ))
+                            remaining_tool_calls.append(tc)
+                    else:
+                        remaining_tool_calls.append(tc)
+
+                # Pure complete_task with no other tools — break immediately
+                if complete_task_result and not remaining_tool_calls:
+                    final_response = complete_task_result.result
+                    self._audit.log_react_turn(
+                        turn=turn, tool_calls=[COMPLETE_TASK_TOOL_NAME],
+                        final_answer=True, tenant_id=tenant_id,
+                    )
+                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
+                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                    break
+
+                # Use remaining tools for execution (or original list if complete_task had no result)
+                tool_calls = remaining_tool_calls if remaining_tool_calls else tool_calls
 
                 tool_names = [tc.name for tc in tool_calls]
                 logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
@@ -781,6 +873,18 @@ class Orchestrator:
                             success=True, duration_ms=tc_batch_duration,
                             tenant_id=tenant_id,
                         )
+
+                # complete_task was called alongside other tools — use its result
+                if complete_task_result:
+                    final_response = complete_task_result.result
+                    self._audit.log_react_turn(
+                        turn=turn, tool_calls=tool_names + [COMPLETE_TASK_TOOL_NAME],
+                        final_answer=True, tenant_id=tenant_id,
+                    )
+                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
+                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                    break
 
                 # Change E: Watchdog loop detection
                 for tn in tool_names:
@@ -1373,6 +1477,9 @@ class Orchestrator:
                 },
             }
             schemas.append(delegate_schema)
+
+        # Always inject complete_task as the last tool
+        schemas.append(COMPLETE_TASK_SCHEMA)
 
         # Apply tool policy filter if configured
         if self._tool_policy_filter:

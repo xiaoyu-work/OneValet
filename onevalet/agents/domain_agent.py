@@ -35,6 +35,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..llm.base import LLMResponse, ToolCall as LLMToolCall
 from ..message import Message
+from ..orchestrator.react_config import (
+    COMPLETE_TASK_TOOL_NAME,
+    COMPLETE_TASK_SCHEMA,
+    CompleteTaskResult,
+)
 from ..result import AgentResult, AgentStatus, ApprovalResult
 from ..standard_agent import StandardAgent
 
@@ -93,12 +98,20 @@ class DomainAgent(StandardAgent):
     domain_system_prompt: str = ""
     domain_tools: List[DomainTool] = []
     max_domain_turns: int = 5
+    max_complete_task_retries: int = 3
     tool_timeout: float = 30.0  # seconds per tool call
     max_tool_result_chars: int = 4000  # truncate tool results beyond this
 
+    _COMPLETE_TASK_INSTRUCTION = (
+        "\n\nIMPORTANT: When you have finished the task, you MUST call the "
+        "`complete_task` tool with your final answer in the `result` parameter. "
+        "This is the ONLY way to finish. Never respond with plain text without "
+        "calling `complete_task`."
+    )
+
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop."""
-        return self.domain_system_prompt
+        return self.domain_system_prompt + self._COMPLETE_TASK_INSTRUCTION
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -141,6 +154,8 @@ class DomainAgent(StandardAgent):
     async def _run_react(self) -> AgentResult:
         """Core mini ReAct loop with domain tools."""
         tool_schemas = [t.to_openai_schema() for t in self.domain_tools]
+        # Always inject complete_task
+        tool_schemas.append(COMPLETE_TASK_SCHEMA)
         messages = self._react_messages
 
         if self._remaining_tool_calls:
@@ -176,14 +191,83 @@ class DomainAgent(StandardAgent):
                             "tool_calls_count": len(self._tool_trace),
                         },
                     )
-                return self.make_result(
-                    status=AgentStatus.COMPLETED,
-                    raw_message=text,
-                    metadata={
-                        "tool_trace": list(self._tool_trace),
-                        "tool_calls_count": len(self._tool_trace),
-                    },
-                )
+
+                # Grace turn: LLM forgot to call complete_task.
+                # Retry up to max_complete_task_retries times.
+                max_retries = self.max_complete_task_retries
+                for retry in range(1, max_retries + 1):
+                    logger.warning(
+                        f"[DomainAgent:{self.name}] turn={turn} no tool calls, "
+                        f"grace retry {retry}/{max_retries}"
+                    )
+                    messages.append(self._format_assistant_msg(response))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You must call the `complete_task` tool with your final "
+                            "response in the `result` parameter to finish. Call it now."
+                        ),
+                    })
+                    try:
+                        response = await self.llm_client.chat_completion(
+                            messages=messages,
+                            tools=tool_schemas,
+                            tool_choice="required",
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[DomainAgent:{self.name}] grace retry {retry} "
+                            f"LLM call failed: {e}"
+                        )
+                        return self.make_result(
+                            status=AgentStatus.ERROR,
+                            raw_message=(
+                                "Internal error: failed to complete the task. "
+                                "Please try again."
+                            ),
+                            metadata={
+                                "tool_trace": list(self._tool_trace),
+                                "tool_calls_count": len(self._tool_trace),
+                            },
+                        )
+                    if response.has_tool_calls:
+                        break  # success — proceed to tool execution
+
+                # Exhausted all retries — ask LLM to produce a user-friendly
+                # error message (no tools, so it can only return text).
+                if not response.has_tool_calls:
+                    logger.error(
+                        f"[DomainAgent:{self.name}] exhausted {max_retries} "
+                        f"grace retries, LLM still did not call complete_task"
+                    )
+                    messages.append(self._format_assistant_msg(response))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "There was an internal issue processing your request. "
+                            "Generate a short, friendly apology to the user in "
+                            "their language, and suggest they try again later."
+                        ),
+                    })
+                    try:
+                        fallback_resp = await self.llm_client.chat_completion(
+                            messages=messages,
+                            tools=None,
+                        )
+                        friendly_msg = fallback_resp.content or (
+                            "Sorry, something went wrong. Please try again later."
+                        )
+                    except Exception:
+                        friendly_msg = "Sorry, something went wrong. Please try again later."
+                    return self.make_result(
+                        status=AgentStatus.COMPLETED,
+                        raw_message=friendly_msg,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                            "complete_task_fallback": True,
+                        },
+                    )
 
             messages.append(self._format_assistant_msg(response))
             result = await self._execute_tool_calls(response.tool_calls, messages)
@@ -209,6 +293,40 @@ class DomainAgent(StandardAgent):
     ) -> Optional[AgentResult]:
         """Execute tool calls. Returns AgentResult if paused for approval, None otherwise."""
         for i, tc in enumerate(tool_calls):
+            # Intercept complete_task — extract result and finish
+            if tc.name == COMPLETE_TASK_TOOL_NAME:
+                try:
+                    args = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                result_text = args.get("result", "")
+                if result_text:
+                    self._tool_trace.append({
+                        "tool": COMPLETE_TASK_TOOL_NAME,
+                        "status": "ok",
+                        "summary": result_text[:240],
+                    })
+                    logger.info(
+                        f"[DomainAgent:{self.name}] complete_task called "
+                        f"({len(result_text)} chars)"
+                    )
+                    return self.make_result(
+                        status=AgentStatus.COMPLETED,
+                        raw_message=result_text,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                        },
+                    )
+                else:
+                    # Missing result — append error and continue
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": 'Error: "result" argument is required for complete_task.',
+                    })
+                    continue
+
             tool = self._find_domain_tool(tc.name)
             if tool is None:
                 error_text = f"Error: Unknown tool '{tc.name}'"

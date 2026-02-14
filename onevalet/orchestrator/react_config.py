@@ -6,7 +6,46 @@ loop results.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
+
+
+# ---------------------------------------------------------------------------
+# complete_task: explicit loop termination tool
+# ---------------------------------------------------------------------------
+
+COMPLETE_TASK_TOOL_NAME = "complete_task"
+
+COMPLETE_TASK_SCHEMA: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": COMPLETE_TASK_TOOL_NAME,
+        "description": (
+            "Call this tool to signal that you have completed the user's request "
+            "and provide your final response. Use this when you have finished all "
+            "necessary tool calls and are ready to deliver the final answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "string",
+                    "description": (
+                        "Your final response to the user. This should be comprehensive "
+                        "and include all relevant information gathered from tool calls."
+                    ),
+                },
+            },
+            "required": ["result"],
+        },
+    },
+}
+
+
+@dataclass
+class CompleteTaskResult:
+    """Marker returned when the LLM calls complete_task."""
+
+    result: str
 
 
 @dataclass
@@ -39,6 +78,10 @@ class ReactLoopConfig:
     """Max LLM call retries on transient errors."""
     llm_retry_base_delay: float = 1.0
     """Retry base delay in seconds (used for exponential back-off)."""
+
+    # complete_task enforcement
+    max_complete_task_retries: int = 3
+    """Max grace-turn retries when LLM forgets to call complete_task."""
 
     # Approval
     approval_timeout_minutes: int = 30

@@ -64,6 +64,9 @@ from .react_config import (
     ReactLoopResult,
     ToolCallRecord,
     TokenUsage,
+    COMPLETE_TASK_TOOL_NAME,
+    COMPLETE_TASK_SCHEMA,
+    CompleteTaskResult,
 )
 
 from .orchestrator import Orchestrator
@@ -88,6 +91,9 @@ __all__ = [
     "ReactLoopResult",
     "ToolCallRecord",
     "TokenUsage",
+    "COMPLETE_TASK_TOOL_NAME",
+    "COMPLETE_TASK_SCHEMA",
+    "CompleteTaskResult",
     # Main
     "Orchestrator",
 ]
