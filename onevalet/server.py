@@ -11,8 +11,6 @@ import json
 import logging
 import os
 import pathlib
-import secrets
-import time
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -58,8 +56,8 @@ api.add_middleware(
     allow_headers=["*"],
 )
 
-_TENANT_ID = "default"
 _SUPPORTED_PROVIDERS = ["openai", "anthropic", "azure", "dashscope", "gemini", "ollama"]
+_INTERNAL_SERVICE_KEY = os.getenv("ONEVALET_SERVICE_KEY", "")
 
 
 def _require_app() -> OneValet:
@@ -67,6 +65,13 @@ def _require_app() -> OneValet:
     if _app is None:
         raise HTTPException(503, "Not configured. Complete setup in Settings.")
     return _app
+
+
+def _verify_service_key(request: Request):
+    """Verify X-Service-Key header for internal endpoints."""
+    key = request.headers.get("x-service-key", "")
+    if not _INTERNAL_SERVICE_KEY or key != _INTERNAL_SERVICE_KEY:
+        raise HTTPException(403, "Invalid service key")
 
 
 # ─── Models ───
@@ -312,11 +317,11 @@ async def health():
 
 
 @api.post("/api/clear-session")
-async def clear_session():
-    """Clear conversation history for the default tenant."""
+async def clear_session(tenant_id: str = "default"):
+    """Clear conversation history for a tenant."""
     app = _require_app()
     await app._ensure_initialized()
-    app._momex.clear_history(tenant_id=_TENANT_ID, session_id=_TENANT_ID)
+    app._momex.clear_history(tenant_id=tenant_id, session_id=tenant_id)
     return {"status": "ok", "message": "Session history cleared"}
 
 
@@ -338,19 +343,19 @@ def _sanitize_credential(entry: dict) -> dict:
 
 
 @api.get("/api/credentials")
-async def list_credentials():
+async def list_credentials(tenant_id: str = "default", service: Optional[str] = None):
     app = _require_app()
     await app._ensure_initialized()
-    entries = await app._credential_store.list(_TENANT_ID)
+    entries = await app._credential_store.list(tenant_id, service=service)
     return [_sanitize_credential(e) for e in entries]
 
 
 @api.post("/api/credentials/{service}")
-async def save_credential(service: str, req: CredentialSaveRequest):
+async def save_credential(service: str, req: CredentialSaveRequest, tenant_id: str = "default"):
     app = _require_app()
     await app._ensure_initialized()
     await app._credential_store.save(
-        tenant_id=_TENANT_ID,
+        tenant_id=tenant_id,
         service=service,
         credentials=req.credentials,
         account_name=req.account_name,
@@ -361,42 +366,84 @@ async def save_credential(service: str, req: CredentialSaveRequest):
 
 
 @api.delete("/api/credentials/{service}/{account_name}")
-async def delete_credential(service: str, account_name: str):
+async def delete_credential(service: str, account_name: str, tenant_id: str = "default"):
     app = _require_app()
     await app._ensure_initialized()
     deleted = await app._credential_store.delete(
-        tenant_id=_TENANT_ID,
+        tenant_id=tenant_id,
         service=service,
         account_name=account_name,
     )
     return {"deleted": deleted}
 
 
+# ─── Internal Credential APIs (service-to-service) ───
+
+
+@api.get("/api/internal/credentials/by-email")
+async def internal_credentials_by_email(
+    request: Request, email: str, service: Optional[str] = None,
+):
+    """Lookup credentials by email. Returns full tokens. Internal use only."""
+    _verify_service_key(request)
+    app = _require_app()
+    await app._ensure_initialized()
+    result = await app._credential_store.find_by_email(email, service)
+    if not result:
+        raise HTTPException(404, "No credentials found for email")
+    return result
+
+
+@api.get("/api/internal/credentials")
+async def internal_credentials_get(
+    request: Request, tenant_id: str, service: str, account_name: str = "primary",
+):
+    """Get full credentials including tokens. Internal use only."""
+    _verify_service_key(request)
+    app = _require_app()
+    await app._ensure_initialized()
+    creds = await app._credential_store.get(tenant_id, service, account_name)
+    if not creds:
+        raise HTTPException(404, "Credentials not found")
+    return {"tenant_id": tenant_id, "service": service, "account_name": account_name, "credentials": creds}
+
+
+@api.put("/api/internal/credentials")
+async def internal_credentials_update(
+    request: Request, tenant_id: str, service: str,
+    account_name: str = "primary",
+):
+    """Update credentials (e.g. after token refresh). Internal use only."""
+    _verify_service_key(request)
+    app = _require_app()
+    await app._ensure_initialized()
+    body = await request.json()
+    await app._credential_store.save(tenant_id, service, body, account_name)
+    return {"updated": True}
+
+
 # ─── OAuth ───
 
-_oauth_states: dict[str, dict] = {}
+
+def _oauth_success_html(provider: str, email: str, detail: str) -> HTMLResponse:
+    """HTML popup response for demo UI (backward compat when no redirect_after)."""
+    return HTMLResponse(
+        f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
+        f"<h2>Connected!</h2>"
+        f"<p>{detail} connected as <b>{email}</b></p>"
+        f"<script>"
+        f"window.opener&&window.opener.postMessage('oauth_complete','*');"
+        f"setTimeout(()=>window.close(),1500);"
+        f"</script></body></html>"
+    )
 
 
-def _generate_state(service: str) -> str:
-    """Generate a cryptographic state token for CSRF protection."""
-    token = secrets.token_urlsafe(32)
-    _oauth_states[token] = {"created_at": time.time(), "service": service}
-    # Garbage-collect expired states (>10 min)
-    cutoff = time.time() - 600
-    expired = [k for k, v in _oauth_states.items() if v["created_at"] < cutoff]
-    for k in expired:
-        del _oauth_states[k]
-    return token
-
-
-def _validate_state(state: str) -> Optional[str]:
-    """Validate and consume a state token. Returns service name or None."""
-    entry = _oauth_states.pop(state, None)
-    if not entry:
-        return None
-    if time.time() - entry["created_at"] > 600:
-        return None
-    return entry["service"]
+def _oauth_success_redirect(redirect_after: str, provider: str, email: str):
+    """Redirect to caller-specified URL after successful OAuth."""
+    from fastapi.responses import RedirectResponse
+    sep = "&" if "?" in redirect_after else "?"
+    url = f"{redirect_after}{sep}success=true&provider={provider}&email={email}"
+    return RedirectResponse(url)
 
 
 def _get_base_url(request: Request) -> str:
@@ -409,14 +456,22 @@ def _get_base_url(request: Request) -> str:
 
 
 @api.get("/api/oauth/google/authorize")
-async def google_oauth_authorize(request: Request):
+async def google_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Google OAuth flow. Returns authorization URL."""
     from .oauth.google_oauth import GoogleOAuth
 
     app = _require_app()
     await app._ensure_initialized()
 
-    state = _generate_state("google")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="google",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/google/callback"
 
@@ -432,15 +487,19 @@ async def google_oauth_callback(request: Request, code: str, state: str):
     """Google OAuth callback — exchange code for tokens and store credentials."""
     from .oauth.google_oauth import GoogleOAuth
 
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/google/callback"
@@ -458,41 +517,37 @@ async def google_oauth_callback(request: Request, code: str, state: str):
             "scopes": tokens.get("scope", "").split(),
         }
 
-        # Save to both gmail and google_calendar (scopes cover both)
         for svc in ("gmail", "google_calendar", "google_tasks", "google_drive"):
             await app._credential_store.save(
-                tenant_id=_TENANT_ID,
-                service=svc,
-                credentials=credentials,
-                account_name="primary",
+                tenant_id=tenant_id, service=svc,
+                credentials=credentials, account_name=account_name,
             )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Gmail, Google Calendar, Tasks, Drive, Docs &amp; Sheets connected as <b>{email}</b></p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "google", email)
+        return _oauth_success_html("google", email, "Gmail, Google Calendar, Tasks, Drive")
     except Exception as e:
         logger.error(f"Google OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 @api.get("/api/oauth/microsoft/authorize")
-async def microsoft_oauth_authorize(request: Request):
+async def microsoft_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Microsoft OAuth flow. Returns authorization URL."""
     from .oauth.microsoft_oauth import MicrosoftOAuth
 
     app = _require_app()
     await app._ensure_initialized()
 
-    state = _generate_state("microsoft")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="microsoft",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/microsoft/callback"
 
@@ -508,15 +563,19 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
     """Microsoft OAuth callback — exchange code for tokens and store credentials."""
     from .oauth.microsoft_oauth import MicrosoftOAuth
 
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/microsoft/callback"
@@ -534,34 +593,27 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
             "scopes": tokens.get("scope", "").split(),
         }
 
-        # Save to both outlook and outlook_calendar (scopes cover both)
         for svc in ("outlook", "outlook_calendar", "microsoft_todo", "onedrive"):
             await app._credential_store.save(
-                tenant_id=_TENANT_ID,
-                service=svc,
-                credentials=credentials,
-                account_name="primary",
+                tenant_id=tenant_id, service=svc,
+                credentials=credentials, account_name=account_name,
             )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Outlook, Calendar, To Do &amp; OneDrive connected as <b>{email}</b></p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "microsoft", email)
+        return _oauth_success_html("microsoft", email, "Outlook, Calendar, To Do &amp; OneDrive")
     except Exception as e:
         logger.error(f"Microsoft OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 @api.get("/api/oauth/todoist/authorize")
-async def todoist_oauth_authorize(request: Request):
+async def todoist_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Todoist OAuth flow. Returns authorization URL."""
     app = _require_app()
     await app._ensure_initialized()
@@ -570,7 +622,10 @@ async def todoist_oauth_authorize(request: Request):
     if not client_id:
         raise HTTPException(400, "Todoist OAuth not configured. Set TODOIST_CLIENT_ID in Settings > OAuth Apps.")
 
-    state = _generate_state("todoist")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="todoist",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     params = {
         "client_id": client_id,
         "scope": "data:read_write",
@@ -583,33 +638,30 @@ async def todoist_oauth_authorize(request: Request):
 @api.get("/api/oauth/todoist/callback")
 async def todoist_oauth_callback(request: Request, code: str, state: str):
     """Todoist OAuth callback — exchange code for token and store credentials."""
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     client_id = os.getenv("TODOIST_CLIENT_ID")
     client_secret = os.getenv("TODOIST_CLIENT_SECRET")
     if not client_id or not client_secret:
-        return HTMLResponse(
-            "<h2>OAuth Error</h2><p>Todoist OAuth not configured.</p>",
-            status_code=500,
-        )
+        return HTMLResponse("<h2>OAuth Error</h2><p>Todoist OAuth not configured.</p>", status_code=500)
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://todoist.com/oauth/access_token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "code": code,
-                },
+                data={"client_id": client_id, "client_secret": client_secret, "code": code},
                 timeout=30.0,
             )
             response.raise_for_status()
@@ -617,7 +669,6 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
 
         access_token = data["access_token"]
 
-        # Fetch user email from Todoist Sync API
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 "https://api.todoist.com/sync/v9/sync",
@@ -639,41 +690,38 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
         }
 
         await app._credential_store.save(
-            tenant_id=_TENANT_ID,
-            service="todoist",
-            credentials=credentials,
-            account_name="primary",
+            tenant_id=tenant_id, service="todoist",
+            credentials=credentials, account_name=account_name,
         )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Todoist connected as <b>{email}</b></p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "todoist", email)
+        return _oauth_success_html("todoist", email, "Todoist")
     except Exception as e:
         logger.error(f"Todoist OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 # ─── Hue OAuth ───
 
 
 @api.get("/api/oauth/hue/authorize")
-async def hue_oauth_authorize(request: Request):
+async def hue_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Philips Hue OAuth flow. Returns authorization URL."""
     from .oauth.hue_oauth import HueOAuth
 
     app = _require_app()
     await app._ensure_initialized()
 
-    state = _generate_state("hue")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="hue",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/hue/callback"
 
@@ -689,15 +737,19 @@ async def hue_oauth_callback(request: Request, code: str, state: str):
     """Hue OAuth callback — exchange code for tokens and store credentials."""
     from .oauth.hue_oauth import HueOAuth
 
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/hue/callback"
@@ -713,41 +765,38 @@ async def hue_oauth_callback(request: Request, code: str, state: str):
         }
 
         await app._credential_store.save(
-            tenant_id=_TENANT_ID,
-            service="philips_hue",
-            credentials=credentials,
-            account_name="primary",
+            tenant_id=tenant_id, service="philips_hue",
+            credentials=credentials, account_name=account_name,
         )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Philips Hue connected.</p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "hue", "")
+        return _oauth_success_html("hue", "", "Philips Hue")
     except Exception as e:
         logger.error(f"Hue OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 # ─── Sonos OAuth ───
 
 
 @api.get("/api/oauth/sonos/authorize")
-async def sonos_oauth_authorize(request: Request):
+async def sonos_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Sonos OAuth flow. Returns authorization URL."""
     from .oauth.sonos_oauth import SonosOAuth
 
     app = _require_app()
     await app._ensure_initialized()
 
-    state = _generate_state("sonos")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="sonos",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/sonos/callback"
 
@@ -763,15 +812,19 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
     """Sonos OAuth callback — exchange code for tokens and store credentials."""
     from .oauth.sonos_oauth import SonosOAuth
 
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/sonos/callback"
@@ -787,41 +840,38 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
         }
 
         await app._credential_store.save(
-            tenant_id=_TENANT_ID,
-            service="sonos",
-            credentials=credentials,
-            account_name="primary",
+            tenant_id=tenant_id, service="sonos",
+            credentials=credentials, account_name=account_name,
         )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Sonos connected.</p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "sonos", "")
+        return _oauth_success_html("sonos", "", "Sonos")
     except Exception as e:
         logger.error(f"Sonos OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 # ─── Dropbox OAuth ───
 
 
 @api.get("/api/oauth/dropbox/authorize")
-async def dropbox_oauth_authorize(request: Request):
+async def dropbox_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
     """Initiate Dropbox OAuth flow. Returns authorization URL."""
     from .oauth.dropbox_oauth import DropboxOAuth
 
     app = _require_app()
     await app._ensure_initialized()
 
-    state = _generate_state("dropbox")
+    state = await app._credential_store.save_oauth_state(
+        tenant_id=tenant_id, service="dropbox",
+        redirect_after=redirect_after, account_name=account_name,
+    )
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/dropbox/callback"
 
@@ -837,15 +887,19 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
     """Dropbox OAuth callback — exchange code for tokens and store credentials."""
     from .oauth.dropbox_oauth import DropboxOAuth
 
-    service = _validate_state(state)
-    if not service:
+    app = _require_app()
+    await app._ensure_initialized()
+
+    state_data = await app._credential_store.consume_oauth_state(state)
+    if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
             status_code=400,
         )
 
-    app = _require_app()
-    await app._ensure_initialized()
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
 
     base_url = _get_base_url(request)
     redirect_uri = f"{base_url}/api/oauth/dropbox/callback"
@@ -863,27 +917,16 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
         }
 
         await app._credential_store.save(
-            tenant_id=_TENANT_ID,
-            service="dropbox",
-            credentials=credentials,
-            account_name="primary",
+            tenant_id=tenant_id, service="dropbox",
+            credentials=credentials, account_name=account_name,
         )
 
-        return HTMLResponse(
-            f"<html><body style='font-family:sans-serif;text-align:center;padding:60px'>"
-            f"<h2>Connected!</h2>"
-            f"<p>Dropbox connected as <b>{email}</b></p>"
-            f"<script>"
-            f"window.opener&&window.opener.postMessage('oauth_complete','*');"
-            f"setTimeout(()=>window.close(),1500);"
-            f"</script></body></html>"
-        )
+        if redirect_after:
+            return _oauth_success_redirect(redirect_after, "dropbox", email)
+        return _oauth_success_html("dropbox", email, "Dropbox")
     except Exception as e:
         logger.error(f"Dropbox OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(
-            f"<h2>OAuth Error</h2><p>{e}</p>",
-            status_code=500,
-        )
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
 # ─── Email Events ───

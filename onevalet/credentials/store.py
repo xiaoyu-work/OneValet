@@ -24,6 +24,8 @@ Usage (standalone — backward compatible):
 
 import json
 import logging
+import secrets
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from ..db import Database, Repository
@@ -74,6 +76,12 @@ class CredentialStore(Repository):
         if self._standalone:
             await self._db.initialize()
         await self.ensure_table()
+        # Email lookup index for webhook handlers
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_credentials_email "
+            "ON credentials ((credentials_json->>'email'))"
+        )
+        await self._ensure_oauth_states_table()
         logger.info("CredentialStore initialized")
 
     async def close(self) -> None:
@@ -171,3 +179,111 @@ class CredentialStore(Repository):
             tenant_id, service, account_name,
         )
         return result == "DELETE 1"
+
+    async def find_by_email(
+        self,
+        email: str,
+        service: Optional[str] = None,
+    ) -> Optional[dict]:
+        """Find credentials by email across all tenants.
+
+        Used by webhook handlers to map email → tenant_id + credentials.
+        """
+        if service:
+            row = await self.db.fetchrow(
+                """
+                SELECT tenant_id, service, account_name, credentials_json
+                FROM credentials
+                WHERE credentials_json->>'email' = $1 AND service = $2
+                LIMIT 1
+                """,
+                email, service,
+            )
+        else:
+            row = await self.db.fetchrow(
+                """
+                SELECT tenant_id, service, account_name, credentials_json
+                FROM credentials
+                WHERE credentials_json->>'email' = $1
+                LIMIT 1
+                """,
+                email,
+            )
+        if not row:
+            return None
+        val = row["credentials_json"]
+        creds = json.loads(val) if isinstance(val, str) else val
+        return {
+            "tenant_id": row["tenant_id"],
+            "service": row["service"],
+            "account_name": row["account_name"],
+            "credentials": creds,
+        }
+
+    # ─── OAuth State Management ───
+
+    async def _ensure_oauth_states_table(self) -> None:
+        """Create oauth_states table if it doesn't exist."""
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                service TEXT NOT NULL,
+                redirect_after TEXT,
+                account_name TEXT NOT NULL DEFAULT 'primary',
+                extra_data JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
+            )
+        """)
+
+    async def save_oauth_state(
+        self,
+        tenant_id: str,
+        service: str,
+        redirect_after: Optional[str] = None,
+        account_name: str = "primary",
+        extra_data: Optional[dict] = None,
+    ) -> str:
+        """Generate and persist an OAuth state token. Returns the token."""
+        state = secrets.token_urlsafe(32)
+        await self.db.execute(
+            """
+            INSERT INTO oauth_states (state, tenant_id, service, redirect_after, account_name, extra_data)
+            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+            """,
+            state, tenant_id, service, redirect_after, account_name,
+            json.dumps(extra_data) if extra_data else None,
+        )
+        # Garbage-collect expired states
+        await self.db.execute(
+            "DELETE FROM oauth_states WHERE expires_at < NOW()"
+        )
+        return state
+
+    async def consume_oauth_state(self, state: str) -> Optional[dict]:
+        """Validate and consume (delete) an OAuth state token.
+
+        Returns {tenant_id, service, redirect_after, account_name, extra_data}
+        or None if invalid/expired.
+        """
+        row = await self.db.fetchrow(
+            """
+            DELETE FROM oauth_states
+            WHERE state = $1 AND expires_at > NOW()
+            RETURNING tenant_id, service, redirect_after, account_name, extra_data
+            """,
+            state,
+        )
+        if not row:
+            return None
+        extra = row["extra_data"]
+        if isinstance(extra, str):
+            extra = json.loads(extra)
+        return {
+            "tenant_id": row["tenant_id"],
+            "service": row["service"],
+            "redirect_after": row["redirect_after"],
+            "account_name": row["account_name"],
+            "extra_data": extra,
+        }
