@@ -6,6 +6,7 @@ Usage:
     # → http://0.0.0.0:8000
 """
 
+import dataclasses
 import json
 import logging
 import os
@@ -274,10 +275,28 @@ async def stream(req: ChatRequest):
             message=req.message,
             metadata=req.metadata,
         ):
+            def _default(obj):
+                if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+                    # Avoid dataclasses.asdict() — it does deepcopy which fails
+                    # on non-serializable nested objects (e.g. asyncpg connections)
+                    result = {}
+                    for f in dataclasses.fields(obj):
+                        val = getattr(obj, f.name)
+                        try:
+                            json.dumps(val)
+                            result[f.name] = val
+                        except (TypeError, ValueError):
+                            result[f.name] = str(val)
+                    return result
+                try:
+                    return str(obj)
+                except Exception:
+                    return "<non-serializable>"
+
             data = json.dumps({
                 "type": event.type.value if event.type else "unknown",
                 "data": event.data,
-            }, ensure_ascii=False)
+            }, ensure_ascii=False, default=_default)
             yield f"data: {data}\n\n"
         yield "data: [DONE]\n\n"
 

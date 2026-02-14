@@ -161,9 +161,24 @@ class DomainAgent(StandardAgent):
             )
 
             if not response.has_tool_calls:
+                text = response.content or ""
+                # If the LLM responded with text on the first turn (no tool
+                # called), it likely needs info from the user (e.g. missing
+                # email address).  Return WAITING_FOR_INPUT so the agent stays
+                # alive and the user can reply.
+                if turn == 0 and text and self._looks_like_question(text):
+                    self._react_messages = messages
+                    return self.make_result(
+                        status=AgentStatus.WAITING_FOR_INPUT,
+                        raw_message=text,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                        },
+                    )
                 return self.make_result(
                     status=AgentStatus.COMPLETED,
-                    raw_message=response.content or "",
+                    raw_message=text,
                     metadata={
                         "tool_trace": list(self._tool_trace),
                         "tool_calls_count": len(self._tool_trace),
@@ -311,10 +326,32 @@ class DomainAgent(StandardAgent):
 
         return None
 
+    async def _parse_approval_with_llm(self, user_input: str) -> ApprovalResult:
+        """Use LLM to classify user's approval intent in any language."""
+        if not self.llm_client or not user_input.strip():
+            return ApprovalResult.MODIFY
+        try:
+            response = await self.llm_client.chat_completion(messages=[{
+                "role": "user",
+                "content": (
+                    f'The user was asked to approve an action. They replied: "{user_input}"\n'
+                    "Classify their intent as exactly one word: APPROVE, REJECT, or MODIFY."
+                ),
+            }])
+            result = (response.content or "").strip().upper()
+            if "APPROVE" in result:
+                return ApprovalResult.APPROVED
+            if "REJECT" in result:
+                return ApprovalResult.REJECTED
+            return ApprovalResult.MODIFY
+        except Exception as e:
+            logger.warning(f"LLM approval parsing failed: {e}")
+            return ApprovalResult.MODIFY
+
     async def on_waiting_for_approval(self, msg: Message) -> AgentResult:
         """Handle user's approval response (approve/reject/modify)."""
         user_input = msg.get_text() if msg else ""
-        approval = self.parse_approval(user_input)
+        approval = await self._parse_approval_with_llm(user_input)
 
         if approval == ApprovalResult.APPROVED:
             return await self._resume_after_approval()
@@ -410,6 +447,34 @@ class DomainAgent(StandardAgent):
             }
         )
         return await self._run_react()
+
+    async def on_waiting_for_input(self, msg: Message) -> AgentResult:
+        """Resume the mini ReAct loop with the user's follow-up answer."""
+        user_text = msg.get_text() if msg else ""
+        if not user_text:
+            return self.make_result(
+                status=AgentStatus.WAITING_FOR_INPUT,
+                raw_message="Please provide the requested information.",
+            )
+        # Append the user's reply and continue the ReAct loop
+        self._react_messages.append({"role": "user", "content": user_text})
+        self.transition_to(AgentStatus.RUNNING)
+        return await self._run_react()
+
+    @staticmethod
+    def _looks_like_question(text: str) -> bool:
+        """Heuristic: does the LLM response look like it's asking the user something?"""
+        t = text.strip()
+        if t.endswith("?") or t.endswith("？"):
+            return True
+        # Common question patterns in Chinese and English
+        question_signals = [
+            "请提供", "请告诉", "请问", "能否提供", "需要你提供",
+            "what is", "what's", "could you", "can you", "please provide",
+            "what email", "which email",
+        ]
+        t_lower = t.lower()
+        return any(s in t_lower for s in question_signals)
 
     def _find_domain_tool(self, name: str) -> Optional[DomainTool]:
         for tool in self.domain_tools:

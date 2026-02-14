@@ -366,8 +366,12 @@ class Orchestrator:
             # Agent still waiting -> return prompt directly, don't enter ReAct
             if agent_result.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
                 return await self.post_process(agent_result, context)
-            # Agent completed -> feed result into ReAct loop as context
-            context["pending_agent_result"] = agent_result
+            # Agent completed -> return result directly.
+            # The user's message was a response to the pending agent (e.g. an
+            # approval like "好"), NOT a new task.  Feeding it into the ReAct
+            # loop would cause the orchestrator to misinterpret the approval
+            # word as a brand-new request and spawn unnecessary follow-up agents.
+            return await self.post_process(agent_result, context)
 
         # Step 4: Build tool schemas
         tool_schemas = self._build_tool_schemas()
@@ -489,23 +493,24 @@ class Orchestrator:
         agent_result = await self._check_pending_agents(tenant_id, message, context)
         if agent_result is not None:
             # Agent still waiting -> return prompt directly, don't enter ReAct
-            if agent_result.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
-                agent_result = await self.post_process(agent_result, context)
-                yield AgentEvent(
-                    type=EventType.MESSAGE_START,
-                    data={"agent_type": agent_result.agent_type},
-                )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_CHUNK,
-                    data={"chunk": agent_result.raw_message or ""},
-                )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_END,
-                    data={},
-                )
-                return
-            # Agent completed -> feed result into ReAct loop as context
-            context["pending_agent_result"] = agent_result
+            # Return the agent's result directly — whether still waiting or
+            # completed.  The user's message was a response to the pending
+            # agent (e.g. approval "好"), not a new task.  Entering the ReAct
+            # loop would misinterpret it as a fresh request.
+            agent_result = await self.post_process(agent_result, context)
+            yield AgentEvent(
+                type=EventType.MESSAGE_START,
+                data={"agent_type": agent_result.agent_type},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_CHUNK,
+                data={"chunk": agent_result.raw_message or ""},
+            )
+            yield AgentEvent(
+                type=EventType.MESSAGE_END,
+                data={},
+            )
+            return
 
         # Build tool schemas
         tool_schemas = self._build_tool_schemas()
@@ -1343,15 +1348,6 @@ class Orchestrator:
             "role": "user",
             "content": user_message,
         })
-
-        # If a pending agent just completed, include its result
-        pending_result = context.get("pending_agent_result")
-        if pending_result:
-            result_text = pending_result.raw_message or f"Agent {pending_result.agent_type} completed."
-            messages.append({
-                "role": "user",
-                "content": f"[Previous agent result: {pending_result.agent_type}]\n{result_text}\n\nBased on this result, determine if any follow-up actions are needed.",
-            })
 
         return messages
 

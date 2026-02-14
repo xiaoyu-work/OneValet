@@ -119,17 +119,13 @@ async def execute_agent_tool(
             result_text=f"Error: Agent type '{agent_type}' not found.",
         )
 
-    # Build enriched message with handoff context
-    msg_parts = []
-    if handoff.conversation_context:
-        msg_parts.append(f"Context: {handoff.conversation_context}")
-    if task_instruction:
-        msg_parts.append(f"Task: {task_instruction}")
-    msg_content = "\n".join(msg_parts) if msg_parts else ""
-
+    # Build message for the agent — only pass the task instruction.
+    # Conversation context is available via enriched_hints["handoff"]
+    # but should NOT be injected into the user message as it can trigger
+    # Azure content filters (looks like prompt injection).
     msg = Message(
         name="orchestrator",
-        content=msg_content,
+        content=task_instruction or "",
         role="user",
     )
 

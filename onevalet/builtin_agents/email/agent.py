@@ -27,31 +27,25 @@ class EmailDomainAgent(DomainAgent):
     max_domain_turns = 6
 
     _SYSTEM_PROMPT_TEMPLATE = """\
-You are an email assistant with access to real-time email tools.
+Email management tools are available for this task. Today is {today} ({weekday}).
 
-Available tools:
-- search_emails: Search emails across connected accounts. Returns message_ids needed by other tools.
-- send_email: Compose and send a new email (requires approval).
-- reply_email: Reply to a specific email by message_id (requires approval).
-- delete_emails: Delete emails by message_ids (requires approval).
-- archive_emails: Archive emails by message_ids (requires approval).
-- mark_as_read: Mark emails as read by message_ids.
+Tool reference:
+- search_emails: Find emails, returns message_ids for use with other tools.
+- send_email: Send a new email (approval required). Needs: to, subject, body.
+- reply_email: Reply by message_id (approval required). Needs: message_id, body.
+- delete_emails: Delete by message_ids (approval required).
+- archive_emails: Archive by message_ids (approval required).
+- mark_as_read: Mark as read by message_ids.
 
-Today's date: {today} ({weekday})
-
-Instructions:
-1. For reading/checking emails: call search_emails. Default to unread emails from primary inbox.
-2. For sending: collect recipient email, subject, and body. Generate a clear, concise email body \
-based on the user's intent. Then call send_email.
-3. For replying: first call search_emails to find the target email and get its message_id, \
-then call reply_email.
-4. For deleting/archiving: first call search_emails, then use the message_ids from results \
-to call delete_emails or archive_emails. Include a description of what's being deleted/archived.
-5. For mark as read: use message_ids from a previous search_emails call.
-6. If critical info is missing (like recipient email for sending), ASK the user \
-in your text response WITHOUT calling any tools.
-7. When composing emails, keep them simple and direct — match the user's tone.
-8. Always use message_id and account values from search_emails results when calling other tools."""
+Guidelines:
+1. Reading emails: call search_emails. Default to unread from primary inbox.
+2. Sending: need recipient email, subject, and body. If any is missing, ask in one sentence.
+3. Replying: search_emails first to get message_id, then reply_email.
+4. Deleting/archiving: search_emails first, then use message_ids.
+5. If only a name is given, search_emails for their address. If not found, ask the user.
+6. Only write what the user asked. Do not guess email content from prior context.
+7. Always use message_id and account from search_emails results.
+8. Be concise."""
 
     def get_system_prompt(self) -> str:
         now = datetime.now()
