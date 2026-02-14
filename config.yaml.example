@@ -9,3 +9,7 @@ llm:
 # Optional: custom persona (appended after built-in system prompt)
 # system_prompt: |
 #   Your name is Jarvis. You speak in a warm, butler-like tone.
+
+# Callbacks — OneValet POSTs notifications here (e.g. important emails, trigger results)
+# callbacks:
+#   notify_url: http://localhost:8001/webhook/onevalet/callback
