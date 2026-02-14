@@ -2,12 +2,16 @@
 
 Defense 1 -- Single tool-result truncation (after each tool execution).
 Defense 2 -- History message trimming (before each loop iteration).
+Defense 2b -- Context summarization (summarize old messages via LLM before dropping).
 Defense 3 -- Force trim to safe range (after a context overflow error).
 """
 
-from typing import Any, Dict, List
+import logging
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .react_config import ReactLoopConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ContextManager:
@@ -115,6 +119,55 @@ class ContextManager:
     def force_trim(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Aggressively trim to system prompt + most recent 5 messages."""
         return self._keep_recent(messages, keep=5)
+
+    # ------------------------------------------------------------------
+    # Defense 2b: Context summarization
+    # ------------------------------------------------------------------
+
+    def split_for_summarization(
+        self, messages: List[Dict[str, Any]]
+    ) -> Optional[Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]]:
+        """Check if context needs trimming and split messages for summarization.
+
+        Returns None if no trimming is needed.
+        Otherwise returns (system_msgs, old_msgs_to_summarize, recent_msgs_to_keep).
+        """
+        threshold = int(self.config.context_token_limit * self.config.context_trim_threshold)
+        if self.estimate_tokens(messages) <= threshold:
+            return None
+
+        if not messages:
+            return None
+
+        if messages[0].get("role") == "system":
+            system = [messages[0]]
+            rest = messages[1:]
+        else:
+            system = []
+            rest = messages
+
+        keep = self.config.max_history_messages
+        if len(rest) <= keep:
+            return None
+
+        old = rest[:-keep]
+        recent = rest[-keep:]
+        return system, old, recent
+
+    @staticmethod
+    def build_summarized_messages(
+        system_msgs: List[Dict[str, Any]],
+        summary_text: str,
+        recent_msgs: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Rebuild the message list with a summary replacing old messages."""
+        result = list(system_msgs)
+        result.append({
+            "role": "user",
+            "content": f"[Conversation summary of earlier messages]\n{summary_text}",
+        })
+        result.extend(recent_msgs)
+        return result
 
     # ------------------------------------------------------------------
     # Internal

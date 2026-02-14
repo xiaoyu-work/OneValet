@@ -73,6 +73,7 @@ from .approval import collect_batch_approvals
 from .prompts import DEFAULT_SYSTEM_PROMPT
 from .audit_logger import AuditLogger
 from .tool_policy import ToolPolicyFilter
+from .transcript_repair import repair_transcript
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -574,6 +575,19 @@ class Orchestrator:
         pending_approvals, token_usage, tool_calls records, etc.) so callers
         can build AgentResult or persist to memory as needed.
         """
+        # --- Change A: Context window pre-flight guard ---
+        CONTEXT_HARD_MIN = 16_000
+        CONTEXT_WARN_BELOW = 32_000
+        context_tokens = getattr(self.llm_client, 'context_window', 128_000)
+        if context_tokens < CONTEXT_HARD_MIN:
+            yield AgentEvent(
+                type=EventType.ERROR,
+                data={"message": f"Model context window too small: {context_tokens} tokens (minimum: {CONTEXT_HARD_MIN})"},
+            )
+            return
+        if context_tokens < CONTEXT_WARN_BELOW:
+            logger.warning(f"Low context window: {context_tokens} tokens")
+
         start_time = time.monotonic()
         turn = 0
         all_tool_records: List[ToolCallRecord] = []
@@ -581,6 +595,7 @@ class Orchestrator:
         pending_approvals = []
         final_response = ""
         result_status = None
+        _recent_tool_names: List[str] = []  # Change E: watchdog loop detection
 
         logger.info(f"[ReAct] tenant={tenant_id}")
 
@@ -590,8 +605,11 @@ class Orchestrator:
         )
 
         for turn in range(1, self._react_config.max_turns + 1):
-            # Context guard
-            messages = self._context_manager.trim_if_needed(messages)
+            # Context guard with summarization
+            messages = await self._summarize_and_trim(messages)
+
+            # Change B: Transcript repair before LLM call
+            messages = repair_transcript(messages)
 
             # LLM call
             try:
@@ -764,7 +782,12 @@ class Orchestrator:
                             result_text = str(result) if result is not None else ""
                             tool_trace = []
                         result_chars_original = len(result_text)
+                        # Change C: Hard cap on tool result size
+                        result_text = self._cap_tool_result(result_text)
                         result_text = self._context_manager.truncate_tool_result(result_text)
+                        # Change D: Context isolation for agent-tools
+                        if is_agent and len(result_text) > 2000:
+                            result_text = result_text[:1500] + "\n...[full result available in agent context]"
                         logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
                         messages.append(self._build_tool_result_message(tc.id, result_text))
                         all_tool_records.append(ToolCallRecord(
@@ -787,6 +810,25 @@ class Orchestrator:
                             success=True, duration_ms=tc_batch_duration,
                             tenant_id=tenant_id,
                         )
+
+                # Change E: Watchdog loop detection
+                for tn in tool_names:
+                    _recent_tool_names.append(tn)
+                if len(_recent_tool_names) >= 3:
+                    last_3 = _recent_tool_names[-3:]
+                    if len(set(last_3)) == 1:
+                        logger.warning(
+                            f"[ReAct] Loop detected: {last_3[0]} called 3 times "
+                            f"consecutively, breaking ReAct loop"
+                        )
+                        final_response = (
+                            f"I noticed I was repeating the same action ({last_3[0]}) "
+                            f"without making progress. Let me provide what I have so far."
+                        )
+                        yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
+                        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
+                        yield AgentEvent(type=EventType.MESSAGE_END, data={})
+                        break
 
                 # Audit: log turn summary
                 self._audit.log_react_turn(
@@ -984,6 +1026,22 @@ class Orchestrator:
                 "Please retry with valid JSON arguments."
             )
 
+        # Change F: delegate_to_agent meta-tool
+        if tool_name == "delegate_to_agent":
+            agent_name = args.get("agent_name", "")
+            task_instruction = args.get("task_instruction", "")
+            if not agent_name:
+                return "Error: agent_name is required for delegate_to_agent"
+            if not self._agent_registry or not self._agent_registry.get_agent_class(agent_name):
+                return f"Error: Agent '{agent_name}' not found in registry"
+            return await execute_agent_tool(
+                self,
+                agent_type=agent_name,
+                tenant_id=tenant_id,
+                tool_call_args={},
+                task_instruction=task_instruction,
+            )
+
         if self._is_agent_tool(tool_name):
             # Agent-Tool execution
             task_instruction = args.pop("task_instruction", "")
@@ -1011,7 +1069,9 @@ class Orchestrator:
             return await tool_def.executor(args, context)
 
     def _is_agent_tool(self, tool_name: str) -> bool:
-        """Check if tool_name corresponds to a registered agent."""
+        """Check if tool_name corresponds to a registered agent or delegate_to_agent."""
+        if tool_name == "delegate_to_agent":
+            return True
         if not self._agent_registry:
             return False
         return self._agent_registry.get_agent_class(tool_name) is not None
@@ -1023,6 +1083,82 @@ class Orchestrator:
             from onevalet.builtin_agents.digest.important_dates_repo import ImportantDatesRepository
             meta["important_dates_store"] = ImportantDatesRepository(self.database)
         return meta
+
+    HARD_MAX_TOOL_RESULT_CHARS = 400_000
+
+    def _cap_tool_result(self, result_text: str) -> str:
+        """Hard cap on tool result size to prevent context window overflow."""
+        if len(result_text) <= self.HARD_MAX_TOOL_RESULT_CHARS:
+            return result_text
+        cut = self.HARD_MAX_TOOL_RESULT_CHARS
+        newline_pos = result_text.rfind("\n", int(cut * 0.8), cut)
+        if newline_pos > 0:
+            cut = newline_pos
+        logger.warning(
+            f"[ReAct] Tool result truncated: {len(result_text)} -> {cut} chars"
+        )
+        return result_text[:cut] + "\n\n[truncated - result exceeded size limit]"
+
+    async def _summarize_and_trim(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Summarize old messages via LLM before trimming, preserving context.
+
+        If context is within threshold, returns messages unchanged.
+        Otherwise, splits messages into old/recent, summarizes old via LLM,
+        and replaces them with a single summary message.
+        Falls back to simple trim if summarization fails.
+        """
+        split = self._context_manager.split_for_summarization(messages)
+        if split is None:
+            return messages
+
+        system_msgs, old_msgs, recent_msgs = split
+
+        # Build a compact representation of old messages for summarization
+        old_text_parts = []
+        for msg in old_msgs:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, str) and content:
+                # Truncate very long individual messages for the summary request
+                if len(content) > 500:
+                    content = content[:497] + "..."
+                old_text_parts.append(f"{role}: {content}")
+
+        if not old_text_parts:
+            return self._context_manager.trim_if_needed(messages)
+
+        old_text = "\n".join(old_text_parts)
+        # Cap the input to the summarizer to avoid nested overflow
+        if len(old_text) > 8000:
+            old_text = old_text[:8000] + "\n...[truncated]"
+
+        try:
+            summary_response = await self.llm_client.chat_completion(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Summarize the following conversation excerpt in 2-4 sentences. "
+                            "Preserve key facts, decisions, entities, and user preferences. "
+                            "Be concise but retain actionable context."
+                        ),
+                    },
+                    {"role": "user", "content": old_text},
+                ],
+            )
+            summary = (summary_response.content or "").strip()
+            if summary:
+                logger.info(
+                    f"[Context] Summarized {len(old_msgs)} old messages "
+                    f"({len(old_text)} chars -> {len(summary)} chars)"
+                )
+                return self._context_manager.build_summarized_messages(
+                    system_msgs, summary, recent_msgs,
+                )
+        except Exception as e:
+            logger.warning(f"[Context] Summarization failed, falling back to trim: {e}")
+
+        return self._context_manager.trim_if_needed(messages)
 
     def _build_tool_result_message(
         self,
@@ -1176,6 +1312,18 @@ class Orchestrator:
         # so the LLM knows WHICH tool to call for each domain. The detailed
         # schemas are still passed only via the native `tools` parameter.
 
+        # Change F: Add Tier 2 agent catalog for delegate_to_agent
+        tier2 = getattr(self, "_tier2_agent_schemas", [])
+        if tier2:
+            catalog_lines = ["## Available agents (use delegate_to_agent to invoke):"]
+            for schema in tier2:
+                name = self._tool_name_from_schema(schema) or "unknown"
+                desc = (schema.get("function", {}).get("description", "") or "")
+                # Use first sentence of description for brevity
+                short_desc = desc.split(".")[0] if desc else name
+                catalog_lines.append(f"- {name}: {short_desc}")
+            system_parts.append("\n".join(catalog_lines))
+
         if system_parts:
             messages.append({
                 "role": "system",
@@ -1207,8 +1355,16 @@ class Orchestrator:
 
         return messages
 
+    # Change F: max number of agent-tools included as full schemas (Tier 1)
+    TIER1_AGENT_TOOL_LIMIT = 8
+
     def _build_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Build combined tool schemas: regular tools + agent-tools."""
+        """Build combined tool schemas: regular tools + agent-tools.
+
+        Agent-tools are split into two tiers (Change F):
+        - Tier 1: First N agents included as full tool schemas
+        - Tier 2: Remaining agents accessible via delegate_to_agent meta-tool
+        """
         schemas: List[Dict[str, Any]] = []
 
         if not self._agent_registry:
@@ -1219,15 +1375,50 @@ class Orchestrator:
         for tool in all_tools:
             schemas.append(tool.to_openai_schema())
 
-        # Agent-tools
+        # Agent-tools: split into Tier 1 (full schemas) and Tier 2 (catalog only)
         agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
-        schemas.extend(agent_tool_schemas)
+        tier1_schemas = agent_tool_schemas[:self.TIER1_AGENT_TOOL_LIMIT]
+        self._tier2_agent_schemas = agent_tool_schemas[self.TIER1_AGENT_TOOL_LIMIT:]
+
+        schemas.extend(tier1_schemas)
+
+        # Add delegate_to_agent meta-tool if there are Tier 2 agents
+        if self._tier2_agent_schemas:
+            delegate_schema = {
+                "type": "function",
+                "function": {
+                    "name": "delegate_to_agent",
+                    "description": (
+                        "Delegate a task to a specialized agent not listed in the "
+                        "direct tools above. See the agent catalog in the system "
+                        "prompt for all available agents."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "agent_name": {
+                                "type": "string",
+                                "description": "The agent class name from the catalog",
+                            },
+                            "task_instruction": {
+                                "type": "string",
+                                "description": "What the agent should do",
+                            },
+                        },
+                        "required": ["agent_name", "task_instruction"],
+                    },
+                },
+            }
+            schemas.append(delegate_schema)
 
         # Apply tool policy filter if configured
         if self._tool_policy_filter:
             schemas = self._tool_policy_filter.filter_tools(schemas)
 
-        logger.info(f"[Tools] {len(schemas)} total available")
+        logger.info(
+            f"[Tools] {len(schemas)} total available "
+            f"(tier1_agents={len(tier1_schemas)}, tier2_agents={len(self._tier2_agent_schemas)})"
+        )
 
         return schemas
 

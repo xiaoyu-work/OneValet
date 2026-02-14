@@ -5,16 +5,27 @@ Per design doc sections 4.1 and 6:
 - Creates agent instances via the orchestrator
 - Passes tool_call_args as context_hints for field pre-population
 - Returns structured AgentToolResult based on agent execution status
+- Builds structured HandoffContext for rich agent context passing
 """
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..message import Message
 from ..result import AgentStatus
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HandoffContext:
+    """Structured context passed from orchestrator to agent during handoff."""
+
+    task_summary: str  # concise description of what agent should do
+    known_entities: Dict[str, Any]  # extracted entities from tool_call_args
+    conversation_context: str  # summary of recent conversation (last 3 turns)
+    constraints: List[str]  # any constraints mentioned by user
 
 
 @dataclass
@@ -28,6 +39,39 @@ class AgentToolResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+def _extract_recent_context(orchestrator, tenant_id: str) -> str:
+    """Extract a brief summary of recent conversation from Momex history.
+
+    Returns a string summarizing the last 3 conversation turns (max 500 chars).
+    If no history is available, returns an empty string.
+    """
+    try:
+        history = orchestrator.momex.get_history(
+            tenant_id=tenant_id,
+            session_id=tenant_id,
+            limit=6,  # up to 3 turns (user + assistant each)
+        )
+        if not history:
+            return ""
+
+        parts = []
+        for msg in history:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            # Truncate individual messages to keep summary compact
+            if len(content) > 120:
+                content = content[:117] + "..."
+            parts.append(f"{role}: {content}")
+
+        summary = " | ".join(parts)
+        if len(summary) > 500:
+            summary = summary[:497] + "..."
+        return summary
+    except Exception as e:
+        logger.debug(f"Could not extract recent context for {tenant_id}: {e}")
+        return ""
+
+
 async def execute_agent_tool(
     orchestrator,
     agent_type: str,
@@ -38,6 +82,14 @@ async def execute_agent_tool(
     """Execute an agent as a tool in the ReAct loop."""
     from .approval import build_approval_request
 
+    # Build structured handoff context
+    handoff = HandoffContext(
+        task_summary=task_instruction or f"Execute {agent_type} task",
+        known_entities={k: v for k, v in tool_call_args.items() if v is not None},
+        conversation_context=_extract_recent_context(orchestrator, tenant_id),
+        constraints=[],
+    )
+
     enriched_hints = dict(tool_call_args)
     # task_instruction is popped from args in _execute_single() and passed
     # separately — put it back into hints so the agent has access to it.
@@ -47,6 +99,14 @@ async def execute_agent_tool(
         enriched_hints["db"] = orchestrator.database
     if orchestrator.trigger_engine:
         enriched_hints["trigger_engine"] = orchestrator.trigger_engine
+
+    # Pass structured handoff via context_hints
+    enriched_hints["handoff"] = {
+        "task_summary": handoff.task_summary,
+        "known_entities": handoff.known_entities,
+        "conversation_context": handoff.conversation_context,
+        "constraints": handoff.constraints,
+    }
 
     agent = await orchestrator.create_agent(
         tenant_id=tenant_id,
@@ -59,7 +119,14 @@ async def execute_agent_tool(
             result_text=f"Error: Agent type '{agent_type}' not found.",
         )
 
-    msg_content = task_instruction if task_instruction else ""
+    # Build enriched message with handoff context
+    msg_parts = []
+    if handoff.conversation_context:
+        msg_parts.append(f"Context: {handoff.conversation_context}")
+    if task_instruction:
+        msg_parts.append(f"Task: {task_instruction}")
+    msg_content = "\n".join(msg_parts) if msg_parts else ""
+
     msg = Message(
         name="orchestrator",
         content=msg_content,
