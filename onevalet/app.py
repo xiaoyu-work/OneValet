@@ -297,22 +297,26 @@ class OneValet:
     }
 
     async def _load_api_keys_to_env(self) -> None:
-        """Load API key credentials from credential store into env vars."""
+        """Load static API key credentials from config file into env vars.
+
+        Reads the ``credentials`` section of config.yaml. These are static
+        secrets (API keys, client IDs) that don't change at runtime.
+        Dynamic OAuth tokens are managed separately by the OAuth handlers.
+        """
+        file_creds = self._config.get("credentials", {})
         for service, mapping in self._API_KEY_ENV_MAP.items():
-            try:
-                entries = await self._credential_store.list("default", service=service)
-                if entries:
-                    creds = entries[0].get("credentials", {})
-                    for json_key, env_vars in mapping.items():
-                        val = creds.get(json_key, "")
-                        if val:
-                            if isinstance(env_vars, list):
-                                for env_var in env_vars:
-                                    os.environ[env_var] = val
-                            else:
-                                os.environ[env_vars] = val
-            except Exception as e:
-                logger.debug(f"No {service} credentials found: {e}")
+            svc_creds = file_creds.get(service, {})
+            if not svc_creds:
+                continue
+            for json_key, env_vars in mapping.items():
+                val = svc_creds.get(json_key, "")
+                if val:
+                    if isinstance(env_vars, list):
+                        for env_var in env_vars:
+                            os.environ[env_var] = val
+                    else:
+                        os.environ[env_vars] = val
+            logger.debug(f"Loaded {service} credentials from config")
 
     @property
     def config(self) -> dict:

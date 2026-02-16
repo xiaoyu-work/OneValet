@@ -39,6 +39,7 @@
       <a href="#sec-notion" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Notion</a>
       <a href="#sec-image" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Image Generation</a>
       <a href="#sec-smarthome" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Smart Home</a>
+      <a href="#sec-composio" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Composio</a>
       <a href="#sec-cloud-storage" class="nav-link block px-3 py-2 text-sm text-gray-700 rounded-lg hover:bg-gray-100">Cloud Storage</a>
     </nav>
 
@@ -229,6 +230,20 @@
           </div>
         </section>
 
+        <!-- Composio -->
+        <section id="sec-composio" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div class="px-6 py-4 border-b border-gray-100">
+            <h2 class="text-base font-semibold text-gray-900">Composio</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+              Third-party app integrations (Slack, GitHub, and 1000+ more) via
+              <a href="https://composio.dev" target="_blank" class="text-blue-600 hover:underline">Composio</a>.
+              Get your API key from
+              <a href="https://app.composio.dev/settings" target="_blank" class="text-blue-600 hover:underline">app.composio.dev/settings</a>.
+            </p>
+          </div>
+          <div class="px-6 py-5" id="svc-composio"></div>
+        </section>
+
         <!-- Cloud Storage -->
         <section id="sec-cloud-storage" class="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
           <div class="px-6 py-4 border-b border-gray-100">
@@ -310,6 +325,9 @@ const SERVICES = {
   ]},
   notion: { label: 'Notion', type: 'apikey', fields: [
     { key: 'api_key', label: 'Integration Token', placeholder: 'ntn_...' },
+  ]},
+  composio: { label: 'Composio', type: 'apikey', fields: [
+    { key: 'api_key', label: 'API Key', placeholder: 'Your Composio API key' },
   ]},
   image_openai: { label: 'OpenAI Image (gpt-image-1)', type: 'apikey', fields: [
     { key: 'api_key', label: 'API Key', placeholder: 'sk-...' },

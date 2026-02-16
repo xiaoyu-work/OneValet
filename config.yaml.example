@@ -1,10 +1,17 @@
 database: ${DATABASE_URL}
 
 llm:
-  provider: openai
+  provider: openai          # openai | anthropic | azure | dashscope | gemini | ollama
   model: gpt-4o
   # api_key: ${OPENAI_API_KEY}
   # base_url: https://your-endpoint.openai.azure.com/  # Azure only
+
+embedding:
+  provider: openai          # openai | azure
+  model: text-embedding-3-small
+  # api_key: ${OPENAI_API_KEY}          # defaults to llm.api_key if omitted
+  # base_url: https://your-endpoint/    # Azure only
+  # api_version: '2024-02-01'           # Azure only
 
 # Optional: custom persona (appended after built-in system prompt)
 # system_prompt: |
@@ -13,3 +20,49 @@ llm:
 # Callbacks — OneValet POSTs notifications here (e.g. important emails, trigger results)
 # callbacks:
 #   notify_url: http://localhost:8001/webhook/onevalet/callback
+
+# ---------------------------------------------------------------------------
+# Credentials — static API keys for built-in agents
+#
+# All fields are optional. Only configure the services you need.
+# Environment variables (${VAR}) are supported for all values.
+# ---------------------------------------------------------------------------
+credentials:
+
+  # -- Composio (Slack, GitHub, and 1000+ third-party app integrations) -----
+  # Get your API key at https://app.composio.dev/settings
+  # composio:
+  #   api_key: ${COMPOSIO_API_KEY}
+
+  # -- Notion ---------------------------------------------------------------
+  # Create an internal integration at https://www.notion.so/my-integrations
+  # notion:
+  #   api_key: ${NOTION_API_KEY}
+
+  # -- Google API (Maps, Places, Directions, Web Search) --------------------
+  # Create a key at https://console.cloud.google.com/apis/credentials
+  # google_api:
+  #   api_key: ${GOOGLE_API_KEY}
+  #   search_engine_id: ${GOOGLE_SEARCH_ENGINE_ID}  # for web search only
+
+  # -- Travel ---------------------------------------------------------------
+  # Amadeus: https://developers.amadeus.com
+  # Weather: https://www.weatherapi.com
+  # amadeus:
+  #   api_key: ${AMADEUS_API_KEY}
+  #   api_secret: ${AMADEUS_API_SECRET}
+  # weather_api:
+  #   api_key: ${WEATHER_API_KEY}
+
+  # -- OAuth Apps (required for Google & Microsoft sign-in) -----------------
+  # These are YOUR app credentials, not end-user tokens.
+  # Google: https://console.cloud.google.com/apis/credentials
+  # Microsoft: https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps
+  #
+  # google_oauth_app:
+  #   client_id: ${GOOGLE_CLIENT_ID}
+  #   client_secret: ${GOOGLE_CLIENT_SECRET}
+  # microsoft_oauth_app:
+  #   client_id: ${MICROSOFT_CLIENT_ID}
+  #   client_secret: ${MICROSOFT_CLIENT_SECRET}
+  #   tenant_id: common
