@@ -15,4 +15,5 @@ Subpackages:
 - image: Image generation and editing across OpenAI/Azure/Gemini/Seedream
 - smarthome: Philips Hue light control, Sonos speaker control
 - cloud_storage: Unified file search across Google Drive, OneDrive, and Dropbox
+- composio: Slack and GitHub integrations via Composio OAuth proxy (expandable to 1000+ apps)
 """

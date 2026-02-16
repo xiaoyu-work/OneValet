@@ -293,6 +293,7 @@ class OneValet:
             "tenant_id": "MICROSOFT_TENANT_ID",
         },
         "notion": {"api_key": "NOTION_API_KEY"},
+        "composio": {"api_key": "COMPOSIO_API_KEY"},
     }
 
     async def _load_api_keys_to_env(self) -> None:
