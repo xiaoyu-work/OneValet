@@ -9,11 +9,12 @@ import json
 import logging
 import os
 import re
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 import httpx
 
 from onevalet.standard_agent import AgentToolContext
+from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,14 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
 # search_places
 # =============================================================================
 
-async def search_places(args: dict, context: AgentToolContext) -> str:
-    """Search for places using Google Places API (Text Search)."""
-    query = args.get("query", "")
-    location = args.get("location", "")
-
+@tool
+async def search_places(
+    query: Annotated[str, "What to search for (e.g., 'coffee shops', 'pizza', 'gas station')"],
+    location: Annotated[str, "Where to search (city or neighborhood, e.g., 'Seattle' or 'downtown Portland')"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search for places, restaurants, attractions, or businesses. Returns names, addresses, ratings, and contact info."""
     if not query:
         return "Error: query is required."
 
@@ -147,12 +151,15 @@ async def search_places(args: dict, context: AgentToolContext) -> str:
 # get_directions
 # =============================================================================
 
-async def get_directions(args: dict, context: AgentToolContext) -> str:
-    """Get directions between two locations using Google Directions API."""
-    origin = args.get("origin", "")
-    destination = args.get("destination", "")
-    mode = args.get("mode", "driving")
-
+@tool
+async def get_directions(
+    origin: Annotated[str, "Starting location (address or place name, or 'home' to use profile address)"],
+    destination: Annotated[str, "Destination (address or place name)"],
+    mode: Annotated[str, "Travel mode (default: driving)"] = "driving",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Get directions between two locations. Returns distance, duration, and step-by-step navigation."""
     if not origin or not destination:
         return "Error: both origin and destination are required."
 
@@ -247,10 +254,13 @@ async def get_directions(args: dict, context: AgentToolContext) -> str:
 # check_air_quality
 # =============================================================================
 
-async def check_air_quality(args: dict, context: AgentToolContext) -> str:
-    """Check air quality using Google Air Quality API."""
-    location = args.get("location", "")
-
+@tool
+async def check_air_quality(
+    location: Annotated[str, "City or location name (e.g., 'Seattle', 'Beijing')"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Check current air quality index (AQI) for a location. Returns AQI value, category, dominant pollutant, and health advice."""
     if not location:
         return "Error: location is required."
 

@@ -2,15 +2,15 @@
 Calendar Domain Tools — Standalone API functions for CalendarAgent's mini ReAct loop.
 
 Extracted from CalendarAgent, CreateEventAgent, UpdateEventAgent, and DeleteEventAgent.
-Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import html
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Annotated, Dict, Optional
 
+from onevalet.tool_decorator import tool
 from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
@@ -100,26 +100,29 @@ def _parse_time_to_datetime(time_str: str) -> datetime:
 # query_events
 # =============================================================================
 
-async def query_events(args: dict, context: AgentToolContext) -> str:
-    """Query calendar events by time range and optional keyword search."""
+@tool
+async def query_events(
+    time_range: Annotated[str, "Time range to search (e.g., 'today', 'tomorrow', 'this week', 'next week', 'this month', 'next 3 days')"],
+    query: Annotated[Optional[str], "Optional keywords to search in event titles"] = None,
+    max_results: Annotated[int, "Maximum number of events to return (default 10)"] = 10,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search and list calendar events. Returns events matching the time range and optional keyword query."""
     from .search_helper import parse_time_range
-
-    time_range_str = args.get("time_range", "today")
-    query = args.get("query", "") or None
-    max_results = args.get("max_results", 10)
 
     provider, account, error = await _get_provider(context.tenant_id)
     if error:
         return error
 
     try:
-        time_min, time_max = parse_time_range(time_range_str)
+        time_min, time_max = parse_time_range(time_range)
 
         result = await provider.list_events(
             time_min=time_min,
             time_max=time_max,
             max_results=max_results,
-            query=query,
+            query=query or None,
         )
 
         if not result.get("success"):
@@ -129,9 +132,9 @@ async def query_events(args: dict, context: AgentToolContext) -> str:
         events.sort(key=lambda e: e.get("start") or datetime.min)
 
         if not events:
-            return f"No events found {time_range_str}."
+            return f"No events found {time_range}."
 
-        parts = [f"Found {len(events)} event(s) {time_range_str}:"]
+        parts = [f"Found {len(events)} event(s) {time_range}:"]
 
         for i, event in enumerate(events[:10], 1):
             summary = html.unescape(event.get("summary", "No title"))
@@ -195,16 +198,19 @@ async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
     return "\n".join(parts)
 
 
-async def create_event(args: dict, context: AgentToolContext) -> str:
-    """Create a new calendar event."""
-    summary = args.get("summary", "")
-    start_str = args.get("start", "")
-    end_str = args.get("end", "")
-    description = args.get("description")
-    location = args.get("location")
-    attendees_str = args.get("attendees", "")
-
-    if not summary or not start_str:
+@tool(needs_approval=True, get_preview=_preview_create_event)
+async def create_event(
+    summary: Annotated[str, "Event title/summary"],
+    start: Annotated[str, "Event start time (e.g., 'tomorrow at 2pm', '2025-03-15 14:00')"],
+    end: Annotated[Optional[str], "Event end time (optional, defaults to 1 hour after start)"] = None,
+    description: Annotated[Optional[str], "Event description/details (optional)"] = None,
+    location: Annotated[Optional[str], "Event location (optional)"] = None,
+    attendees: Annotated[Optional[str], "Comma-separated list of attendee email addresses (optional)"] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new calendar event. Requires at least a title and start time."""
+    if not summary or not start:
         return "Error: event title (summary) and start time are required."
 
     provider, account, error = await _get_provider(context.tenant_id)
@@ -212,15 +218,15 @@ async def create_event(args: dict, context: AgentToolContext) -> str:
         return error
 
     try:
-        start_dt = _parse_time_to_datetime(start_str)
-        if end_str:
-            end_dt = _parse_time_to_datetime(end_str)
+        start_dt = _parse_time_to_datetime(start)
+        if end:
+            end_dt = _parse_time_to_datetime(end)
         else:
             end_dt = start_dt + timedelta(hours=1)
 
-        attendees = []
-        if attendees_str:
-            attendees = [email.strip() for email in attendees_str.split(",") if email.strip()]
+        attendee_list = []
+        if attendees:
+            attendee_list = [email.strip() for email in attendees.split(",") if email.strip()]
 
         result = await provider.create_event(
             summary=summary,
@@ -228,7 +234,7 @@ async def create_event(args: dict, context: AgentToolContext) -> str:
             end=end_dt,
             description=description,
             location=location,
-            attendees=attendees,
+            attendees=attendee_list,
         )
 
         if result.get("success"):
@@ -272,11 +278,14 @@ async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
     return "\n".join(parts)
 
 
-async def update_event(args: dict, context: AgentToolContext) -> str:
-    """Update an existing calendar event (reschedule, rename, change location, etc.)."""
-    target = args.get("target", "")
-    changes = args.get("changes", {})
-
+@tool(needs_approval=True, get_preview=_preview_update_event)
+async def update_event(
+    target: Annotated[str, "Keywords to identify the event (title, person's name, time reference like 'my 2pm meeting')"],
+    changes: Annotated[Dict, "What to change: object with optional keys new_time, new_title, new_location, new_duration"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Update an existing calendar event. Specify the target event and what to change."""
     if not target:
         return "Error: please specify which event to update (target)."
     if not changes:
@@ -451,13 +460,16 @@ async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
     return "\n".join(parts)
 
 
-async def delete_event(args: dict, context: AgentToolContext) -> str:
+@tool(needs_approval=True, get_preview=_preview_delete_event)
+async def delete_event(
+    search_query: Annotated[str, "Keywords to search for events to delete (event title, keywords)"],
+    time_range: Annotated[str, "Time range to search (e.g., 'today', 'tomorrow', 'this week'). Defaults to 'next 7 days'."] = "next 7 days",
+    *,
+    context: AgentToolContext,
+) -> str:
     """Delete calendar events matching the search criteria."""
     from .search_helper import search_calendar_events
     from onevalet.providers.calendar.factory import CalendarProviderFactory
-
-    search_query = args.get("search_query", "")
-    time_range = args.get("time_range", "next 7 days")
 
     result = await search_calendar_events(
         user_id=context.tenant_id,

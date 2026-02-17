@@ -2,18 +2,17 @@
 Travel Domain Tools — Standalone API functions for TravelAgent's mini ReAct loop.
 
 Extracted from FlightSearchAgent, HotelSearchAgent, and WeatherAgent.
-Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
-import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
 import httpx
 
 from onevalet.standard_agent import AgentToolContext
+from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +100,16 @@ async def _convert_to_iata(location: str, llm_client: Any) -> str:
 # search_flights
 # =============================================================================
 
-async def search_flights(args: dict, context: AgentToolContext) -> str:
-    """Search flights via Amadeus Flight Offers Search API."""
-    origin = args.get("origin", "")
-    destination = args.get("destination", "")
-    date = args.get("date", "")
-    return_date = args.get("return_date", "")
+@tool
+async def search_flights(
+    origin: Annotated[str, "Origin city or IATA code"],
+    destination: Annotated[str, "Destination city or IATA code"],
+    date: Annotated[str, "Departure date YYYY-MM-DD"],
+    return_date: Annotated[str, "Return date YYYY-MM-DD"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Find flight options with prices and schedules."""
 
     if not origin or not destination or not date:
         return "Error: origin, destination, and date are all required."
@@ -227,11 +230,15 @@ async def _geocode_location(location: str) -> Optional[Dict[str, float]]:
         return None
 
 
-async def search_hotels(args: dict, context: AgentToolContext) -> str:
-    """Search hotels via Amadeus Hotel Search API."""
-    location = args.get("location", "")
-    check_in = args.get("check_in", "")
-    check_out = args.get("check_out", "")
+@tool
+async def search_hotels(
+    location: Annotated[str, "Destination city"],
+    check_in: Annotated[str, "Check-in YYYY-MM-DD"],
+    check_out: Annotated[str, "Check-out YYYY-MM-DD"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Find hotel options with nightly prices."""
 
     if not location or not check_in:
         return "Error: location and check_in date are required."
@@ -328,10 +335,14 @@ async def search_hotels(args: dict, context: AgentToolContext) -> str:
 # check_weather
 # =============================================================================
 
-async def check_weather(args: dict, context: AgentToolContext) -> str:
-    """Check weather via WeatherAPI (current or forecast up to 14 days)."""
-    location = args.get("location", "")
-    days = args.get("days", 0)
+@tool
+async def check_weather(
+    location: Annotated[str, "City name"],
+    days: Annotated[int, "Offset days from today (0..14)"] = 0,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Get current or forecast weather for a city."""
 
     if not location:
         return "Error: location is required."

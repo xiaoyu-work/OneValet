@@ -3,15 +3,15 @@ Todo Domain Tools - Standalone API functions for TodoAgent's mini ReAct loop.
 
 Extracted from TodoQueryAgent, CreateTodoAgent, UpdateTodoAgent, DeleteTodoAgent,
 ReminderAgent, TaskManagementAgent, and PlannerAgent.
-Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import json
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
+from onevalet.tool_decorator import tool
 from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
@@ -68,11 +68,14 @@ def _format_due_date(due_str: str) -> str:
 # query_tasks
 # =============================================================================
 
-async def query_tasks(args: dict, context: AgentToolContext) -> str:
-    """Query and search todo tasks across all connected providers."""
-    search_query = args.get("search_query")
-    show_completed = args.get("show_completed", False)
-
+@tool
+async def query_tasks(
+    search_query: Annotated[Optional[str], "Keywords to search for specific tasks. Omit or leave empty to list all pending tasks."] = None,
+    show_completed: Annotated[bool, "Whether to include completed tasks (default false)."] = False,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """List or search the user's todo tasks across all connected providers (Todoist, Google Tasks, Microsoft To Do)."""
     try:
         accounts = await _resolve_accounts(context.tenant_id)
 
@@ -84,8 +87,9 @@ async def query_tasks(args: dict, context: AgentToolContext) -> str:
 
         # Skip meta keywords that mean "list all"
         meta_keywords = {"todo", "todos", "tasks", "task", "my tasks", "all", "list", "pending"}
-        if search_query and search_query.lower() in meta_keywords:
-            search_query = None
+        effective_query = search_query
+        if effective_query and effective_query.lower() in meta_keywords:
+            effective_query = None
 
         for account in accounts:
             provider = _get_provider(account)
@@ -98,8 +102,8 @@ async def query_tasks(args: dict, context: AgentToolContext) -> str:
                 continue
 
             try:
-                if search_query:
-                    result = await provider.search_tasks(query=search_query)
+                if effective_query:
+                    result = await provider.search_tasks(query=effective_query)
                 else:
                     result = await provider.list_tasks(completed=show_completed)
 
@@ -164,22 +168,38 @@ async def query_tasks(args: dict, context: AgentToolContext) -> str:
 # create_task
 # =============================================================================
 
-async def create_task(args: dict, context: AgentToolContext) -> str:
-    """Create a new todo task on the user's connected provider."""
+async def _preview_create_task(args: dict, context) -> str:
     title = args.get("title", "")
-    due = args.get("due")
-    priority = args.get("priority")
-    account_spec = args.get("account", "primary")
+    due = args.get("due", "")
+    priority = args.get("priority", "")
+    parts = [f"Create task: {title}"]
+    if due:
+        parts.append(f"Due: {due}")
+    if priority:
+        parts.append(f"Priority: {priority}")
+    parts.append("\nCreate this task?")
+    return "\n".join(parts)
 
+
+@tool(needs_approval=True, get_preview=_preview_create_task)
+async def create_task(
+    title: Annotated[str, "The task title or what needs to be done."],
+    due: Annotated[Optional[str], "Due date in YYYY-MM-DD format (optional)."] = None,
+    priority: Annotated[Optional[str], "Priority level: low, medium, high, or urgent (optional)."] = None,
+    account: Annotated[str, "Todo account name if the user specifies one (optional, defaults to primary)."] = "primary",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new todo task on the user's connected provider."""
     if not title:
         return "Error: task title is required."
 
     try:
-        account = await _resolve_single_account(context.tenant_id, account_spec)
-        if not account:
+        account_obj = await _resolve_single_account(context.tenant_id, account)
+        if not account_obj:
             return "I couldn't find your todo account. Please connect one in settings."
 
-        provider = _get_provider(account)
+        provider = _get_provider(account_obj)
         if not provider:
             return "Sorry, I can't create tasks with that provider yet."
 
@@ -189,7 +209,7 @@ async def create_task(args: dict, context: AgentToolContext) -> str:
         result = await provider.create_task(title=title, due=due, priority=priority)
 
         if result.get("success"):
-            account_name = account.get("account_name", account.get("provider", ""))
+            account_name = account_obj.get("account_name", account_obj.get("provider", ""))
             due_str = f" (due {due})" if due else ""
             return f"Added to {account_name}: {title}{due_str}"
         else:
@@ -205,11 +225,22 @@ async def create_task(args: dict, context: AgentToolContext) -> str:
 # update_task
 # =============================================================================
 
-async def update_task(args: dict, context: AgentToolContext) -> str:
-    """Complete (mark as done) a todo task by searching for it."""
+async def _preview_update_task(args: dict, context) -> str:
     search_query = args.get("search_query", "")
-    task_indices = args.get("task_indices")  # Optional: pre-selected indices
+    indices = args.get("task_indices")
+    if indices:
+        return f"Mark task(s) #{', #'.join(str(i) for i in indices)} as complete?"
+    return f"Search for and complete task matching: \"{search_query}\"?"
 
+
+@tool(needs_approval=True, get_preview=_preview_update_task)
+async def update_task(
+    search_query: Annotated[str, "Keywords to find the task to complete."],
+    task_indices: Annotated[Optional[List[int]], "1-based indices of tasks to complete (use after seeing search results with multiple matches)."] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Mark a todo task as complete by searching for it. Returns task list if multiple matches found."""
     if not search_query:
         return "Error: search_query is required to find the task to complete."
 
@@ -219,8 +250,8 @@ async def update_task(args: dict, context: AgentToolContext) -> str:
             return "No todo accounts found. Please connect one first."
 
         all_tasks = []
-        for account in accounts:
-            provider = _get_provider(account)
+        for account_obj in accounts:
+            provider = _get_provider(account_obj)
             if not provider or not await provider.ensure_valid_token():
                 continue
             try:
@@ -228,12 +259,12 @@ async def update_task(args: dict, context: AgentToolContext) -> str:
                 if result.get("success"):
                     tasks = result.get("data", [])
                     for task in tasks:
-                        task["_provider"] = account.get("provider", "")
-                        task["_account_name"] = account.get("account_name", "")
-                        task["_account_email"] = account.get("email", "")
+                        task["_provider"] = account_obj.get("provider", "")
+                        task["_account_name"] = account_obj.get("account_name", "")
+                        task["_account_email"] = account_obj.get("email", "")
                     all_tasks.extend(tasks)
             except Exception as e:
-                logger.error(f"Failed to search {account.get('account_name')}: {e}", exc_info=True)
+                logger.error(f"Failed to search {account_obj.get('account_name')}: {e}", exc_info=True)
 
         # Fallback: list all tasks and filter with LLM
         if not all_tasks and context.llm_client:
@@ -276,11 +307,11 @@ async def update_task(args: dict, context: AgentToolContext) -> str:
             tasks_by_account.setdefault(key, []).append(task)
 
         for (provider_name, email), tasks in tasks_by_account.items():
-            account = await _resolve_single_account(context.tenant_id, email or "primary")
-            if not account:
+            account_obj = await _resolve_single_account(context.tenant_id, email or "primary")
+            if not account_obj:
                 failed_count += len(tasks)
                 continue
-            provider = _get_provider(account)
+            provider = _get_provider(account_obj)
             if not provider or not await provider.ensure_valid_token():
                 failed_count += len(tasks)
                 continue
@@ -317,11 +348,22 @@ async def update_task(args: dict, context: AgentToolContext) -> str:
 # delete_task
 # =============================================================================
 
-async def delete_task(args: dict, context: AgentToolContext) -> str:
-    """Delete a todo task by searching for it."""
+async def _preview_delete_task(args: dict, context) -> str:
     search_query = args.get("search_query", "")
-    task_indices = args.get("task_indices")  # Optional: pre-selected indices
+    indices = args.get("task_indices")
+    if indices:
+        return f"Delete task(s) #{', #'.join(str(i) for i in indices)}?"
+    return f"Search for and delete task matching: \"{search_query}\"?"
 
+
+@tool(needs_approval=True, get_preview=_preview_delete_task)
+async def delete_task(
+    search_query: Annotated[str, "Keywords to find the task to delete."],
+    task_indices: Annotated[Optional[List[int]], "1-based indices of tasks to delete (use after seeing search results with multiple matches)."] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Delete a todo task by searching for it. Returns task list if multiple matches found."""
     if not search_query:
         return "Error: search_query is required to find the task to delete."
 
@@ -331,8 +373,8 @@ async def delete_task(args: dict, context: AgentToolContext) -> str:
             return "No todo accounts found. Please connect one first."
 
         all_tasks = []
-        for account in accounts:
-            provider = _get_provider(account)
+        for account_obj in accounts:
+            provider = _get_provider(account_obj)
             if not provider or not await provider.ensure_valid_token():
                 continue
             try:
@@ -340,12 +382,12 @@ async def delete_task(args: dict, context: AgentToolContext) -> str:
                 if result.get("success"):
                     tasks = result.get("data", [])
                     for task in tasks:
-                        task["_provider"] = account.get("provider", "")
-                        task["_account_name"] = account.get("account_name", "")
-                        task["_account_email"] = account.get("email", "")
+                        task["_provider"] = account_obj.get("provider", "")
+                        task["_account_name"] = account_obj.get("account_name", "")
+                        task["_account_email"] = account_obj.get("email", "")
                     all_tasks.extend(tasks)
             except Exception as e:
-                logger.error(f"Failed to search {account.get('account_name')}: {e}", exc_info=True)
+                logger.error(f"Failed to search {account_obj.get('account_name')}: {e}", exc_info=True)
 
         if not all_tasks and context.llm_client:
             all_tasks = await _fallback_search(accounts, search_query, context.llm_client)
@@ -387,11 +429,11 @@ async def delete_task(args: dict, context: AgentToolContext) -> str:
             tasks_by_account.setdefault(key, []).append(task)
 
         for (provider_name, email), tasks in tasks_by_account.items():
-            account = await _resolve_single_account(context.tenant_id, email or "primary")
-            if not account:
+            account_obj = await _resolve_single_account(context.tenant_id, email or "primary")
+            if not account_obj:
                 failed_count += len(tasks)
                 continue
-            provider = _get_provider(account)
+            provider = _get_provider(account_obj)
             if not provider or not await provider.ensure_valid_token():
                 failed_count += len(tasks)
                 continue
@@ -425,14 +467,17 @@ async def delete_task(args: dict, context: AgentToolContext) -> str:
 # set_reminder
 # =============================================================================
 
-async def set_reminder(args: dict, context: AgentToolContext) -> str:
-    """Create a reminder or scheduled automation via TriggerEngine."""
-    schedule_datetime = args.get("schedule_datetime")
-    schedule_type = args.get("schedule_type", "one_time")
-    cron_expression = args.get("cron_expression")
-    reminder_message = args.get("reminder_message", "")
-    human_readable_time = args.get("human_readable_time", "")
-
+@tool
+async def set_reminder(
+    schedule_datetime: Annotated[str, "ISO 8601 datetime when the reminder should fire (e.g., 2024-01-15T14:30:00)."],
+    reminder_message: Annotated[str, "What to remind the user about."],
+    schedule_type: Annotated[str, "Whether this is a one-time or recurring reminder."] = "one_time",
+    cron_expression: Annotated[Optional[str], "Cron expression for recurring reminders (e.g., '0 8 * * *' for daily 8am)."] = None,
+    human_readable_time: Annotated[str, "Friendly time description (e.g., 'in 5 minutes', 'every day at 8am')."] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a time-based reminder (one-time or recurring) via TriggerEngine."""
     if not schedule_datetime:
         return "Error: schedule_datetime is required."
     if not reminder_message:
@@ -497,12 +542,20 @@ async def set_reminder(args: dict, context: AgentToolContext) -> str:
 # manage_reminders
 # =============================================================================
 
-async def manage_reminders(args: dict, context: AgentToolContext) -> str:
-    """List, update, pause, resume, or delete scheduled reminders and automations."""
-    action = args.get("action", "list")
-    task_hint = args.get("task_hint", "")
-    status_filter = args.get("status_filter", "all")
-
+@tool
+async def manage_reminders(
+    action: Annotated[str, "What to do with the reminder/automation."],
+    task_hint: Annotated[str, "Keywords to identify which reminder/automation (for show/update/pause/resume/delete)."] = "",
+    status_filter: Annotated[str, "Filter by status when listing (default 'all')."] = "all",
+    new_schedule_datetime: Annotated[Optional[str], "New ISO 8601 datetime for update action."] = None,
+    new_cron_expression: Annotated[Optional[str], "New cron expression for update action."] = None,
+    new_message: Annotated[Optional[str], "New reminder message for update action."] = None,
+    human_readable_time: Annotated[str, "Friendly time description for update action."] = "",
+    update_type: Annotated[Optional[str], "What to update: time, message, or both."] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """List, show details, update, pause, resume, or delete scheduled reminders and automations."""
     repo = _get_task_repo(context)
     if not repo:
         return "Task storage is not available right now."
@@ -520,11 +573,6 @@ async def manage_reminders(args: dict, context: AgentToolContext) -> str:
     elif action == "delete":
         return await _delete_reminder(repo, context.tenant_id, task_hint, trigger_engine)
     elif action == "update":
-        new_schedule_datetime = args.get("new_schedule_datetime")
-        new_cron_expression = args.get("new_cron_expression")
-        new_message = args.get("new_message")
-        human_readable_time = args.get("human_readable_time", "")
-        update_type = args.get("update_type")
         return await _update_reminder(
             repo, context.tenant_id, task_hint, trigger_engine,
             new_schedule_datetime, new_cron_expression, new_message,

@@ -6,9 +6,10 @@ Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Annotated, Any, Dict, Optional, Tuple
 
 from onevalet.standard_agent import AgentToolContext
+from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,18 @@ def _temp_name_to_mirek(name: str) -> Optional[int]:
 # control_lights
 # =============================================================================
 
-async def control_lights(args: dict, context: AgentToolContext) -> str:
-    """Control Philips Hue lights: on/off, brightness, color, color_temperature, scene, status."""
-    action = args.get("action", "").lower().strip()
-    target = args.get("target", "all").strip()
-    value = args.get("value", "").strip() if args.get("value") else None
+@tool
+async def control_lights(
+    action: Annotated[str, "The light control action to perform"],
+    target: Annotated[str, "Light name, room name, or 'all' (default 'all')"] = "all",
+    value: Annotated[Optional[str], "Brightness (0-100), color name (red/blue/green/etc), temperature (warm/cool/neutral/daylight), or scene name"] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Control Philips Hue smart lights. Supports: on, off, brightness, color, color_temperature, scene, status."""
+    action = action.lower().strip()
+    target = target.strip()
+    value = value.strip() if value else None
 
     logger.info(f"Light control: action={action}, target={target}, value={value}")
 
@@ -288,11 +296,16 @@ def _find_group(groups: list, target: str | None) -> dict | None:
     return None
 
 
-async def control_speaker(args: dict, context: AgentToolContext) -> str:
-    """Control Sonos speakers: play, pause, skip, volume, mute, unmute, status, play_favorite, favorites."""
-    action = args.get("action", "").lower().strip()
-    target = args.get("target")
-    value = args.get("value")
+@tool
+async def control_speaker(
+    action: Annotated[str, "The speaker control action to perform"],
+    target: Annotated[Optional[str], "Speaker or room name (optional, defaults to first available)"] = None,
+    value: Annotated[Optional[str], "Volume level (0-100), 'up', 'down', or favorite/track name"] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Control Sonos smart speakers. Supports: play, pause, skip_next, skip_previous, volume, mute, unmute, status, play_favorite, favorites."""
+    action = action.lower().strip()
 
     logger.info(f"Speaker control: action={action}, target={target}, value={value}")
 

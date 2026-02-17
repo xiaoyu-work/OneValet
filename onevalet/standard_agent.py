@@ -156,7 +156,7 @@ class AgentToolContext:
     """Context passed to tool executors.
 
     Provides access to shared resources that tool functions need.
-    Used by both agent-level tools (domain_tools) and orchestrator-level
+    Used by both agent-level tools (tools) and orchestrator-level
     builtin tools.
     """
 
@@ -286,10 +286,10 @@ class StandardAgent(BaseAgent):
     _input_specs: List["InputSpec"] = []
     _output_specs: List["OutputSpec"] = []
 
-    # Domain ReAct loop configuration (active when domain_tools is non-empty)
+    # Domain ReAct loop configuration (active when tools is non-empty)
     domain_system_prompt: str = ""
-    domain_tools: List[AgentTool] = []
-    max_domain_turns: int = 5
+    tools: List[AgentTool] = []
+    max_turns: int = 5
     max_complete_task_retries: int = 3
     tool_timeout: float = 30.0  # seconds per tool call
     max_tool_result_chars: int = 4000  # truncate tool results beyond this
@@ -358,7 +358,7 @@ class StandardAgent(BaseAgent):
         # Recalled memories from orchestrator (when enable_memory=true)
         self._recalled_memories: List[Dict[str, Any]] = []
 
-        # Domain ReAct loop state (only active when domain_tools is non-empty)
+        # Domain ReAct loop state (only active when tools is non-empty)
         self._react_messages: List[Dict[str, Any]] = []
         self._react_turn: int = 0
         self._pending_tool_call: Optional[Tuple[LLMToolCall, AgentTool, Dict[str, Any]]] = None
@@ -437,7 +437,7 @@ class StandardAgent(BaseAgent):
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop.
 
-        Override in subclasses to customize. Only used when domain_tools is non-empty.
+        Override in subclasses to customize. Only used when tools is non-empty.
         """
         return self.domain_system_prompt + self._COMPLETE_TASK_INSTRUCTION
 
@@ -497,12 +497,12 @@ class StandardAgent(BaseAgent):
         """
         Called when waiting for user to provide missing fields.
 
-        If domain_tools is active and a ReAct loop is in progress,
+        If tools is active and a ReAct loop is in progress,
         resumes the ReAct loop with the user's answer.
         Otherwise, continues InputField collection.
         """
         # Domain ReAct path: resume loop with user's follow-up
-        if self.domain_tools and self._react_messages:
+        if self.tools and self._react_messages:
             user_text = msg.get_text() if msg else ""
             if not user_text:
                 return self.make_result(
@@ -625,7 +625,7 @@ class StandardAgent(BaseAgent):
         """
         Called when all fields are collected and approved.
 
-        If domain_tools is non-empty, runs the mini ReAct loop automatically.
+        If tools is non-empty, runs the mini ReAct loop automatically.
         Otherwise, subclasses override this for custom business logic.
 
         Example:
@@ -636,7 +636,7 @@ class StandardAgent(BaseAgent):
                     raw_message=f"Hello, {name}!"
                 )
         """
-        if self.domain_tools:
+        if self.tools:
             # Domain ReAct path
             if self._pending_tool_call:
                 return await self._resume_after_approval()
@@ -1325,7 +1325,7 @@ Return JSON only."""
 
     async def _run_react(self) -> AgentResult:
         """Core mini ReAct loop with domain tools."""
-        tool_schemas = [t.to_openai_schema() for t in self.domain_tools]
+        tool_schemas = [t.to_openai_schema() for t in self.tools]
         # Always inject complete_task
         tool_schemas.append(_COMPLETE_TASK_SCHEMA)
         messages = self._react_messages
@@ -1336,7 +1336,7 @@ Return JSON only."""
             if result is not None:
                 return result
 
-        for turn in range(self._react_turn, self.max_domain_turns):
+        for turn in range(self._react_turn, self.max_turns):
             self._react_turn = turn + 1
             # First turn: force tool use since orchestrator already routed here.
             # Subsequent turns: let LLM decide freely.
@@ -1716,7 +1716,7 @@ Return JSON only."""
 
     def _find_domain_tool(self, name: str) -> Optional[AgentTool]:
         """Find a domain tool by name."""
-        for tool in self.domain_tools:
+        for tool in self.tools:
             if tool.name == name:
                 return tool
         return None

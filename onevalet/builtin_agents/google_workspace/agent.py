@@ -8,10 +8,11 @@ that has its own mini ReAct loop.
 
 import json
 import logging
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
+from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.tool_decorator import tool
 
 from .client import GoogleWorkspaceClient
 
@@ -32,12 +33,15 @@ async def _get_token(context: AgentToolContext):
 # Tool executors
 # =============================================================================
 
-async def google_drive_search(args: dict, context: AgentToolContext) -> str:
-    """Search the user's Google Drive for files."""
-    query = args.get("query", "")
-    file_type = args.get("file_type")
-    page_size = args.get("page_size", 10)
-
+@tool
+async def google_drive_search(
+    query: Annotated[str, "Short search keyword"] = "",
+    file_type: Annotated[Optional[str], "Filter by type (optional)"] = None,
+    page_size: Annotated[int, "Max results (default 10)"] = 10,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search Google Drive for files (documents, spreadsheets, folders). Returns names, IDs, types."""
     token, error = await _get_token(context)
     if error:
         return error
@@ -65,9 +69,13 @@ async def google_drive_search(args: dict, context: AgentToolContext) -> str:
         return f"Error searching Google Drive: {e}"
 
 
-async def google_docs_read(args: dict, context: AgentToolContext) -> str:
-    """Read the full text content of a Google Doc."""
-    document_id = args.get("document_id", "")
+@tool
+async def google_docs_read(
+    document_id: Annotated[str, "The Google Doc document ID"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Read the full text of a Google Doc by its ID. Use google_drive_search first."""
     if not document_id:
         return "Error: document_id is required."
 
@@ -89,10 +97,15 @@ async def google_docs_read(args: dict, context: AgentToolContext) -> str:
         return f"Error reading Google Doc: {e}"
 
 
-async def google_sheets_read(args: dict, context: AgentToolContext) -> str:
-    """Read data from a Google Spreadsheet."""
-    spreadsheet_id = args.get("spreadsheet_id", "")
-    range_ = args.get("range", "")
+@tool
+async def google_sheets_read(
+    spreadsheet_id: Annotated[str, "The Spreadsheet ID"],
+    range: Annotated[str, "Cell range like 'Sheet1!A1:D10' (optional)"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Read data from a Google Spreadsheet by ID. Specify range or omit for first sheet."""
+    range_ = range
 
     if not spreadsheet_id:
         return "Error: spreadsheet_id is required."
@@ -143,11 +156,33 @@ async def google_sheets_read(args: dict, context: AgentToolContext) -> str:
         return f"Error reading Google Sheet: {e}"
 
 
-async def google_docs_create(args: dict, context: AgentToolContext) -> str:
-    """Create a new Google Doc."""
+# =============================================================================
+# Approval preview functions
+# =============================================================================
+
+async def _docs_create_preview(args: dict, context) -> str:
     title = args.get("title", "Untitled")
     content = args.get("content", "")
+    preview = content[:200] + "..." if len(content) > 200 else content
+    return f"Create Google Doc?\n\nTitle: {title}\nContent preview:\n{preview}"
 
+
+async def _sheets_write_preview(args: dict, context) -> str:
+    name = args.get("spreadsheet_name", "")
+    range_ = args.get("range", "")
+    values = args.get("values", "[]")
+    preview = values[:300] + "..." if isinstance(values, str) and len(values) > 300 else str(values)[:300]
+    return f"Write to Google Sheet?\n\nSpreadsheet: {name}\nRange: {range_}\nData:\n{preview}"
+
+
+@tool(needs_approval=True, get_preview=_docs_create_preview)
+async def google_docs_create(
+    title: Annotated[str, "Document title"],
+    content: Annotated[str, "Document content in plain text"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new Google Doc with title and content."""
     token, error = await _get_token(context)
     if error:
         return error
@@ -163,11 +198,16 @@ async def google_docs_create(args: dict, context: AgentToolContext) -> str:
         return f"Failed to create Google Doc: {e}"
 
 
-async def google_sheets_write(args: dict, context: AgentToolContext) -> str:
-    """Write data to a Google Spreadsheet."""
-    spreadsheet_name = args.get("spreadsheet_name", "")
-    range_ = args.get("range", "")
-    values_str = args.get("values", "[]")
+@tool(needs_approval=True, get_preview=_sheets_write_preview)
+async def google_sheets_write(
+    spreadsheet_name: Annotated[str, "Name of the spreadsheet"],
+    range: Annotated[str, "Cell range in A1 notation (e.g. Sheet1!A1:C10)"],
+    values: Annotated[str, 'JSON array of arrays, e.g. [["Name","Age"],["Alice",30]]'],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Write data to a Google Spreadsheet. Searches by name to find the spreadsheet."""
+    range_ = range
 
     if not spreadsheet_name:
         return "Error: spreadsheet_name is required."
@@ -175,6 +215,7 @@ async def google_sheets_write(args: dict, context: AgentToolContext) -> str:
         return "Error: range is required (e.g. 'Sheet1!A1:C10')."
 
     # Parse values JSON
+    values_str = values
     try:
         values = json.loads(values_str) if isinstance(values_str, str) else values_str
         if not isinstance(values, list) or not all(isinstance(row, list) for row in values):
@@ -210,25 +251,6 @@ async def google_sheets_write(args: dict, context: AgentToolContext) -> str:
 
 
 # =============================================================================
-# Approval preview functions
-# =============================================================================
-
-async def _docs_create_preview(args: dict, context) -> str:
-    title = args.get("title", "Untitled")
-    content = args.get("content", "")
-    preview = content[:200] + "..." if len(content) > 200 else content
-    return f"Create Google Doc?\n\nTitle: {title}\nContent preview:\n{preview}"
-
-
-async def _sheets_write_preview(args: dict, context) -> str:
-    name = args.get("spreadsheet_name", "")
-    range_ = args.get("range", "")
-    values = args.get("values", "[]")
-    preview = values[:300] + "..." if isinstance(values, str) and len(values) > 300 else str(values)[:300]
-    return f"Write to Google Sheet?\n\nSpreadsheet: {name}\nRange: {range_}\nData:\n{preview}"
-
-
-# =============================================================================
 # Domain Agent
 # =============================================================================
 
@@ -236,7 +258,7 @@ async def _sheets_write_preview(args: dict, context) -> str:
 class GoogleWorkspaceAgent(StandardAgent):
     """Search, read, create, and write Google Drive files, Docs, and Sheets. Use when the user mentions Google Docs, Sheets, Drive, or their documents and spreadsheets."""
 
-    max_domain_turns = 5
+    max_turns = 5
 
     domain_system_prompt = """\
 You are a Google Workspace assistant with access to Drive, Docs, and Sheets tools.
@@ -257,75 +279,10 @@ Instructions:
 6. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 7. After getting tool results, provide a clear summary to the user."""
 
-    domain_tools = [
-        AgentTool(
-            name="google_drive_search",
-            description="Search Google Drive for files (documents, spreadsheets, folders). Returns names, IDs, types.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Short search keyword"},
-                    "file_type": {"type": "string", "enum": ["document", "spreadsheet", "folder"], "description": "Filter by type (optional)"},
-                    "page_size": {"type": "integer", "description": "Max results (default 10)"},
-                },
-                "required": [],
-            },
-            executor=google_drive_search,
-        ),
-        AgentTool(
-            name="google_docs_read",
-            description="Read the full text of a Google Doc by its ID. Use google_drive_search first.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "document_id": {"type": "string", "description": "The Google Doc document ID"},
-                },
-                "required": ["document_id"],
-            },
-            executor=google_docs_read,
-        ),
-        AgentTool(
-            name="google_sheets_read",
-            description="Read data from a Google Spreadsheet by ID. Specify range or omit for first sheet.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "spreadsheet_id": {"type": "string", "description": "The Spreadsheet ID"},
-                    "range": {"type": "string", "description": "Cell range like 'Sheet1!A1:D10' (optional)"},
-                },
-                "required": ["spreadsheet_id"],
-            },
-            executor=google_sheets_read,
-        ),
-        AgentTool(
-            name="google_docs_create",
-            description="Create a new Google Doc with title and content.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Document title"},
-                    "content": {"type": "string", "description": "Document content in plain text"},
-                },
-                "required": ["title"],
-            },
-            executor=google_docs_create,
-            needs_approval=True,
-            get_preview=_docs_create_preview,
-        ),
-        AgentTool(
-            name="google_sheets_write",
-            description="Write data to a Google Spreadsheet. Searches by name to find the spreadsheet.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "spreadsheet_name": {"type": "string", "description": "Name of the spreadsheet"},
-                    "range": {"type": "string", "description": "Cell range in A1 notation (e.g. Sheet1!A1:C10)"},
-                    "values": {"type": "string", "description": 'JSON array of arrays, e.g. [["Name","Age"],["Alice",30]]'},
-                },
-                "required": ["spreadsheet_name", "range", "values"],
-            },
-            executor=google_sheets_write,
-            needs_approval=True,
-            get_preview=_sheets_write_preview,
-        ),
+    tools = [
+        google_drive_search,
+        google_docs_read,
+        google_sheets_read,
+        google_docs_create,
+        google_sheets_write,
     ]

@@ -6,7 +6,10 @@ ReplyEmailAgent, DeleteEmailAgent, ArchiveEmailAgent, MarkReadEmailAgent).
 """
 import logging
 import html
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
+
+from onevalet.tool_decorator import tool
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -79,26 +82,30 @@ def _format_sender(sender_raw: str) -> str:
 # search_emails
 # ============================================================
 
-async def search_emails(args: dict, context) -> str:
-    """Search emails across connected accounts."""
+@tool
+async def search_emails(
+    query: Annotated[Optional[str], "Search keywords (subject, content)"] = None,
+    sender: Annotated[Optional[str], "Filter by sender name or email"] = None,
+    unread_only: Annotated[bool, "Only show unread emails (default: true)"] = True,
+    days_back: Annotated[int, "Days to search back (default: 7)"] = 7,
+    date_range: Annotated[Optional[str], "Date range like 'today', 'yesterday', 'last week'"] = None,
+    accounts: Annotated[Optional[str], "Account to search: 'all', 'primary', or account name"] = None,
+    max_results: Annotated[int, "Max results to return (default: 15)"] = 15,
+    category: Annotated[Optional[str], "Inbox category filter: 'primary' (default), 'social', 'promotions', 'updates', or 'all'"] = "primary",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search emails across connected accounts. Returns email list with message_ids."""
     tenant_id = context.tenant_id
-    query = args.get("query")
-    sender = args.get("sender")
-    unread_only = args.get("unread_only", True)
-    days_back = args.get("days_back", 7)
-    date_range = args.get("date_range")
-    accounts = args.get("accounts")
-    max_results = args.get("max_results", 15)
-    category = args.get("category", "primary")
+
     if category and category.lower() != "all":
         include_categories = [category.lower()]
     else:
-        include_categories = args.get("include_categories")
+        include_categories = None
 
-    if isinstance(accounts, str):
-        accounts = [accounts]
+    account_list = [accounts] if isinstance(accounts, str) else accounts
 
-    providers, errors = await _resolve_all_providers(tenant_id, accounts)
+    providers, errors = await _resolve_all_providers(tenant_id, account_list)
     if not providers:
         return "; ".join(errors) if errors else "No email accounts available."
 
@@ -162,13 +169,31 @@ async def search_emails(args: dict, context) -> str:
 # send_email (needs_approval)
 # ============================================================
 
-async def send_email(args: dict, context) -> str:
-    """Send an email."""
-    tenant_id = context.tenant_id
+async def _preview_send_email(args: dict, context) -> str:
+    """Preview for send_email approval."""
     to = args.get("to", "")
     subject = args.get("subject", "Quick note")
     body = args.get("body", "")
-    from_account = args.get("from_account", "primary")
+    user_profile = context.user_profile or {}
+    first_name = user_profile.get("first_name", "")
+    if first_name:
+        body_preview = f"{body}\n\nThanks,\n{first_name}"
+    else:
+        body_preview = f"{body}\n\nThanks"
+    return f"Email Draft:\nTo: {to}\nSubject: {subject}\n\n{body_preview}\n\n---\nSend this?"
+
+
+@tool(needs_approval=True, get_preview=_preview_send_email)
+async def send_email(
+    to: Annotated[str, "Recipient email address"],
+    body: Annotated[str, "Email body content (plain text)"],
+    subject: Annotated[str, "Email subject line"] = "Quick note",
+    from_account: Annotated[str, "Account to send from (default: 'primary')"] = "primary",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Send an email. Requires recipient, subject, and body."""
+    tenant_id = context.tenant_id
 
     if not to:
         return "Error: recipient email address is required."
@@ -197,38 +222,36 @@ async def send_email(args: dict, context) -> str:
         return f"Error sending email: {e}"
 
 
-async def _preview_send_email(args: dict, context) -> str:
-    """Preview for send_email approval."""
-    to = args.get("to", "")
-    subject = args.get("subject", "Quick note")
-    body = args.get("body", "")
-    user_profile = context.user_profile or {}
-    first_name = user_profile.get("first_name", "")
-    if first_name:
-        body_preview = f"{body}\n\nThanks,\n{first_name}"
-    else:
-        body_preview = f"{body}\n\nThanks"
-    return f"Email Draft:\nTo: {to}\nSubject: {subject}\n\n{body_preview}\n\n---\nSend this?"
-
-
 # ============================================================
 # reply_email (needs_approval)
 # ============================================================
 
-async def reply_email(args: dict, context) -> str:
-    """Reply to an email by message_id."""
-    tenant_id = context.tenant_id
-    message_id = args.get("message_id", "")
+async def _preview_reply_email(args: dict, context) -> str:
+    """Preview for reply_email approval."""
     body = args.get("body", "")
     reply_all = args.get("reply_all", False)
-    account_spec = args.get("account", "primary")
+    suffix = " (reply all)" if reply_all else ""
+    return f"Reply Draft{suffix}:\n\n{body}\n\n---\nSend this reply?"
+
+
+@tool(needs_approval=True, get_preview=_preview_reply_email)
+async def reply_email(
+    message_id: Annotated[str, "Message ID of the email to reply to (from search_emails)"],
+    body: Annotated[str, "Reply content"],
+    reply_all: Annotated[bool, "Reply to all recipients (default: false)"] = False,
+    account: Annotated[str, "Account name (from search_emails results)"] = "primary",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Reply to an email. Use message_id from search_emails results."""
+    tenant_id = context.tenant_id
 
     if not message_id:
         return "Error: message_id is required. Use search_emails first to find it."
     if not body:
         return "Error: reply body is required."
 
-    account, provider, error = await _resolve_provider(tenant_id, account_spec)
+    account_obj, provider, error = await _resolve_provider(tenant_id, account)
     if error:
         return error
 
@@ -249,29 +272,35 @@ async def reply_email(args: dict, context) -> str:
         return f"Error replying: {e}"
 
 
-async def _preview_reply_email(args: dict, context) -> str:
-    """Preview for reply_email approval."""
-    body = args.get("body", "")
-    reply_all = args.get("reply_all", False)
-    suffix = " (reply all)" if reply_all else ""
-    return f"Reply Draft{suffix}:\n\n{body}\n\n---\nSend this reply?"
-
-
 # ============================================================
 # delete_emails (needs_approval)
 # ============================================================
 
-async def delete_emails(args: dict, context) -> str:
-    """Delete emails by message IDs."""
-    tenant_id = context.tenant_id
+async def _preview_delete_emails(args: dict, context) -> str:
+    """Preview for delete_emails approval."""
     message_ids = args.get("message_ids", [])
+    description = args.get("description", f"{len(message_ids)} email(s)")
     permanent = args.get("permanent", False)
-    account_spec = args.get("account", "primary")
+    action = "Permanently delete" if permanent else "Delete"
+    return f"{action} {description}?"
+
+
+@tool(needs_approval=True, get_preview=_preview_delete_emails)
+async def delete_emails(
+    message_ids: Annotated[List[str], "List of message IDs to delete"],
+    permanent: Annotated[bool, "Permanently delete instead of trash (default: false)"] = False,
+    account: Annotated[str, "Account name (from search_emails results)"] = "primary",
+    description: Annotated[str, "Human-readable description for preview (e.g. '3 emails from Amazon')"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Delete emails by message IDs from search_emails results."""
+    tenant_id = context.tenant_id
 
     if not message_ids:
         return "Error: no message_ids provided. Use search_emails first."
 
-    account, provider, error = await _resolve_provider(tenant_id, account_spec)
+    account_obj, provider, error = await _resolve_provider(tenant_id, account)
     if error:
         return error
 
@@ -288,29 +317,32 @@ async def delete_emails(args: dict, context) -> str:
         return f"Error deleting emails: {e}"
 
 
-async def _preview_delete_emails(args: dict, context) -> str:
-    """Preview for delete_emails approval."""
-    message_ids = args.get("message_ids", [])
-    description = args.get("description", f"{len(message_ids)} email(s)")
-    permanent = args.get("permanent", False)
-    action = "Permanently delete" if permanent else "Delete"
-    return f"{action} {description}?"
-
-
 # ============================================================
 # archive_emails (needs_approval)
 # ============================================================
 
-async def archive_emails(args: dict, context) -> str:
-    """Archive emails by message IDs."""
-    tenant_id = context.tenant_id
+async def _preview_archive_emails(args: dict, context) -> str:
+    """Preview for archive_emails approval."""
     message_ids = args.get("message_ids", [])
-    account_spec = args.get("account", "primary")
+    description = args.get("description", f"{len(message_ids)} email(s)")
+    return f"Archive {description}?"
+
+
+@tool(needs_approval=True, get_preview=_preview_archive_emails)
+async def archive_emails(
+    message_ids: Annotated[List[str], "List of message IDs to archive"],
+    account: Annotated[str, "Account name (from search_emails results)"] = "primary",
+    description: Annotated[str, "Human-readable description for preview"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Archive emails by message IDs from search_emails results."""
+    tenant_id = context.tenant_id
 
     if not message_ids:
         return "Error: no message_ids provided. Use search_emails first."
 
-    account, provider, error = await _resolve_provider(tenant_id, account_spec)
+    account_obj, provider, error = await _resolve_provider(tenant_id, account)
     if error:
         return error
 
@@ -326,27 +358,24 @@ async def archive_emails(args: dict, context) -> str:
         return f"Error archiving emails: {e}"
 
 
-async def _preview_archive_emails(args: dict, context) -> str:
-    """Preview for archive_emails approval."""
-    message_ids = args.get("message_ids", [])
-    description = args.get("description", f"{len(message_ids)} email(s)")
-    return f"Archive {description}?"
-
-
 # ============================================================
 # mark_as_read
 # ============================================================
 
-async def mark_as_read(args: dict, context) -> str:
+@tool
+async def mark_as_read(
+    message_ids: Annotated[List[str], "List of message IDs to mark as read"],
+    account: Annotated[str, "Account name (from search_emails results)"] = "primary",
+    *,
+    context: AgentToolContext,
+) -> str:
     """Mark emails as read by message IDs."""
     tenant_id = context.tenant_id
-    message_ids = args.get("message_ids", [])
-    account_spec = args.get("account", "primary")
 
     if not message_ids:
         return "Error: no message_ids provided. Use search_emails first."
 
-    account, provider, error = await _resolve_provider(tenant_id, account_spec)
+    account_obj, provider, error = await _resolve_provider(tenant_id, account)
     if error:
         return error
 

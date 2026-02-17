@@ -12,7 +12,7 @@ based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool
+from onevalet.standard_agent import StandardAgent
 
 from .tools import control_lights, control_speaker
 
@@ -21,7 +21,7 @@ from .tools import control_lights, control_speaker
 class SmartHomeAgent(StandardAgent):
     """Control smart lights and speakers. Use when the user wants to turn on/off lights, change brightness or color, play/pause music, or adjust volume."""
 
-    max_domain_turns = 5
+    max_turns = 5
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a smart home control assistant with access to real-time device control tools.
@@ -47,57 +47,7 @@ Instructions:
             weekday=now.strftime('%A'),
         )
 
-    domain_tools = [
-        AgentTool(
-            name="control_lights",
-            description="Control Philips Hue smart lights. Supports: on, off, brightness, color, color_temperature, scene, status.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["on", "off", "brightness", "color", "color_temperature", "scene", "status"],
-                        "description": "The light control action to perform",
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "Light name, room name, or 'all' (default 'all')",
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Brightness (0-100), color name (red/blue/green/etc), temperature (warm/cool/neutral/daylight), or scene name",
-                    },
-                },
-                "required": ["action"],
-            },
-            executor=control_lights,
-        ),
-        AgentTool(
-            name="control_speaker",
-            description="Control Sonos smart speakers. Supports: play, pause, skip_next, skip_previous, volume, mute, unmute, status, play_favorite, favorites.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": [
-                            "play", "pause", "skip_next", "skip_previous",
-                            "volume", "mute", "unmute", "status",
-                            "play_favorite", "favorites",
-                        ],
-                        "description": "The speaker control action to perform",
-                    },
-                    "target": {
-                        "type": "string",
-                        "description": "Speaker or room name (optional, defaults to first available)",
-                    },
-                    "value": {
-                        "type": "string",
-                        "description": "Volume level (0-100), 'up', 'down', or favorite/track name",
-                    },
-                },
-                "required": ["action"],
-            },
-            executor=control_speaker,
-        ),
+    tools = [
+        control_lights,
+        control_speaker,
     ]

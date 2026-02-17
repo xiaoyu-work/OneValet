@@ -12,7 +12,7 @@ update, delete, history) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool
+from onevalet.standard_agent import StandardAgent
 
 from .tools import track_shipment
 
@@ -21,7 +21,7 @@ from .tools import track_shipment
 class ShippingAgent(StandardAgent):
     """Track packages and check delivery status. Use when the user mentions a tracking number, package, shipment, delivery, or asks where their order is."""
 
-    max_domain_turns = 5
+    max_turns = 5
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a shipment tracking assistant with access to package tracking tools.
@@ -53,43 +53,6 @@ Common carrier tracking number formats:
             weekday=now.strftime('%A'),
         )
 
-    domain_tools = [
-        AgentTool(
-            name="track_shipment",
-            description=(
-                "Track, query, and manage shipments. "
-                "Supports actions: query_one (track a specific package), "
-                "query_all (list all active shipments), update (change description), "
-                "delete (stop tracking), history (view past deliveries)."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "action": {
-                        "type": "string",
-                        "enum": ["query_one", "query_all", "update", "delete", "history"],
-                        "description": "The operation to perform",
-                    },
-                    "tracking_number": {
-                        "type": "string",
-                        "description": "Package tracking number (required for query_one)",
-                    },
-                    "carrier": {
-                        "type": "string",
-                        "enum": ["ups", "fedex", "usps", "dhl"],
-                        "description": "Carrier name (auto-detected if not provided)",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Label or description for the package",
-                    },
-                    "description_pattern": {
-                        "type": "string",
-                        "description": "Keywords to match an existing shipment description",
-                    },
-                },
-                "required": ["action"],
-            },
-            executor=track_shipment,
-        ),
+    tools = [
+        track_shipment,
     ]

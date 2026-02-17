@@ -5,13 +5,13 @@ Provides create/list issues, create/list pull requests, and search repositories
 using the Composio OAuth proxy platform.
 """
 
-import json
 import os
 import logging
-from typing import Any, Dict
+from typing import Annotated, Any, Dict, List
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
+from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.tool_decorator import tool
 
 from .client import ComposioClient
 
@@ -34,16 +34,47 @@ def _check_api_key() -> str | None:
 
 
 # =============================================================================
-# Tool executors
+# Approval preview functions
 # =============================================================================
 
-async def create_issue(args: dict, context: AgentToolContext) -> str:
-    """Create a GitHub issue."""
+async def _create_issue_preview(args: dict, context) -> str:
     owner = args.get("owner", "")
     repo = args.get("repo", "")
     title = args.get("title", "")
     body = args.get("body", "")
-    labels = args.get("labels", [])
+    preview = body[:100] + "..." if len(body) > 100 else body
+    return f"Create GitHub issue?\n\nRepo: {owner}/{repo}\nTitle: {title}\nBody: {preview}"
+
+
+async def _create_pr_preview(args: dict, context) -> str:
+    owner = args.get("owner", "")
+    repo = args.get("repo", "")
+    title = args.get("title", "")
+    head = args.get("head", "")
+    base = args.get("base", "")
+    return (
+        f"Create GitHub pull request?\n\n"
+        f"Repo: {owner}/{repo}\n"
+        f"Title: {title}\n"
+        f"Merge: {head} -> {base}"
+    )
+
+
+# =============================================================================
+# Tool executors
+# =============================================================================
+
+@tool(needs_approval=True, risk_level="write", get_preview=_create_issue_preview)
+async def create_issue(
+    owner: Annotated[str, "Repository owner (user or organization)"],
+    repo: Annotated[str, "Repository name"],
+    title: Annotated[str, "Issue title"],
+    body: Annotated[str, "Issue description"] = "",
+    labels: Annotated[List[str], "Labels to add"] = [],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new issue in a GitHub repository."""
 
     if not owner or not repo:
         return "Error: owner and repo are required."
@@ -74,11 +105,15 @@ async def create_issue(args: dict, context: AgentToolContext) -> str:
         return f"Error creating GitHub issue: {e}"
 
 
-async def list_issues(args: dict, context: AgentToolContext) -> str:
-    """List issues in a GitHub repository."""
-    owner = args.get("owner", "")
-    repo = args.get("repo", "")
-    state = args.get("state", "open")
+@tool
+async def list_issues(
+    owner: Annotated[str, "Repository owner (user or organization)"],
+    repo: Annotated[str, "Repository name"],
+    state: Annotated[str, "Issue state filter: open, closed, or all"] = "open",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """List issues in a GitHub repository. Filter by state: open, closed, or all."""
 
     if not owner or not repo:
         return "Error: owner and repo are required."
@@ -100,14 +135,18 @@ async def list_issues(args: dict, context: AgentToolContext) -> str:
         return f"Error listing GitHub issues: {e}"
 
 
-async def create_pull_request(args: dict, context: AgentToolContext) -> str:
-    """Create a GitHub pull request."""
-    owner = args.get("owner", "")
-    repo = args.get("repo", "")
-    title = args.get("title", "")
-    body = args.get("body", "")
-    head = args.get("head", "")
-    base = args.get("base", "")
+@tool(needs_approval=True, risk_level="write", get_preview=_create_pr_preview)
+async def create_pull_request(
+    owner: Annotated[str, "Repository owner (user or organization)"],
+    repo: Annotated[str, "Repository name"],
+    title: Annotated[str, "Pull request title"],
+    head: Annotated[str, "Source branch name (the branch with changes)"],
+    base: Annotated[str, "Target branch name (e.g. 'main')"],
+    body: Annotated[str, "Pull request description"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new pull request in a GitHub repository."""
 
     if not owner or not repo:
         return "Error: owner and repo are required."
@@ -140,11 +179,15 @@ async def create_pull_request(args: dict, context: AgentToolContext) -> str:
         return f"Error creating GitHub pull request: {e}"
 
 
-async def list_pull_requests(args: dict, context: AgentToolContext) -> str:
-    """List pull requests in a GitHub repository."""
-    owner = args.get("owner", "")
-    repo = args.get("repo", "")
-    state = args.get("state", "open")
+@tool
+async def list_pull_requests(
+    owner: Annotated[str, "Repository owner (user or organization)"],
+    repo: Annotated[str, "Repository name"],
+    state: Annotated[str, "PR state filter: open, closed, or all"] = "open",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """List pull requests in a GitHub repository. Filter by state: open, closed, or all."""
 
     if not owner or not repo:
         return "Error: owner and repo are required."
@@ -166,10 +209,14 @@ async def list_pull_requests(args: dict, context: AgentToolContext) -> str:
         return f"Error listing GitHub pull requests: {e}"
 
 
-async def search_repositories(args: dict, context: AgentToolContext) -> str:
-    """Search GitHub repositories."""
-    query = args.get("query", "")
-    limit = args.get("limit", 10)
+@tool
+async def search_repositories(
+    query: Annotated[str, "Search keywords (e.g. 'machine learning python')"],
+    limit: Annotated[int, "Max results to return"] = 10,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search GitHub repositories by keyword."""
 
     if not query:
         return "Error: query is required."
@@ -191,9 +238,13 @@ async def search_repositories(args: dict, context: AgentToolContext) -> str:
         return f"Error searching GitHub repositories: {e}"
 
 
-async def connect_github(args: dict, context: AgentToolContext) -> str:
-    """Initiate OAuth connection to GitHub via Composio."""
-    entity_id = args.get("entity_id", "default")
+@tool
+async def connect_github(
+    entity_id: Annotated[str, "Entity ID for multi-user setups"] = "default",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Connect your GitHub account via OAuth. Returns a URL to complete authorization."""
 
     if err := _check_api_key():
         return err
@@ -235,33 +286,6 @@ async def connect_github(args: dict, context: AgentToolContext) -> str:
 
 
 # =============================================================================
-# Approval preview functions
-# =============================================================================
-
-async def _create_issue_preview(args: dict, context) -> str:
-    owner = args.get("owner", "")
-    repo = args.get("repo", "")
-    title = args.get("title", "")
-    body = args.get("body", "")
-    preview = body[:100] + "..." if len(body) > 100 else body
-    return f"Create GitHub issue?\n\nRepo: {owner}/{repo}\nTitle: {title}\nBody: {preview}"
-
-
-async def _create_pr_preview(args: dict, context) -> str:
-    owner = args.get("owner", "")
-    repo = args.get("repo", "")
-    title = args.get("title", "")
-    head = args.get("head", "")
-    base = args.get("base", "")
-    return (
-        f"Create GitHub pull request?\n\n"
-        f"Repo: {owner}/{repo}\n"
-        f"Title: {title}\n"
-        f"Merge: {head} -> {base}"
-    )
-
-
-# =============================================================================
 # Domain Agent
 # =============================================================================
 
@@ -271,7 +295,7 @@ class GitHubComposioAgent(StandardAgent):
     repositories on GitHub. Use when the user mentions GitHub, issues, PRs,
     pull requests, or repositories."""
 
-    max_domain_turns = 5
+    max_turns = 5
     tool_timeout = 60.0
 
     domain_system_prompt = """\
@@ -295,164 +319,11 @@ Instructions:
 7. If the user's request is ambiguous or missing repository info, ask for clarification WITHOUT calling any tools.
 8. After getting tool results, provide a clear summary to the user."""
 
-    domain_tools = [
-        AgentTool(
-            name="create_issue",
-            description="Create a new issue in a GitHub repository.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner (user or organization)",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Issue title",
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Issue description (optional)",
-                    },
-                    "labels": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Labels to add (optional)",
-                    },
-                },
-                "required": ["owner", "repo", "title"],
-            },
-            executor=create_issue,
-            needs_approval=True,
-            risk_level="write",
-            get_preview=_create_issue_preview,
-        ),
-        AgentTool(
-            name="list_issues",
-            description="List issues in a GitHub repository. Filter by state: open, closed, or all.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner (user or organization)",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "state": {
-                        "type": "string",
-                        "enum": ["open", "closed", "all"],
-                        "description": "Issue state filter (default: open)",
-                        "default": "open",
-                    },
-                },
-                "required": ["owner", "repo"],
-            },
-            executor=list_issues,
-        ),
-        AgentTool(
-            name="create_pull_request",
-            description="Create a new pull request in a GitHub repository.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner (user or organization)",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "title": {
-                        "type": "string",
-                        "description": "Pull request title",
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Pull request description (optional)",
-                    },
-                    "head": {
-                        "type": "string",
-                        "description": "Source branch name (the branch with changes)",
-                    },
-                    "base": {
-                        "type": "string",
-                        "description": "Target branch name (e.g. 'main')",
-                    },
-                },
-                "required": ["owner", "repo", "title", "head", "base"],
-            },
-            executor=create_pull_request,
-            needs_approval=True,
-            risk_level="write",
-            get_preview=_create_pr_preview,
-        ),
-        AgentTool(
-            name="list_pull_requests",
-            description="List pull requests in a GitHub repository. Filter by state: open, closed, or all.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "owner": {
-                        "type": "string",
-                        "description": "Repository owner (user or organization)",
-                    },
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name",
-                    },
-                    "state": {
-                        "type": "string",
-                        "enum": ["open", "closed", "all"],
-                        "description": "PR state filter (default: open)",
-                        "default": "open",
-                    },
-                },
-                "required": ["owner", "repo"],
-            },
-            executor=list_pull_requests,
-        ),
-        AgentTool(
-            name="search_repositories",
-            description="Search GitHub repositories by keyword.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search keywords (e.g. 'machine learning python')",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max results to return (default 10)",
-                        "default": 10,
-                    },
-                },
-                "required": ["query"],
-            },
-            executor=search_repositories,
-        ),
-        AgentTool(
-            name="connect_github",
-            description="Connect your GitHub account via OAuth. Returns a URL to complete authorization.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "entity_id": {
-                        "type": "string",
-                        "description": "Entity ID for multi-user setups (default: 'default')",
-                        "default": "default",
-                    },
-                },
-                "required": [],
-            },
-            executor=connect_github,
-        ),
+    tools = [
+        create_issue,
+        list_issues,
+        create_pull_request,
+        list_pull_requests,
+        search_repositories,
+        connect_github,
     ]

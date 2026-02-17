@@ -8,9 +8,10 @@ Each function takes (args: dict, context: AgentToolContext) -> str.
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet.standard_agent import AgentToolContext
+from onevalet.tool_decorator import tool
 
 from .shipment_repo import ShipmentRepository
 
@@ -178,16 +179,17 @@ async def _query_one(
     return _format_shipment_status(result, description)
 
 
-async def track_shipment(args: dict, context: AgentToolContext) -> str:
-    """Track, query, and manage shipments.
-
-    Supports actions: query_one, query_all, update, delete, history.
-    """
-    action = args.get("action", "query_one")
-    tracking_number = args.get("tracking_number", "")
-    carrier = args.get("carrier", "")
-    description = args.get("description", "")
-    description_pattern = args.get("description_pattern", "")
+@tool
+async def track_shipment(
+    action: Annotated[str, "The operation to perform"],
+    tracking_number: Annotated[str, "Package tracking number (required for query_one)"] = "",
+    carrier: Annotated[str, "Carrier name (auto-detected if not provided)"] = "",
+    description: Annotated[str, "Label or description for the package"] = "",
+    description_pattern: Annotated[str, "Keywords to match an existing shipment description"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Track, query, and manage shipments. Supports actions: query_one (track a specific package), query_all (list all active shipments), update (change description), delete (stop tracking), history (view past deliveries)."""
 
     repo = _get_repo(context)
     provider = _get_tracking_provider()

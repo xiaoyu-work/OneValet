@@ -8,10 +8,11 @@ that has its own mini ReAct loop.
 
 import os
 import logging
-from typing import Any, Dict, List
+from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
+from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.tool_decorator import tool
 
 from .client import NotionClient
 
@@ -123,11 +124,15 @@ def _extract_property_value(prop: Dict[str, Any]) -> str:
 # Tool executors
 # =============================================================================
 
-async def notion_search(args: dict, context: AgentToolContext) -> str:
-    """Search Notion pages and databases by keyword."""
-    query = args.get("query", "")
-    filter_type = args.get("filter_type")
-    page_size = args.get("page_size", 10)
+@tool
+async def notion_search(
+    query: Annotated[str, "Short search keyword (1-2 words)"] = "",
+    filter_type: Annotated[Optional[str], "Filter by type (optional)"] = None,
+    page_size: Annotated[int, "Max results (default 10)"] = 10,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search Notion workspace for pages and databases by keyword. Use short keywords (1-2 words)."""
 
     if not os.getenv("NOTION_API_KEY"):
         return "Error: Notion API key not configured. Please add it in Settings."
@@ -159,9 +164,13 @@ async def notion_search(args: dict, context: AgentToolContext) -> str:
         return f"Error searching Notion: {e}"
 
 
-async def notion_read_page(args: dict, context: AgentToolContext) -> str:
-    """Read the full content of a Notion page."""
-    page_id = args.get("page_id", "")
+@tool
+async def notion_read_page(
+    page_id: Annotated[str, "The Notion page ID to read"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Read the full content of a Notion page by its ID. Use notion_search first to find the page ID."""
     if not page_id:
         return "Error: page_id is required."
     if not os.getenv("NOTION_API_KEY"):
@@ -182,12 +191,17 @@ async def notion_read_page(args: dict, context: AgentToolContext) -> str:
         return f"Error reading Notion page: {e}"
 
 
-async def notion_query_database(args: dict, context: AgentToolContext) -> str:
-    """Query a Notion database and return rows."""
-    database_id = args.get("database_id", "")
-    filter_obj = args.get("filter")
-    sorts = args.get("sorts")
-    page_size = args.get("page_size", 20)
+@tool
+async def notion_query_database(
+    database_id: Annotated[str, "The database ID to query"],
+    filter: Annotated[Optional[dict], "Notion filter object (optional)"] = None,
+    sorts: Annotated[Optional[List[dict]], "Sort objects (optional)"] = None,
+    page_size: Annotated[int, "Max rows (default 20)"] = 20,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Query a Notion database to get rows with properties. Use notion_search with filter_type='database' first."""
+    filter_obj = filter
 
     if not database_id:
         return "Error: database_id is required."
@@ -220,12 +234,34 @@ async def notion_query_database(args: dict, context: AgentToolContext) -> str:
         return f"Error querying Notion database: {e}"
 
 
-async def notion_create_page(args: dict, context: AgentToolContext) -> str:
-    """Create a new Notion page."""
+# =============================================================================
+# Approval preview functions
+# =============================================================================
+
+async def _create_page_preview(args: dict, context) -> str:
     title = args.get("title", "")
     content = args.get("content", "")
-    parent_name = args.get("parent", "")
+    parent = args.get("parent", "workspace")
+    preview = content[:100] + "..." if len(content) > 100 else content
+    return f"Create Notion page?\n\nTitle: {title}\nParent: {parent}\nContent: {preview}"
 
+
+async def _update_page_preview(args: dict, context) -> str:
+    page_title = args.get("page_title", "")
+    content = args.get("content", "")
+    preview = content[:100] + "..." if len(content) > 100 else content
+    return f'Update Notion page "{page_title}"?\n\nAdd content: {preview}'
+
+
+@tool(needs_approval=True, get_preview=_create_page_preview)
+async def notion_create_page(
+    title: Annotated[str, "Page title"],
+    content: Annotated[str, "Page content in plain text"] = "",
+    parent: Annotated[str, "Parent page name (optional, defaults to workspace)"] = "",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a new Notion page with title and content."""
     if not title:
         return "Error: title is required."
     if not os.getenv("NOTION_API_KEY"):
@@ -236,6 +272,7 @@ async def notion_create_page(args: dict, context: AgentToolContext) -> str:
         parent_id = None
 
         # Resolve parent page if specified
+        parent_name = parent
         if parent_name:
             data = await client.search(query=parent_name, filter_type="page", page_size=1)
             results = data.get("results", [])
@@ -260,11 +297,14 @@ async def notion_create_page(args: dict, context: AgentToolContext) -> str:
         return "Couldn't create the Notion page. Please check your API key and permissions."
 
 
-async def notion_update_page(args: dict, context: AgentToolContext) -> str:
-    """Update an existing Notion page by appending content."""
-    page_title = args.get("page_title", "")
-    content = args.get("content", "")
-
+@tool(needs_approval=True, get_preview=_update_page_preview)
+async def notion_update_page(
+    page_title: Annotated[str, "Title of the page to update"],
+    content: Annotated[str, "Content to append"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Update an existing Notion page by appending content. Searches by title."""
     if not page_title:
         return "Error: page_title is required."
     if not content:
@@ -291,25 +331,6 @@ async def notion_update_page(args: dict, context: AgentToolContext) -> str:
 
 
 # =============================================================================
-# Approval preview functions
-# =============================================================================
-
-async def _create_page_preview(args: dict, context) -> str:
-    title = args.get("title", "")
-    content = args.get("content", "")
-    parent = args.get("parent", "workspace")
-    preview = content[:100] + "..." if len(content) > 100 else content
-    return f"Create Notion page?\n\nTitle: {title}\nParent: {parent}\nContent: {preview}"
-
-
-async def _update_page_preview(args: dict, context) -> str:
-    page_title = args.get("page_title", "")
-    content = args.get("content", "")
-    preview = content[:100] + "..." if len(content) > 100 else content
-    return f'Update Notion page "{page_title}"?\n\nAdd content: {preview}'
-
-
-# =============================================================================
 # Domain Agent
 # =============================================================================
 
@@ -317,7 +338,7 @@ async def _update_page_preview(args: dict, context) -> str:
 class NotionAgent(StandardAgent):
     """Search, read, create, and update Notion pages and databases. Use when the user mentions Notion, their notes, wiki, or knowledge base in Notion."""
 
-    max_domain_turns = 5
+    max_turns = 5
 
     domain_system_prompt = """\
 You are a Notion workspace assistant with access to Notion tools.
@@ -338,77 +359,10 @@ Instructions:
 6. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 7. After getting tool results, provide a clear summary to the user."""
 
-    domain_tools = [
-        AgentTool(
-            name="notion_search",
-            description="Search Notion workspace for pages and databases by keyword. Use short keywords (1-2 words).",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string", "description": "Short search keyword (1-2 words)"},
-                    "filter_type": {"type": "string", "enum": ["page", "database"], "description": "Filter by type (optional)"},
-                    "page_size": {"type": "integer", "description": "Max results (default 10)"},
-                },
-                "required": [],
-            },
-            executor=notion_search,
-        ),
-        AgentTool(
-            name="notion_read_page",
-            description="Read the full content of a Notion page by its ID. Use notion_search first to find the page ID.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "page_id": {"type": "string", "description": "The Notion page ID to read"},
-                },
-                "required": ["page_id"],
-            },
-            executor=notion_read_page,
-        ),
-        AgentTool(
-            name="notion_query_database",
-            description="Query a Notion database to get rows with properties. Use notion_search with filter_type='database' first.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "database_id": {"type": "string", "description": "The database ID to query"},
-                    "filter": {"type": "object", "description": "Notion filter object (optional)"},
-                    "sorts": {"type": "array", "items": {"type": "object"}, "description": "Sort objects (optional)"},
-                    "page_size": {"type": "integer", "description": "Max rows (default 20)"},
-                },
-                "required": ["database_id"],
-            },
-            executor=notion_query_database,
-        ),
-        AgentTool(
-            name="notion_create_page",
-            description="Create a new Notion page with title and content.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Page title"},
-                    "content": {"type": "string", "description": "Page content in plain text"},
-                    "parent": {"type": "string", "description": "Parent page name (optional, defaults to workspace)"},
-                },
-                "required": ["title"],
-            },
-            executor=notion_create_page,
-            needs_approval=True,
-            get_preview=_create_page_preview,
-        ),
-        AgentTool(
-            name="notion_update_page",
-            description="Update an existing Notion page by appending content. Searches by title.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "page_title": {"type": "string", "description": "Title of the page to update"},
-                    "content": {"type": "string", "description": "Content to append"},
-                },
-                "required": ["page_title", "content"],
-            },
-            executor=notion_update_page,
-            needs_approval=True,
-            get_preview=_update_page_preview,
-        ),
+    tools = [
+        notion_search,
+        notion_read_page,
+        notion_query_database,
+        notion_create_page,
+        notion_update_page,
     ]

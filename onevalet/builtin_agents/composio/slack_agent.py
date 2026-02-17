@@ -5,13 +5,13 @@ Provides send/fetch messages, list channels, find users, and create reminders
 using the Composio OAuth proxy platform.
 """
 
-import json
 import os
 import logging
-from typing import Any, Dict
+from typing import Annotated
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
+from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.tool_decorator import tool
 
 from .client import ComposioClient
 
@@ -34,13 +34,34 @@ def _check_api_key() -> str | None:
 
 
 # =============================================================================
+# Approval preview functions
+# =============================================================================
+
+async def _send_message_preview(args: dict, context) -> str:
+    channel = args.get("channel", "")
+    text = args.get("text", "")
+    preview = text[:100] + "..." if len(text) > 100 else text
+    return f"Send Slack message?\n\nChannel: {channel}\nMessage: {preview}"
+
+
+async def _create_reminder_preview(args: dict, context) -> str:
+    text = args.get("text", "")
+    time = args.get("time", "")
+    return f"Create Slack reminder?\n\nReminder: {text}\nTime: {time}"
+
+
+# =============================================================================
 # Tool executors
 # =============================================================================
 
-async def send_message(args: dict, context: AgentToolContext) -> str:
+@tool(needs_approval=True, risk_level="write", get_preview=_send_message_preview)
+async def send_message(
+    channel: Annotated[str, "Channel name (e.g. '#general') or channel/user ID"],
+    text: Annotated[str, "Message content to send"],
+    *,
+    context: AgentToolContext,
+) -> str:
     """Send a message to a Slack channel or user."""
-    channel = args.get("channel", "")
-    text = args.get("text", "")
 
     if not channel:
         return "Error: channel is required."
@@ -64,10 +85,14 @@ async def send_message(args: dict, context: AgentToolContext) -> str:
         return f"Error sending Slack message: {e}"
 
 
-async def fetch_messages(args: dict, context: AgentToolContext) -> str:
+@tool
+async def fetch_messages(
+    channel: Annotated[str, "Channel name or ID to fetch messages from"],
+    limit: Annotated[int, "Number of messages to fetch"] = 10,
+    *,
+    context: AgentToolContext,
+) -> str:
     """Fetch recent messages from a Slack channel."""
-    channel = args.get("channel", "")
-    limit = args.get("limit", 10)
 
     if not channel:
         return "Error: channel is required."
@@ -89,9 +114,13 @@ async def fetch_messages(args: dict, context: AgentToolContext) -> str:
         return f"Error fetching Slack messages: {e}"
 
 
-async def list_channels(args: dict, context: AgentToolContext) -> str:
-    """List all Slack channels."""
-    limit = args.get("limit", 20)
+@tool
+async def list_channels(
+    limit: Annotated[int, "Maximum number of channels to return"] = 20,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """List all available Slack channels in the workspace."""
 
     if err := _check_api_key():
         return err
@@ -111,9 +140,13 @@ async def list_channels(args: dict, context: AgentToolContext) -> str:
         return f"Error listing Slack channels: {e}"
 
 
-async def find_users(args: dict, context: AgentToolContext) -> str:
-    """Search for Slack users."""
-    query = args.get("query", "")
+@tool
+async def find_users(
+    query: Annotated[str, "Search keyword (name or email)"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Search for Slack users by name or email."""
 
     if not query:
         return "Error: query is required."
@@ -135,10 +168,14 @@ async def find_users(args: dict, context: AgentToolContext) -> str:
         return f"Error searching Slack users: {e}"
 
 
-async def create_reminder(args: dict, context: AgentToolContext) -> str:
-    """Create a Slack reminder."""
-    text = args.get("text", "")
-    time = args.get("time", "")
+@tool(needs_approval=True, risk_level="write", get_preview=_create_reminder_preview)
+async def create_reminder(
+    text: Annotated[str, "Reminder text (what to be reminded about)"],
+    time: Annotated[str, "When to remind, e.g. 'in 30 minutes', 'tomorrow at 9am', or Unix timestamp"],
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Create a Slack reminder for a specific time."""
 
     if not text:
         return "Error: text is required."
@@ -162,9 +199,13 @@ async def create_reminder(args: dict, context: AgentToolContext) -> str:
         return f"Error creating Slack reminder: {e}"
 
 
-async def connect_slack(args: dict, context: AgentToolContext) -> str:
-    """Initiate OAuth connection to Slack via Composio."""
-    entity_id = args.get("entity_id", "default")
+@tool
+async def connect_slack(
+    entity_id: Annotated[str, "Entity ID for multi-user setups"] = "default",
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Connect your Slack account via OAuth. Returns a URL to complete authorization."""
 
     if err := _check_api_key():
         return err
@@ -206,23 +247,6 @@ async def connect_slack(args: dict, context: AgentToolContext) -> str:
 
 
 # =============================================================================
-# Approval preview functions
-# =============================================================================
-
-async def _send_message_preview(args: dict, context) -> str:
-    channel = args.get("channel", "")
-    text = args.get("text", "")
-    preview = text[:100] + "..." if len(text) > 100 else text
-    return f"Send Slack message?\n\nChannel: {channel}\nMessage: {preview}"
-
-
-async def _create_reminder_preview(args: dict, context) -> str:
-    text = args.get("text", "")
-    time = args.get("time", "")
-    return f"Create Slack reminder?\n\nReminder: {text}\nTime: {time}"
-
-
-# =============================================================================
 # Domain Agent
 # =============================================================================
 
@@ -232,7 +256,7 @@ class SlackComposioAgent(StandardAgent):
     reminders in Slack. Use when the user mentions Slack, channels, or wants to
     send/read messages on Slack."""
 
-    max_domain_turns = 5
+    max_turns = 5
     tool_timeout = 60.0
 
     domain_system_prompt = """\
@@ -256,116 +280,11 @@ Instructions:
 7. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 8. After getting tool results, provide a clear summary to the user."""
 
-    domain_tools = [
-        AgentTool(
-            name="send_message",
-            description="Send a message to a Slack channel or user.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "channel": {
-                        "type": "string",
-                        "description": "Channel name (e.g. '#general') or channel/user ID",
-                    },
-                    "text": {
-                        "type": "string",
-                        "description": "Message content to send",
-                    },
-                },
-                "required": ["channel", "text"],
-            },
-            executor=send_message,
-            needs_approval=True,
-            risk_level="write",
-            get_preview=_send_message_preview,
-        ),
-        AgentTool(
-            name="fetch_messages",
-            description="Fetch recent messages from a Slack channel.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "channel": {
-                        "type": "string",
-                        "description": "Channel name or ID to fetch messages from",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Number of messages to fetch (default 10)",
-                        "default": 10,
-                    },
-                },
-                "required": ["channel"],
-            },
-            executor=fetch_messages,
-        ),
-        AgentTool(
-            name="list_channels",
-            description="List all available Slack channels in the workspace.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "limit": {
-                        "type": "integer",
-                        "description": "Maximum number of channels to return (default 20)",
-                        "default": 20,
-                    },
-                },
-                "required": [],
-            },
-            executor=list_channels,
-        ),
-        AgentTool(
-            name="find_users",
-            description="Search for Slack users by name or email.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search keyword (name or email)",
-                    },
-                },
-                "required": ["query"],
-            },
-            executor=find_users,
-        ),
-        AgentTool(
-            name="create_reminder",
-            description="Create a Slack reminder for a specific time.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "Reminder text (what to be reminded about)",
-                    },
-                    "time": {
-                        "type": "string",
-                        "description": "When to remind, e.g. 'in 30 minutes', 'tomorrow at 9am', or Unix timestamp",
-                    },
-                },
-                "required": ["text", "time"],
-            },
-            executor=create_reminder,
-            needs_approval=True,
-            risk_level="write",
-            get_preview=_create_reminder_preview,
-        ),
-        AgentTool(
-            name="connect_slack",
-            description="Connect your Slack account via OAuth. Returns a URL to complete authorization.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "entity_id": {
-                        "type": "string",
-                        "description": "Entity ID for multi-user setups (default: 'default')",
-                        "default": "default",
-                    },
-                },
-                "required": [],
-            },
-            executor=connect_slack,
-        ),
+    tools = [
+        send_message,
+        fetch_messages,
+        list_channels,
+        find_users,
+        create_reminder,
+        connect_slack,
     ]
