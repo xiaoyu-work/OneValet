@@ -1,9 +1,9 @@
 """
-Todo Domain Tools - Standalone API functions for TodoDomainAgent's mini ReAct loop.
+Todo Domain Tools - Standalone API functions for TodoAgent's mini ReAct loop.
 
 Extracted from TodoQueryAgent, CreateTodoAgent, UpdateTodoAgent, DeleteTodoAgent,
 ReminderAgent, TaskManagementAgent, and PlannerAgent.
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import json
@@ -12,7 +12,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def _get_provider(account):
     return TodoProviderFactory.create_provider(account)
 
 
-def _get_task_repo(context: DomainToolContext):
+def _get_task_repo(context: AgentToolContext):
     """Get TaskRepository from context hints."""
     from onevalet.builtin_agents.reminder.task_repo import TaskRepository
     db = context.context_hints.get("db") if context.context_hints else None
@@ -68,7 +68,7 @@ def _format_due_date(due_str: str) -> str:
 # query_tasks
 # =============================================================================
 
-async def query_tasks(args: dict, context: DomainToolContext) -> str:
+async def query_tasks(args: dict, context: AgentToolContext) -> str:
     """Query and search todo tasks across all connected providers."""
     search_query = args.get("search_query")
     show_completed = args.get("show_completed", False)
@@ -164,7 +164,7 @@ async def query_tasks(args: dict, context: DomainToolContext) -> str:
 # create_task
 # =============================================================================
 
-async def create_task(args: dict, context: DomainToolContext) -> str:
+async def create_task(args: dict, context: AgentToolContext) -> str:
     """Create a new todo task on the user's connected provider."""
     title = args.get("title", "")
     due = args.get("due")
@@ -205,7 +205,7 @@ async def create_task(args: dict, context: DomainToolContext) -> str:
 # update_task
 # =============================================================================
 
-async def update_task(args: dict, context: DomainToolContext) -> str:
+async def update_task(args: dict, context: AgentToolContext) -> str:
     """Complete (mark as done) a todo task by searching for it."""
     search_query = args.get("search_query", "")
     task_indices = args.get("task_indices")  # Optional: pre-selected indices
@@ -317,7 +317,7 @@ async def update_task(args: dict, context: DomainToolContext) -> str:
 # delete_task
 # =============================================================================
 
-async def delete_task(args: dict, context: DomainToolContext) -> str:
+async def delete_task(args: dict, context: AgentToolContext) -> str:
     """Delete a todo task by searching for it."""
     search_query = args.get("search_query", "")
     task_indices = args.get("task_indices")  # Optional: pre-selected indices
@@ -425,7 +425,7 @@ async def delete_task(args: dict, context: DomainToolContext) -> str:
 # set_reminder
 # =============================================================================
 
-async def set_reminder(args: dict, context: DomainToolContext) -> str:
+async def set_reminder(args: dict, context: AgentToolContext) -> str:
     """Create a reminder or scheduled automation via TriggerEngine."""
     schedule_datetime = args.get("schedule_datetime")
     schedule_type = args.get("schedule_type", "one_time")
@@ -478,7 +478,7 @@ async def set_reminder(args: dict, context: DomainToolContext) -> str:
                     "channel": "sms",
                 },
                 "metadata": {
-                    "created_by": "TodoDomainAgent",
+                    "created_by": "TodoAgent",
                     "human_readable_time": human_readable_time,
                 },
             },
@@ -497,7 +497,7 @@ async def set_reminder(args: dict, context: DomainToolContext) -> str:
 # manage_reminders
 # =============================================================================
 
-async def manage_reminders(args: dict, context: DomainToolContext) -> str:
+async def manage_reminders(args: dict, context: AgentToolContext) -> str:
     """List, update, pause, resume, or delete scheduled reminders and automations."""
     action = args.get("action", "list")
     task_hint = args.get("task_hint", "")

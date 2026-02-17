@@ -11,12 +11,12 @@ import logging
 
 import httpx
 
-from onevalet.tools import ToolRegistry, ToolDefinition, ToolCategory, ToolExecutionContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
 
-async def google_search_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def google_search_executor(args: dict, context: AgentToolContext = None) -> str:
     """Search the web using Google Custom Search API."""
     query = args.get("query", "")
     num_results = args.get("num_results", 5)
@@ -80,33 +80,18 @@ async def google_search_executor(args: dict, context: ToolExecutionContext = Non
         return f"Error: {e}"
 
 
-def register_google_search_tools() -> None:
-    """Register google_search tool with the global ToolRegistry."""
-    registry = ToolRegistry.get_instance()
-
-    registry.register(ToolDefinition(
-        name="google_search",
-        description=(
-            "Search the web using Google. "
-            "Returns titles, URLs, and snippets of top results."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query string",
-                },
-                "num_results": {
-                    "type": "integer",
-                    "description": "Number of results to return (max 10)",
-                    "default": 5,
-                },
-            },
-            "required": ["query"],
+GOOGLE_SEARCH_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "query": {
+            "type": "string",
+            "description": "Search query string",
         },
-        executor=google_search_executor,
-        category=ToolCategory.WEB,
-    ))
-
-    logger.info("Google search tool registered")
+        "num_results": {
+            "type": "integer",
+            "description": "Number of results to return (max 10)",
+            "default": 5,
+        },
+    },
+    "required": ["query"],
+}

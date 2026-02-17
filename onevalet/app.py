@@ -23,25 +23,6 @@ from .streaming.models import AgentEvent
 
 logger = logging.getLogger(__name__)
 
-# Provider -> default env var name for API key
-_PROVIDER_ENV_VARS = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "azure": "AZURE_OPENAI_API_KEY",
-    "dashscope": "DASHSCOPE_API_KEY",
-    "gemini": "GOOGLE_API_KEY",
-    "ollama": None,  # No API key needed
-}
-
-# Provider -> LLM client class import path
-_PROVIDER_CLIENTS = {
-    "openai": ("onevalet.llm.openai_client", "OpenAIClient"),
-    "anthropic": ("onevalet.llm.anthropic_client", "AnthropicClient"),
-    "azure": ("onevalet.llm.azure_client", "AzureOpenAIClient"),
-    "dashscope": ("onevalet.llm.dashscope_client", "DashScopeClient"),
-    "gemini": ("onevalet.llm.gemini_client", "GeminiClient"),
-    "ollama": ("onevalet.llm.ollama_client", "OllamaClient"),
-}
 
 
 def _load_config(path: str) -> dict:
@@ -101,12 +82,6 @@ class OneValet:
         if not self._config.get("embedding"):
             raise ValueError("Missing required config field: 'embedding'")
 
-        provider = llm_cfg["provider"]
-        if provider not in _PROVIDER_CLIENTS:
-            raise ValueError(
-                f"Unsupported provider: '{provider}'. "
-                f"Supported: {', '.join(_PROVIDER_CLIENTS.keys())}"
-            )
 
         # Will be set during lazy initialization
         self._llm_client = None
@@ -131,23 +106,12 @@ class OneValet:
 
         # 1. LLM client
         api_key = llm_cfg.get("api_key")
-        if api_key is None:
-            env_var = _PROVIDER_ENV_VARS.get(provider)
-            if env_var:
-                api_key = os.environ.get(env_var)
 
-        client_kwargs = {"model": model}
-        if api_key:
-            client_kwargs["api_key"] = api_key
-        if llm_cfg.get("base_url"):
-            client_kwargs["base_url"] = llm_cfg["base_url"]
-
-        module_path, class_name = _PROVIDER_CLIENTS[provider]
-        import importlib
-        mod = importlib.import_module(module_path)
-        ClientClass = getattr(mod, class_name)
-        self._llm_client = ClientClass(**client_kwargs)
-        logger.info(f"LLM client: provider={provider}, model={model}, client={class_name}")
+        from .llm.litellm_client import LiteLLMClient
+        from .llm.base import LLMConfig
+        llm_config = LLMConfig(model=model, api_key=api_key, base_url=llm_cfg.get("base_url"))
+        self._llm_client = LiteLLMClient(config=llm_config, provider_name=provider)
+        logger.info(f"LLM client: provider={provider}, model={model}")
 
         # 2. Database + all tables
         from .db import Database, ensure_schema
@@ -200,11 +164,7 @@ class OneValet:
             f"Discovered {len(discovery.get_discovered_agents())} builtin agents"
         )
 
-        # 6. Register builtin tools
-        from .builtin_agents.tools import register_all_builtin_tools
-        register_all_builtin_tools()
-
-        # 7. AgentRegistry
+        # 6. AgentRegistry
         from .config import AgentRegistry
         self._agent_registry = AgentRegistry()
         await self._agent_registry.initialize()

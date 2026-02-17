@@ -48,26 +48,57 @@ Legacy Example (still supported):
             )
 """
 
-from enum import Enum
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Callable, Any, AsyncIterator, TYPE_CHECKING
-from datetime import datetime
-from uuid import uuid4
+import asyncio
+import json
 import logging
 import re
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import List, Dict, Optional, Callable, Any, AsyncIterator, Tuple, TYPE_CHECKING
+from uuid import uuid4
 
 from .base_agent import BaseAgent
-from .message import Message
-from .result import AgentResult, AgentStatus, ApprovalResult
-from .protocols import LLMClientProtocol
-from .streaming.models import StreamMode, EventType, AgentEvent
-from .streaming.engine import StreamEngine
 from .fields import InputField, OutputField
+from .llm.base import LLMResponse, ToolCall as LLMToolCall
+from .message import Message
+from .protocols import LLMClientProtocol
+from .result import AgentResult, AgentStatus, ApprovalResult
+from .streaming.engine import StreamEngine
+from .streaming.models import StreamMode, EventType, AgentEvent
 
 if TYPE_CHECKING:
     from .agents.decorator import InputSpec, OutputSpec
 
 logger = logging.getLogger(__name__)
+
+# Re-declared here to avoid circular import with orchestrator package.
+# Canonical definition lives in onevalet.orchestrator.react_config.
+__COMPLETE_TASK_TOOL_NAME = "complete_task"
+__COMPLETE_TASK_SCHEMA: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": __COMPLETE_TASK_TOOL_NAME,
+        "description": (
+            "Call this tool to signal that you have completed the user's request "
+            "and provide your final response. Use this when you have finished all "
+            "necessary tool calls and are ready to deliver the final answer."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "string",
+                    "description": (
+                        "Your final response to the user. This should be comprehensive "
+                        "and include all relevant information gathered from tool calls."
+                    ),
+                },
+            },
+            "required": ["result"],
+        },
+    },
+}
 
 
 # ===== Field Definition =====
@@ -115,6 +146,61 @@ class AgentState:
     created_at: datetime
     last_active: datetime
     error_message: Optional[str] = None
+
+
+# ===== Domain Tool Definitions =====
+
+
+@dataclass
+class AgentToolContext:
+    """Context passed to tool executors.
+
+    Provides access to shared resources that tool functions need.
+    Used by both agent-level tools (domain_tools) and orchestrator-level
+    builtin tools.
+    """
+
+    llm_client: Any = None
+    tenant_id: str = ""
+    user_profile: Optional[Dict[str, Any]] = None
+    context_hints: Optional[Dict[str, Any]] = None
+    credentials: Any = None  # CredentialStore instance
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AgentTool:
+    """A tool available inside a StandardAgent's mini ReAct loop.
+
+    Attributes:
+        name: Tool function name (used in LLM tool_calls).
+        description: What this tool does (shown to domain LLM).
+        parameters: JSON Schema for tool arguments.
+        executor: Async function(args: dict, context: AgentToolContext) -> str.
+        needs_approval: If True, pause execution for user confirmation before running.
+        risk_level: One of "read", "write", "destructive".
+        get_preview: Async function to generate human-readable preview for approval.
+    """
+
+    name: str
+    description: str
+    parameters: Dict[str, Any]
+    executor: Callable
+    needs_approval: bool = False
+    risk_level: str = "read"  # "read", "write", "destructive"
+    category: str = "utility"
+    get_preview: Optional[Callable] = None
+
+    def to_openai_schema(self) -> Dict[str, Any]:
+        """Convert to OpenAI function-calling tool schema."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }
 
 
 # ===== State Transitions =====
@@ -200,6 +286,21 @@ class StandardAgent(BaseAgent):
     _input_specs: List["InputSpec"] = []
     _output_specs: List["OutputSpec"] = []
 
+    # Domain ReAct loop configuration (active when domain_tools is non-empty)
+    domain_system_prompt: str = ""
+    domain_tools: List[AgentTool] = []
+    max_domain_turns: int = 5
+    max_complete_task_retries: int = 3
+    tool_timeout: float = 30.0  # seconds per tool call
+    max_tool_result_chars: int = 4000  # truncate tool results beyond this
+
+    _COMPLETE_TASK_INSTRUCTION = (
+        "\n\nIMPORTANT: When you have finished the task, you MUST call the "
+        "`complete_task` tool with your final answer in the `result` parameter. "
+        "This is the ONLY way to finish. Never respond with plain text without "
+        "calling `complete_task`."
+    )
+
     def __init__(
         self,
         tenant_id: str = "",
@@ -256,6 +357,13 @@ class StandardAgent(BaseAgent):
 
         # Recalled memories from orchestrator (when enable_memory=true)
         self._recalled_memories: List[Dict[str, Any]] = []
+
+        # Domain ReAct loop state (only active when domain_tools is non-empty)
+        self._react_messages: List[Dict[str, Any]] = []
+        self._react_turn: int = 0
+        self._pending_tool_call: Optional[Tuple[LLMToolCall, AgentTool, Dict[str, Any]]] = None
+        self._remaining_tool_calls: List[LLMToolCall] = []
+        self._tool_trace: List[Dict[str, Any]] = []
 
         # Pre-populate collected_fields with context_hints (validate each field)
         if context_hints:
@@ -324,6 +432,15 @@ class StandardAgent(BaseAgent):
                 if spec.name not in self.collected_fields:
                     self.collected_fields[spec.name] = spec.default
 
+    # ===== Domain ReAct Support =====
+
+    def get_system_prompt(self) -> str:
+        """Return the system prompt for the mini ReAct loop.
+
+        Override in subclasses to customize. Only used when domain_tools is non-empty.
+        """
+        return self.domain_system_prompt + self._COMPLETE_TASK_INSTRUCTION
+
     # ===== Required Methods (Must Override) =====
 
     def define_required_fields(self) -> List[RequiredField]:
@@ -380,9 +497,23 @@ class StandardAgent(BaseAgent):
         """
         Called when waiting for user to provide missing fields.
 
-        Default behavior: Extract fields from message and check completion.
-        Override for custom field collection logic.
+        If domain_tools is active and a ReAct loop is in progress,
+        resumes the ReAct loop with the user's answer.
+        Otherwise, continues InputField collection.
         """
+        # Domain ReAct path: resume loop with user's follow-up
+        if self.domain_tools and self._react_messages:
+            user_text = msg.get_text() if msg else ""
+            if not user_text:
+                return self.make_result(
+                    status=AgentStatus.WAITING_FOR_INPUT,
+                    raw_message="Please provide the requested information.",
+                )
+            self._react_messages.append({"role": "user", "content": user_text})
+            self.transition_to(AgentStatus.RUNNING)
+            return await self._run_react()
+
+        # InputField collection path
         if msg:
             success = await self._extract_and_collect_fields(msg.get_text())
 
@@ -420,9 +551,48 @@ class StandardAgent(BaseAgent):
         """
         Called when waiting for user approval.
 
-        Default behavior: Parse approval response and act accordingly.
-        Override for custom approval logic.
+        If a domain tool call is pending, uses LLM-based approval parsing.
+        Otherwise, uses the InputField-based approval flow.
         """
+        if self._pending_tool_call:
+            # Domain ReAct path: LLM-based approval parsing
+            user_input = msg.get_text() if msg else ""
+            approval = await self._parse_approval_with_llm(user_input)
+
+            if approval == ApprovalResult.APPROVED:
+                return await self._resume_after_approval()
+            if approval == ApprovalResult.REJECTED:
+                self._pending_tool_call = None
+                self._remaining_tool_calls = []
+                self._tool_trace.append(
+                    {"tool": "approval", "status": "rejected", "summary": "User rejected approval."}
+                )
+                return self.make_result(
+                    status=AgentStatus.CANCELLED,
+                    raw_message="Operation cancelled.",
+                    metadata={
+                        "tool_trace": list(self._tool_trace),
+                        "tool_calls_count": len(self._tool_trace),
+                    },
+                )
+            # MODIFY
+            self._pending_tool_call = None
+            self._remaining_tool_calls = []
+            self._tool_trace.append({
+                "tool": "approval",
+                "status": "modified",
+                "summary": f"User requested modification: {user_input[:180]}",
+            })
+            return self.make_result(
+                status=AgentStatus.CANCELLED,
+                raw_message=f"Operation cancelled. User said: {user_input}",
+                metadata={
+                    "tool_trace": list(self._tool_trace),
+                    "tool_calls_count": len(self._tool_trace),
+                },
+            )
+
+        # InputField-based approval path
         user_input = msg.get_text() if msg else ""
         approval = self.parse_approval(user_input)
 
@@ -455,21 +625,45 @@ class StandardAgent(BaseAgent):
         """
         Called when all fields are collected and approved.
 
-        THIS IS WHERE YOU PUT YOUR BUSINESS LOGIC.
-
-        Override this method to implement your agent's main functionality.
+        If domain_tools is non-empty, runs the mini ReAct loop automatically.
+        Otherwise, subclasses override this for custom business logic.
 
         Example:
             async def on_running(self, msg):
                 name = self.collected_fields["name"]
-                # Do something with the collected data
                 return self.make_result(
                     status=AgentStatus.COMPLETED,
                     raw_message=f"Hello, {name}!"
                 )
         """
-        # Default implementation - just complete with collected fields
-        # Subclasses MUST override this to provide meaningful raw_message
+        if self.domain_tools:
+            # Domain ReAct path
+            if self._pending_tool_call:
+                return await self._resume_after_approval()
+
+            instruction = self.collected_fields.get("task_instruction", "")
+            if not instruction and msg:
+                instruction = msg.get_text()
+
+            if not instruction:
+                return self.make_result(
+                    status=AgentStatus.COMPLETED,
+                    raw_message="No task instruction provided.",
+                    metadata={
+                        "tool_trace": list(self._tool_trace),
+                        "tool_calls_count": len(self._tool_trace),
+                    },
+                )
+
+            self._react_messages = [
+                {"role": "system", "content": self.get_system_prompt()},
+                {"role": "user", "content": instruction},
+            ]
+            self._react_turn = 0
+            self._tool_trace = []
+            return await self._run_react()
+
+        # Default for non-domain subclasses (they override this)
         return self.make_result(
             status=AgentStatus.COMPLETED
         )
@@ -826,7 +1020,6 @@ Return JSON only."""
         )
 
         # Parse JSON response
-        import json
         content = response.content if hasattr(response, 'content') else str(response)
         try:
             return json.loads(content)
@@ -921,7 +1114,6 @@ Return JSON only."""
 
         # Emit state change event if streaming is enabled
         if self._streaming_enabled:
-            import asyncio
             try:
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._stream_engine.emit_state_change(
@@ -961,8 +1153,6 @@ Return JSON only."""
                 elif event.type == EventType.TOOL_CALL_START:
                     print(f"Calling: {event.data['tool_name']}")
         """
-        import asyncio
-
         self._streaming_enabled = True
 
         # Execute reply in background (emits events to stream engine)
@@ -1130,3 +1320,435 @@ Return JSON only."""
         self._recalled_memories = memories or []
         if memories:
             logger.debug(f"Set {len(memories)} recalled memories for {self.agent_id}")
+
+    # ===== Domain ReAct Loop =====
+
+    async def _run_react(self) -> AgentResult:
+        """Core mini ReAct loop with domain tools."""
+        tool_schemas = [t.to_openai_schema() for t in self.domain_tools]
+        # Always inject complete_task
+        tool_schemas.append(_COMPLETE_TASK_SCHEMA)
+        messages = self._react_messages
+
+        if self._remaining_tool_calls:
+            result = await self._execute_tool_calls(self._remaining_tool_calls, messages)
+            self._remaining_tool_calls = []
+            if result is not None:
+                return result
+
+        for turn in range(self._react_turn, self.max_domain_turns):
+            self._react_turn = turn + 1
+            # First turn: force tool use since orchestrator already routed here.
+            # Subsequent turns: let LLM decide freely.
+            tool_choice = "required" if turn == 0 and tool_schemas else "auto"
+            response: LLMResponse = await self.llm_client.chat_completion(
+                messages=messages,
+                tools=tool_schemas if tool_schemas else None,
+                tool_choice=tool_choice,
+            )
+
+            if not response.has_tool_calls:
+                text = response.content or ""
+                # If the LLM responded with text on the first turn (no tool
+                # called), it likely needs info from the user (e.g. missing
+                # email address).  Return WAITING_FOR_INPUT so the agent stays
+                # alive and the user can reply.
+                if turn == 0 and text and self._looks_like_question(text):
+                    self._react_messages = messages
+                    return self.make_result(
+                        status=AgentStatus.WAITING_FOR_INPUT,
+                        raw_message=text,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                        },
+                    )
+
+                # Grace turn: LLM forgot to call complete_task.
+                # Retry up to max_complete_task_retries times.
+                max_retries = self.max_complete_task_retries
+                for retry in range(1, max_retries + 1):
+                    logger.warning(
+                        f"[{self.__class__.__name__}:{self.name}] turn={turn} no tool calls, "
+                        f"grace retry {retry}/{max_retries}"
+                    )
+                    messages.append(self._format_assistant_msg(response))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "You must call the `complete_task` tool with your final "
+                            "response in the `result` parameter to finish. Call it now."
+                        ),
+                    })
+                    try:
+                        response = await self.llm_client.chat_completion(
+                            messages=messages,
+                            tools=tool_schemas,
+                            tool_choice="required",
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[{self.__class__.__name__}:{self.name}] grace retry {retry} "
+                            f"LLM call failed: {e}"
+                        )
+                        return self.make_result(
+                            status=AgentStatus.ERROR,
+                            raw_message=(
+                                "Internal error: failed to complete the task. "
+                                "Please try again."
+                            ),
+                            metadata={
+                                "tool_trace": list(self._tool_trace),
+                                "tool_calls_count": len(self._tool_trace),
+                            },
+                        )
+                    if response.has_tool_calls:
+                        break  # success — proceed to tool execution
+
+                # Exhausted all retries — ask LLM to produce a user-friendly
+                # error message (no tools, so it can only return text).
+                if not response.has_tool_calls:
+                    logger.error(
+                        f"[{self.__class__.__name__}:{self.name}] exhausted {max_retries} "
+                        f"grace retries, LLM still did not call complete_task"
+                    )
+                    messages.append(self._format_assistant_msg(response))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "There was an internal issue processing your request. "
+                            "Generate a short, friendly apology to the user in "
+                            "their language, and suggest they try again later."
+                        ),
+                    })
+                    try:
+                        fallback_resp = await self.llm_client.chat_completion(
+                            messages=messages,
+                            tools=None,
+                        )
+                        friendly_msg = fallback_resp.content or (
+                            "Sorry, something went wrong. Please try again later."
+                        )
+                    except Exception:
+                        friendly_msg = "Sorry, something went wrong. Please try again later."
+                    return self.make_result(
+                        status=AgentStatus.COMPLETED,
+                        raw_message=friendly_msg,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                            "complete_task_fallback": True,
+                        },
+                    )
+
+            messages.append(self._format_assistant_msg(response))
+            result = await self._execute_tool_calls(response.tool_calls, messages)
+            if result is not None:
+                return result
+
+        return self.make_result(
+            status=AgentStatus.COMPLETED,
+            raw_message=(
+                "I wasn't able to complete the task within the allowed steps. "
+                "Please try again with more specific information."
+            ),
+            metadata={
+                "tool_trace": list(self._tool_trace),
+                "tool_calls_count": len(self._tool_trace),
+            },
+        )
+
+    async def _execute_tool_calls(
+        self,
+        tool_calls: List[LLMToolCall],
+        messages: List[Dict[str, Any]],
+    ) -> Optional[AgentResult]:
+        """Execute tool calls. Returns AgentResult if paused for approval, None otherwise."""
+        for i, tc in enumerate(tool_calls):
+            # Intercept complete_task — extract result and finish
+            if tc.name == _COMPLETE_TASK_TOOL_NAME:
+                try:
+                    args = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
+                except (json.JSONDecodeError, TypeError):
+                    args = {}
+                result_text = args.get("result", "")
+                if result_text:
+                    self._tool_trace.append({
+                        "tool": _COMPLETE_TASK_TOOL_NAME,
+                        "status": "ok",
+                        "summary": result_text[:240],
+                    })
+                    logger.info(
+                        f"[{self.__class__.__name__}:{self.name}] complete_task called "
+                        f"({len(result_text)} chars)"
+                    )
+                    return self.make_result(
+                        status=AgentStatus.COMPLETED,
+                        raw_message=result_text,
+                        metadata={
+                            "tool_trace": list(self._tool_trace),
+                            "tool_calls_count": len(self._tool_trace),
+                        },
+                    )
+                else:
+                    # Missing result — append error and continue
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": 'Error: "result" argument is required for complete_task.',
+                    })
+                    continue
+
+            tool = self._find_domain_tool(tc.name)
+            if tool is None:
+                error_text = f"Error: Unknown tool '{tc.name}'"
+                self._tool_trace.append(
+                    {"tool": tc.name, "status": "error", "summary": error_text}
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": error_text,
+                    }
+                )
+                continue
+
+            if isinstance(tc.arguments, dict):
+                args = tc.arguments
+            elif isinstance(tc.arguments, str):
+                try:
+                    args = json.loads(tc.arguments)
+                except (json.JSONDecodeError, ValueError) as e:
+                    error_text = (
+                        f"Error: Failed to parse arguments for tool '{tc.name}': {e}. "
+                        "Please retry with valid JSON arguments."
+                    )
+                    self._tool_trace.append(
+                        {"tool": tc.name, "status": "error", "summary": error_text[:240]}
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": error_text,
+                        }
+                    )
+                    continue
+            else:
+                args = {}
+
+            requires_approval = tool.needs_approval or tool.risk_level in ("write", "destructive")
+            if requires_approval:
+                if tool.get_preview:
+                    try:
+                        preview = await tool.get_preview(args, self._build_tool_context())
+                    except Exception as e:
+                        logger.error(f"Preview generation failed for {tc.name}: {e}")
+                        preview = f"About to execute: {tc.name}({json.dumps(args, ensure_ascii=False)})"
+                else:
+                    preview = f"About to execute: {tc.name}({json.dumps(args, ensure_ascii=False)})"
+                if tool.risk_level == "destructive":
+                    preview = f"[DESTRUCTIVE] {preview}"
+
+                self._pending_tool_call = (tc, tool, args)
+                self._remaining_tool_calls = list(tool_calls[i + 1 :])
+                self._react_messages = messages
+                self._tool_trace.append(
+                    {
+                        "tool": tc.name,
+                        "status": "waiting_for_approval",
+                        "summary": preview[:240],
+                    }
+                )
+                return self.make_result(
+                    status=AgentStatus.WAITING_FOR_APPROVAL,
+                    raw_message=preview,
+                    metadata={
+                        "tool_trace": list(self._tool_trace),
+                        "tool_calls_count": len(self._tool_trace),
+                    },
+                )
+
+            try:
+                result_text = await asyncio.wait_for(
+                    tool.executor(args, self._build_tool_context()),
+                    timeout=self.tool_timeout,
+                )
+                result_str = str(result_text)
+                if len(result_str) > self.max_tool_result_chars:
+                    result_str = result_str[: self.max_tool_result_chars] + "\n...[truncated]"
+                self._tool_trace.append(
+                    {
+                        "tool": tc.name,
+                        "status": "ok",
+                        "summary": result_str[:240],
+                    }
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Domain tool {tc.name} timed out after {self.tool_timeout}s")
+                result_str = f"Error: tool '{tc.name}' timed out after {self.tool_timeout}s"
+                self._tool_trace.append(
+                    {
+                        "tool": tc.name,
+                        "status": "error",
+                        "summary": result_str[:240],
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Domain tool {tc.name} failed: {e}", exc_info=True)
+                result_str = f"Error executing {tc.name}: {e}"
+                self._tool_trace.append(
+                    {
+                        "tool": tc.name,
+                        "status": "error",
+                        "summary": result_str[:240],
+                    }
+                )
+
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_str,
+                }
+            )
+
+        return None
+
+    async def _parse_approval_with_llm(self, user_input: str) -> ApprovalResult:
+        """Use LLM to classify user's approval intent in any language."""
+        if not self.llm_client or not user_input.strip():
+            return ApprovalResult.MODIFY
+        try:
+            response = await self.llm_client.chat_completion(messages=[{
+                "role": "user",
+                "content": (
+                    f'The user was asked to approve an action. They replied: "{user_input}"\n'
+                    "Classify their intent as exactly one word: APPROVE, REJECT, or MODIFY."
+                ),
+            }])
+            result = (response.content or "").strip().upper()
+            if "APPROVE" in result:
+                return ApprovalResult.APPROVED
+            if "REJECT" in result:
+                return ApprovalResult.REJECTED
+            return ApprovalResult.MODIFY
+        except Exception as e:
+            logger.warning(f"LLM approval parsing failed: {e}")
+            return ApprovalResult.MODIFY
+
+    async def _resume_after_approval(self) -> AgentResult:
+        """Execute approved tool and continue mini ReAct loop."""
+        if not self._pending_tool_call:
+            return self.make_result(
+                status=AgentStatus.ERROR,
+                raw_message="No pending tool call to resume.",
+                metadata={
+                    "tool_trace": list(self._tool_trace),
+                    "tool_calls_count": len(self._tool_trace),
+                },
+            )
+
+        tc, tool, args = self._pending_tool_call
+        self._pending_tool_call = None
+
+        try:
+            result_text = await asyncio.wait_for(
+                tool.executor(args, self._build_tool_context()),
+                timeout=self.tool_timeout,
+            )
+            result_str = str(result_text)
+            if len(result_str) > self.max_tool_result_chars:
+                result_str = result_str[: self.max_tool_result_chars] + "\n...[truncated]"
+            self._tool_trace.append(
+                {
+                    "tool": tc.name,
+                    "status": "ok",
+                    "summary": result_str[:240],
+                }
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Approved tool {tc.name} timed out after {self.tool_timeout}s")
+            result_str = f"Error: tool '{tc.name}' timed out after {self.tool_timeout}s"
+            self._tool_trace.append(
+                {
+                    "tool": tc.name,
+                    "status": "error",
+                    "summary": result_str[:240],
+                }
+            )
+        except Exception as e:
+            logger.error(f"Approved tool {tc.name} failed: {e}", exc_info=True)
+            result_str = f"Error executing {tc.name}: {e}"
+            self._tool_trace.append(
+                {
+                    "tool": tc.name,
+                    "status": "error",
+                    "summary": result_str[:240],
+                }
+            )
+
+        self._react_messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc.id,
+                "content": result_str,
+            }
+        )
+        return await self._run_react()
+
+    @staticmethod
+    def _looks_like_question(text: str) -> bool:
+        """Heuristic: does the LLM response look like it's asking the user something?"""
+        t = text.strip()
+        if t.endswith("?") or t.endswith("\uff1f"):
+            return True
+        # Common question patterns in Chinese and English
+        question_signals = [
+            "\u8bf7\u63d0\u4f9b", "\u8bf7\u544a\u8bc9", "\u8bf7\u95ee",
+            "\u80fd\u5426\u63d0\u4f9b", "\u9700\u8981\u4f60\u63d0\u4f9b",
+            "what is", "what's", "could you", "can you", "please provide",
+            "what email", "which email",
+        ]
+        t_lower = t.lower()
+        return any(s in t_lower for s in question_signals)
+
+    def _find_domain_tool(self, name: str) -> Optional[AgentTool]:
+        """Find a domain tool by name."""
+        for tool in self.domain_tools:
+            if tool.name == name:
+                return tool
+        return None
+
+    def _build_tool_context(self) -> AgentToolContext:
+        """Create AgentToolContext from agent state."""
+        return AgentToolContext(
+            llm_client=self.llm_client,
+            tenant_id=self.tenant_id,
+            user_profile=self.context_hints.get("user_profile") if self.context_hints else None,
+            context_hints=self.context_hints,
+        )
+
+    @staticmethod
+    def _format_assistant_msg(response: LLMResponse) -> Dict[str, Any]:
+        """Convert LLMResponse to OpenAI-format assistant message."""
+        msg: Dict[str, Any] = {
+            "role": "assistant",
+            "content": response.content or None,
+        }
+        if response.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments, ensure_ascii=False)
+                        if isinstance(tc.arguments, dict)
+                        else tc.arguments,
+                    },
+                }
+                for tc in response.tool_calls
+            ]
+        return msg

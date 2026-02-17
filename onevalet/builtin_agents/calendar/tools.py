@@ -1,8 +1,8 @@
 """
-Calendar Domain Tools — Standalone API functions for CalendarDomainAgent's mini ReAct loop.
+Calendar Domain Tools — Standalone API functions for CalendarAgent's mini ReAct loop.
 
 Extracted from CalendarAgent, CreateEventAgent, UpdateEventAgent, and DeleteEventAgent.
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import html
@@ -11,7 +11,7 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +100,7 @@ def _parse_time_to_datetime(time_str: str) -> datetime:
 # query_events
 # =============================================================================
 
-async def query_events(args: dict, context: DomainToolContext) -> str:
+async def query_events(args: dict, context: AgentToolContext) -> str:
     """Query calendar events by time range and optional keyword search."""
     from .search_helper import parse_time_range
 
@@ -157,7 +157,7 @@ async def query_events(args: dict, context: DomainToolContext) -> str:
 # create_event
 # =============================================================================
 
-async def _preview_create_event(args: dict, context: DomainToolContext) -> str:
+async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
     """Generate a preview of the event to be created."""
     summary = args.get("summary", "")
     start_str = args.get("start", "")
@@ -195,7 +195,7 @@ async def _preview_create_event(args: dict, context: DomainToolContext) -> str:
     return "\n".join(parts)
 
 
-async def create_event(args: dict, context: DomainToolContext) -> str:
+async def create_event(args: dict, context: AgentToolContext) -> str:
     """Create a new calendar event."""
     summary = args.get("summary", "")
     start_str = args.get("start", "")
@@ -249,7 +249,7 @@ async def create_event(args: dict, context: DomainToolContext) -> str:
 # update_event
 # =============================================================================
 
-async def _preview_update_event(args: dict, context: DomainToolContext) -> str:
+async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
     """Generate a preview of the changes to be applied."""
     target = args.get("target", "")
     changes = args.get("changes", {})
@@ -272,7 +272,7 @@ async def _preview_update_event(args: dict, context: DomainToolContext) -> str:
     return "\n".join(parts)
 
 
-async def update_event(args: dict, context: DomainToolContext) -> str:
+async def update_event(args: dict, context: AgentToolContext) -> str:
     """Update an existing calendar event (reschedule, rename, change location, etc.)."""
     target = args.get("target", "")
     changes = args.get("changes", {})
@@ -404,7 +404,7 @@ async def update_event(args: dict, context: DomainToolContext) -> str:
 # delete_event
 # =============================================================================
 
-async def _preview_delete_event(args: dict, context: DomainToolContext) -> str:
+async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
     """Search for events matching criteria and show what would be deleted."""
     from .search_helper import search_calendar_events
 
@@ -451,7 +451,7 @@ async def _preview_delete_event(args: dict, context: DomainToolContext) -> str:
     return "\n".join(parts)
 
 
-async def delete_event(args: dict, context: DomainToolContext) -> str:
+async def delete_event(args: dict, context: AgentToolContext) -> str:
     """Delete calendar events matching the search criteria."""
     from .search_helper import search_calendar_events
     from onevalet.providers.calendar.factory import CalendarProviderFactory

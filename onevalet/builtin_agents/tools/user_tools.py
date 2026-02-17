@@ -1,20 +1,20 @@
 """
 User Tools - User profile and connected account lookup
 
-These tools use CredentialStore via ToolExecutionContext.credentials
+These tools use CredentialStore via AgentToolContext.credentials
 to list connected accounts and user profile information.
 """
 
 import logging
 
-from onevalet.tools import ToolRegistry, ToolDefinition, ToolCategory, ToolExecutionContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
 
-async def get_user_accounts_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def get_user_accounts_executor(args: dict, context: AgentToolContext = None) -> str:
     """Get user's connected accounts from CredentialStore."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     cred_store = context.credentials
@@ -22,7 +22,7 @@ async def get_user_accounts_executor(args: dict, context: ToolExecutionContext =
         return "Error: Credential store not configured"
 
     try:
-        accounts = await cred_store.list(context.user_id)
+        accounts = await cred_store.list(context.tenant_id)
 
         if not accounts:
             return "You don't have any connected accounts yet."
@@ -48,9 +48,9 @@ async def get_user_accounts_executor(args: dict, context: ToolExecutionContext =
         return f"Error retrieving account information: {e}"
 
 
-async def get_user_profile_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def get_user_profile_executor(args: dict, context: AgentToolContext = None) -> str:
     """Get user's profile information from metadata."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     # Profile can be provided via context metadata by the application
@@ -76,42 +76,14 @@ async def get_user_profile_executor(args: dict, context: ToolExecutionContext = 
     return "User profile:\n" + "\n".join(output)
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
+GET_USER_ACCOUNTS_SCHEMA = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+}
 
-def register_user_tools() -> None:
-    """Register user tools with the global ToolRegistry."""
-    registry = ToolRegistry.get_instance()
-
-    registry.register(ToolDefinition(
-        name="get_user_accounts",
-        description=(
-            "Get the user's connected accounts (email, calendar). "
-            "Use this when user asks about their connected accounts."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        executor=get_user_accounts_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="get_user_profile",
-        description=(
-            "Get the user's profile information (name, email, phone, timezone). "
-            "Use this when you need to know about the user."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-        executor=get_user_profile_executor,
-        category=ToolCategory.USER,
-    ))
-
-    logger.info("User tools registered")
+GET_USER_PROFILE_SCHEMA = {
+    "type": "object",
+    "properties": {},
+    "required": [],
+}

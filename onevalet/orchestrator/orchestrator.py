@@ -84,10 +84,8 @@ if TYPE_CHECKING:
     from ..protocols import LLMClientProtocol
     from ..memory.momex import MomexMemory
 
-from ..standard_agent import StandardAgent
+from ..standard_agent import StandardAgent, AgentTool, AgentToolContext
 from ..config import AgentRegistry
-from ..tools.models import ToolExecutionContext, ToolDefinition, ToolCategory
-from ..tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -307,8 +305,8 @@ class Orchestrator:
         if self.trigger_engine:
             await self.trigger_engine.start()
 
-        # Register recall_memory tool (needs momex instance)
-        self._register_memory_tool()
+        # Build orchestrator's builtin tools
+        self.builtin_tools = self._build_builtin_tools()
 
         self._initialized = True
         logger.info("Orchestrator initialized")
@@ -1128,20 +1126,17 @@ class Orchestrator:
                 task_instruction=task_instruction,
             )
         else:
-            # Regular tool execution
-            if not self._agent_registry:
-                return f"Error: No tool registry available to execute '{tool_name}'"
-
-            tool_def = self._agent_registry.tool_registry.get_tool(tool_name)
-            if not tool_def:
+            # Builtin tool execution
+            tool = next((t for t in getattr(self, 'builtin_tools', []) if t.name == tool_name), None)
+            if not tool:
                 return f"Error: Tool '{tool_name}' not found"
 
-            context = ToolExecutionContext(
-                user_id=tenant_id,
+            context = AgentToolContext(
+                tenant_id=tenant_id,
                 credentials=self.credential_store,
                 metadata=self._build_tool_metadata(),
             )
-            return await tool_def.executor(args, context)
+            return await tool.executor(args, context)
 
     def _is_agent_tool(self, tool_name: str) -> bool:
         """Check if tool_name corresponds to a registered agent or delegate_to_agent."""
@@ -1437,9 +1432,8 @@ class Orchestrator:
         if not self._agent_registry:
             return schemas
 
-        # Regular tools
-        all_tools = self._agent_registry.tool_registry.get_all_tools()
-        for tool in all_tools:
+        # Builtin tools (orchestrator-level)
+        for tool in getattr(self, 'builtin_tools', []):
             schemas.append(tool.to_openai_schema())
 
         # Agent-tools: split into Tier 1 and Tier 2
@@ -1728,46 +1722,98 @@ class Orchestrator:
             "retry_with_required_on_empty": must_use_tools,
         }
 
-    def _register_memory_tool(self) -> None:
-        """Register recall_memory as a tool so the LLM can query long-term memory on demand."""
-        momex = self.momex
+    def _build_builtin_tools(self) -> List[Dict[str, Any]]:
+        """Build the orchestrator's builtin tools as AgentTool instances.
 
-        async def recall_memory_executor(args: dict, context: ToolExecutionContext = None) -> str:
-            query = args.get("query", "")
-            if not query:
-                return "Error: query is required"
-            tenant_id = context.user_id if context else "default"
-            results = await momex.search(tenant_id=tenant_id, query=query, limit=5)
-            if not results:
-                return "No relevant memories found."
-            lines = []
-            for r in results:
-                text = r.get("memory", r.get("text", str(r)))
-                lines.append(f"- {text}")
-            return "\n".join(lines)
+        These are lightweight tools the orchestrator calls directly
+        (not via an agent). Replaces the old ToolRegistry approach.
+        """
+        from ..builtin_agents.tools.google_search import (
+            google_search_executor, GOOGLE_SEARCH_SCHEMA,
+        )
+        from ..builtin_agents.tools.important_dates import IMPORTANT_DATES_TOOL_DEFS
+        from ..builtin_agents.tools.user_tools import (
+            get_user_accounts_executor, get_user_profile_executor,
+            GET_USER_ACCOUNTS_SCHEMA, GET_USER_PROFILE_SCHEMA,
+        )
 
-        registry = ToolRegistry.get_instance()
-        registry.register(ToolDefinition(
-            name="recall_memory",
-            description=(
-                "Search the user's long-term memory for past preferences, facts, or context. "
-                "Use when the user refers to something from a previous conversation, or when "
-                "personalization would improve the response (e.g. dietary preferences, travel habits)."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "What to search for in the user's memory",
-                    }
-                },
-                "required": ["query"],
-            },
-            executor=recall_memory_executor,
-            category=ToolCategory.USER,
+        tools: List[AgentTool] = []
+
+        # Google search
+        tools.append(AgentTool(
+            name="google_search",
+            description="Search the web using Google. Returns titles, URLs, and snippets of top results.",
+            parameters=GOOGLE_SEARCH_SCHEMA,
+            executor=google_search_executor,
+            category="web",
         ))
-        logger.info("recall_memory tool registered")
+
+        # Important dates (6 tools)
+        for td in IMPORTANT_DATES_TOOL_DEFS:
+            tools.append(AgentTool(
+                name=td["name"],
+                description=td["description"],
+                parameters=td["parameters"],
+                executor=td["executor"],
+                category="user",
+            ))
+
+        # User tools
+        tools.append(AgentTool(
+            name="get_user_accounts",
+            description="Get the user's connected accounts (email, calendar). Use this when user asks about their connected accounts.",
+            parameters=GET_USER_ACCOUNTS_SCHEMA,
+            executor=get_user_accounts_executor,
+            category="user",
+        ))
+        tools.append(AgentTool(
+            name="get_user_profile",
+            description="Get the user's profile information (name, email, phone, timezone). Use this when you need to know about the user.",
+            parameters=GET_USER_PROFILE_SCHEMA,
+            executor=get_user_profile_executor,
+            category="user",
+        ))
+
+        # Recall memory (only if momex is available)
+        if self.momex:
+            momex = self.momex
+
+            async def recall_memory_executor(args: dict, context: AgentToolContext = None) -> str:
+                query = args.get("query", "")
+                if not query:
+                    return "Error: query is required"
+                tenant_id = context.tenant_id if context else "default"
+                results = await momex.search(tenant_id=tenant_id, query=query, limit=5)
+                if not results:
+                    return "No relevant memories found."
+                lines = []
+                for r in results:
+                    text = r.get("memory", r.get("text", str(r)))
+                    lines.append(f"- {text}")
+                return "\n".join(lines)
+
+            tools.append(AgentTool(
+                name="recall_memory",
+                description=(
+                    "Search the user's long-term memory for past preferences, facts, or context. "
+                    "Use when the user refers to something from a previous conversation, or when "
+                    "personalization would improve the response (e.g. dietary preferences, travel habits)."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "What to search for in the user's memory",
+                        }
+                    },
+                    "required": ["query"],
+                },
+                executor=recall_memory_executor,
+                category="user",
+            ))
+
+        return tools
 
     # ==========================================================================
     # EXTENSION POINTS - Override these in subclasses

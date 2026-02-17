@@ -10,7 +10,7 @@ This agent orchestrates multiple domains to produce executable itineraries:
 from datetime import datetime
 
 from onevalet import InputField, valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .travel_tools import (
     search_flights,
@@ -60,7 +60,7 @@ async def _preview_create_task(args: dict, context) -> str:
 
 
 @valet(capabilities=["travel_planning", "travel", "maps", "itinerary"])
-class TripPlannerAgent(DomainAgent):
+class TripPlannerAgent(StandardAgent):
     """Plan a complete trip itinerary with day-by-day schedule. Use when the user asks to plan a trip, make an itinerary, or organize a multi-day travel plan. Coordinates flights, hotels, weather, places, directions, and optionally creates calendar events and tasks."""
 
     # Only destination is truly required. Everything else can be inferred
@@ -140,7 +140,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
         return await super().on_running(msg)
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="check_weather",
             description="Get current or forecast weather for a city.",
             parameters={
@@ -153,7 +153,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=check_weather,
         ),
-        DomainTool(
+        AgentTool(
             name="search_places",
             description="Find restaurants, attractions, and points of interest for a location.",
             parameters={
@@ -166,7 +166,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=search_places,
         ),
-        DomainTool(
+        AgentTool(
             name="get_directions",
             description="Get route distance and duration between two locations.",
             parameters={
@@ -184,7 +184,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=get_directions,
         ),
-        DomainTool(
+        AgentTool(
             name="search_flights",
             description="Find flight options with prices and schedules.",
             parameters={
@@ -199,7 +199,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=search_flights,
         ),
-        DomainTool(
+        AgentTool(
             name="search_hotels",
             description="Find hotel options with nightly prices.",
             parameters={
@@ -213,7 +213,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=search_hotels,
         ),
-        DomainTool(
+        AgentTool(
             name="query_events",
             description="Check existing calendar events for conflicts.",
             parameters={
@@ -227,7 +227,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             },
             executor=query_events,
         ),
-        DomainTool(
+        AgentTool(
             name="create_event",
             description="Create a calendar event for itinerary booking or schedule lock-in.",
             parameters={
@@ -246,7 +246,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
             needs_approval=True,
             get_preview=_preview_create_event,
         ),
-        DomainTool(
+        AgentTool(
             name="create_task",
             description="Create a pre-trip task item (packing, booking, visa, etc.).",
             parameters={

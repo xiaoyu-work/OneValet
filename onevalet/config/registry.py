@@ -1,5 +1,5 @@
 """
-Agent Registry - Runtime registry that manages agents/tools/MCP
+Agent Registry - Runtime registry that manages agents/MCP
 
 Agents are registered via @valet decorator only.
 """
@@ -7,7 +7,6 @@ Agents are registered via @valet decorator only.
 import logging
 from typing import Dict, List, Any, Optional, Type, Callable
 
-from ..tools.registry import ToolRegistry
 from ..mcp.provider import MCPToolProvider, MCPManager
 from ..mcp.protocol import MCPClientProtocol
 from ..base_agent import BaseAgent
@@ -27,7 +26,7 @@ def register_validator(name: str, func: Callable[[str], bool]) -> None:
 
 class AgentRegistry:
     """
-    Runtime registry for agents, tools, and MCP servers
+    Runtime registry for agents and MCP servers
 
     Agents are registered via @valet decorator.
 
@@ -45,7 +44,6 @@ class AgentRegistry:
 
     def __init__(
         self,
-        tool_registry: Optional[ToolRegistry] = None,
         llm_registry: Optional[LLMRegistry] = None,
         mcp_client_factory: Optional[Callable[[Any], MCPClientProtocol]] = None
     ):
@@ -53,14 +51,12 @@ class AgentRegistry:
         Initialize agent registry
 
         Args:
-            tool_registry: ToolRegistry to use (defaults to singleton)
             llm_registry: LLMRegistry to use (defaults to singleton)
             mcp_client_factory: Factory function to create MCP clients
         """
-        self.tool_registry = tool_registry or ToolRegistry.get_instance()
         self.llm_registry = llm_registry or LLMRegistry.get_instance()
         self.mcp_client_factory = mcp_client_factory
-        self.mcp_manager = MCPManager(self.tool_registry)
+        self.mcp_manager = MCPManager()
 
         self._initialized = False
 
@@ -156,12 +152,6 @@ class AgentRegistry:
                 llm_client = self.llm_registry.get_default()
 
         return agent_class(tenant_id=tenant_id, llm_client=llm_client, **kwargs)
-
-    # ===== Tool Access =====
-
-    def get_tool_schemas(self, tool_names: List[str]) -> List[Dict[str, Any]]:
-        """Get OpenAI-format tool schemas"""
-        return self.tool_registry.get_tools_schema(tool_names)
 
     # ===== Validators =====
 

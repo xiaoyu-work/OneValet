@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool, DomainToolContext
+from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
 
 from .client import ComposioClient
 
@@ -37,7 +37,7 @@ def _check_api_key() -> str | None:
 # Tool executors
 # =============================================================================
 
-async def create_issue(args: dict, context: DomainToolContext) -> str:
+async def create_issue(args: dict, context: AgentToolContext) -> str:
     """Create a GitHub issue."""
     owner = args.get("owner", "")
     repo = args.get("repo", "")
@@ -74,7 +74,7 @@ async def create_issue(args: dict, context: DomainToolContext) -> str:
         return f"Error creating GitHub issue: {e}"
 
 
-async def list_issues(args: dict, context: DomainToolContext) -> str:
+async def list_issues(args: dict, context: AgentToolContext) -> str:
     """List issues in a GitHub repository."""
     owner = args.get("owner", "")
     repo = args.get("repo", "")
@@ -100,7 +100,7 @@ async def list_issues(args: dict, context: DomainToolContext) -> str:
         return f"Error listing GitHub issues: {e}"
 
 
-async def create_pull_request(args: dict, context: DomainToolContext) -> str:
+async def create_pull_request(args: dict, context: AgentToolContext) -> str:
     """Create a GitHub pull request."""
     owner = args.get("owner", "")
     repo = args.get("repo", "")
@@ -140,7 +140,7 @@ async def create_pull_request(args: dict, context: DomainToolContext) -> str:
         return f"Error creating GitHub pull request: {e}"
 
 
-async def list_pull_requests(args: dict, context: DomainToolContext) -> str:
+async def list_pull_requests(args: dict, context: AgentToolContext) -> str:
     """List pull requests in a GitHub repository."""
     owner = args.get("owner", "")
     repo = args.get("repo", "")
@@ -166,7 +166,7 @@ async def list_pull_requests(args: dict, context: DomainToolContext) -> str:
         return f"Error listing GitHub pull requests: {e}"
 
 
-async def search_repositories(args: dict, context: DomainToolContext) -> str:
+async def search_repositories(args: dict, context: AgentToolContext) -> str:
     """Search GitHub repositories."""
     query = args.get("query", "")
     limit = args.get("limit", 10)
@@ -191,7 +191,7 @@ async def search_repositories(args: dict, context: DomainToolContext) -> str:
         return f"Error searching GitHub repositories: {e}"
 
 
-async def connect_github(args: dict, context: DomainToolContext) -> str:
+async def connect_github(args: dict, context: AgentToolContext) -> str:
     """Initiate OAuth connection to GitHub via Composio."""
     entity_id = args.get("entity_id", "default")
 
@@ -266,7 +266,7 @@ async def _create_pr_preview(args: dict, context) -> str:
 # =============================================================================
 
 @valet(capabilities=["github", "code", "repository"])
-class GitHubComposioAgent(DomainAgent):
+class GitHubComposioAgent(StandardAgent):
     """Create and list issues, create and list pull requests, and search
     repositories on GitHub. Use when the user mentions GitHub, issues, PRs,
     pull requests, or repositories."""
@@ -296,7 +296,7 @@ Instructions:
 8. After getting tool results, provide a clear summary to the user."""
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="create_issue",
             description="Create a new issue in a GitHub repository.",
             parameters={
@@ -331,7 +331,7 @@ Instructions:
             risk_level="write",
             get_preview=_create_issue_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="list_issues",
             description="List issues in a GitHub repository. Filter by state: open, closed, or all.",
             parameters={
@@ -356,7 +356,7 @@ Instructions:
             },
             executor=list_issues,
         ),
-        DomainTool(
+        AgentTool(
             name="create_pull_request",
             description="Create a new pull request in a GitHub repository.",
             parameters={
@@ -394,7 +394,7 @@ Instructions:
             risk_level="write",
             get_preview=_create_pr_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="list_pull_requests",
             description="List pull requests in a GitHub repository. Filter by state: open, closed, or all.",
             parameters={
@@ -419,7 +419,7 @@ Instructions:
             },
             executor=list_pull_requests,
         ),
-        DomainTool(
+        AgentTool(
             name="search_repositories",
             description="Search GitHub repositories by keyword.",
             parameters={
@@ -439,7 +439,7 @@ Instructions:
             },
             executor=search_repositories,
         ),
-        DomainTool(
+        AgentTool(
             name="connect_github",
             description="Connect your GitHub account via OAuth. Returns a URL to complete authorization.",
             parameters={

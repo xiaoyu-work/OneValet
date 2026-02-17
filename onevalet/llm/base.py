@@ -17,7 +17,9 @@ from typing import (
 from enum import Enum
 
 from ..protocols import LLMClientProtocol
-from ..tools.models import ToolDefinition
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from ..standard_agent import AgentTool
 
 
 class StopReason(str, Enum):
@@ -328,7 +330,7 @@ class BaseLLMClient(ABC):
     async def chat_completion(
         self,
         messages: List[Dict[str, Any]],
-        tools: Optional[List[Union[Dict[str, Any], ToolDefinition]]] = None,
+        tools: Optional[List[Union[Dict[str, Any], AgentTool]]] = None,
         config: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> LLMResponse:
@@ -340,7 +342,7 @@ class BaseLLMClient(ABC):
 
         Args:
             messages: List of message dicts with 'role' and 'content'
-            tools: Optional list of tools (dict or ToolDefinition)
+            tools: Optional list of tools (dict or AgentTool)
             config: Optional config overrides
             **kwargs: Additional parameters
 
@@ -354,15 +356,16 @@ class BaseLLMClient(ABC):
             ])
             print(response.content)
         """
-        # Convert ToolDefinition to dict if needed
+        # Convert AgentTool to dict if needed
         tool_schemas = None
         if tools:
             tool_schemas = []
             for tool in tools:
-                if isinstance(tool, ToolDefinition):
-                    tool_schemas.append(self._format_tool(tool))
-                else:
+                if isinstance(tool, dict):
                     tool_schemas.append(tool)
+                else:
+                    # AgentTool or similar object with name/description/parameters
+                    tool_schemas.append(self._format_tool(tool))
 
         # Apply config overrides
         merged_kwargs = {**kwargs}
@@ -381,7 +384,7 @@ class BaseLLMClient(ABC):
     async def stream_completion(
         self,
         messages: List[Dict[str, Any]],
-        tools: Optional[List[Union[Dict[str, Any], ToolDefinition]]] = None,
+        tools: Optional[List[Union[Dict[str, Any], AgentTool]]] = None,
         config: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> AsyncIterator[StreamChunk]:
@@ -410,10 +413,11 @@ class BaseLLMClient(ABC):
         if tools:
             tool_schemas = []
             for tool in tools:
-                if isinstance(tool, ToolDefinition):
-                    tool_schemas.append(self._format_tool(tool))
-                else:
+                if isinstance(tool, dict):
                     tool_schemas.append(tool)
+                else:
+                    # AgentTool or similar object with name/description/parameters
+                    tool_schemas.append(self._format_tool(tool))
 
         # Apply config overrides
         merged_kwargs = {**kwargs}
@@ -427,9 +431,9 @@ class BaseLLMClient(ABC):
             chunk.accumulated_content = accumulated
             yield chunk
 
-    def _format_tool(self, tool: ToolDefinition) -> Dict[str, Any]:
+    def _format_tool(self, tool: AgentTool) -> Dict[str, Any]:
         """
-        Format ToolDefinition to provider-specific schema.
+        Format AgentTool to provider-specific schema.
 
         Default implementation uses OpenAI format.
         Override in subclasses for other formats.

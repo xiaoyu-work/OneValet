@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import httpx
 
-from onevalet.tools.models import ToolExecutionContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +16,13 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 REFRESH_BUFFER = timedelta(minutes=5)
 
 
-async def get_google_token(context: ToolExecutionContext) -> Tuple[Optional[str], Optional[str]]:
+async def get_google_token(context: AgentToolContext) -> Tuple[Optional[str], Optional[str]]:
     """
     Get a valid Google access token from the credential store.
     Handles token refresh if expiring.
 
     Args:
-        context: ToolExecutionContext with user_id and credentials store
+        context: AgentToolContext with user_id and credentials store
 
     Returns:
         (access_token, None) on success
@@ -33,7 +33,7 @@ async def get_google_token(context: ToolExecutionContext) -> Tuple[Optional[str]
 
     # Get credentials from store (reuse "gmail" — same OAuth token)
     try:
-        entries = await context.credentials.list(context.user_id, service="gmail")
+        entries = await context.credentials.list(context.tenant_id, service="gmail")
     except Exception as e:
         logger.error(f"Failed to read credentials: {e}")
         return None, "Failed to read Google credentials."
@@ -74,7 +74,7 @@ async def get_google_token(context: ToolExecutionContext) -> Tuple[Optional[str]
         try:
             for svc in ("gmail", "google_calendar", "google_tasks", "google_drive"):
                 await context.credentials.save(
-                    tenant_id=context.user_id,
+                    tenant_id=context.tenant_id,
                     service=svc,
                     credentials=creds,
                     account_name="primary",
@@ -89,7 +89,7 @@ async def get_google_token(context: ToolExecutionContext) -> Tuple[Optional[str]
 
 async def get_google_token_for_agent(tenant_id: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Get a valid Google access token for agent use (no ToolExecutionContext).
+    Get a valid Google access token for agent use (no AgentToolContext).
 
     Uses AccountResolver's default credential store. If the token is expired
     and a refresh token is available, attempts refresh.

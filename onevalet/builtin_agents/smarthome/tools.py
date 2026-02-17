@@ -2,13 +2,13 @@
 SmartHome Domain Tools - Standalone API functions for SmartHomeAgent's mini ReAct loop.
 
 Extracted from LightControlAgent and SpeakerControlAgent.
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 # Shared Helpers
 # =============================================================================
 
-async def _resolve_hue_provider(context: DomainToolContext):
+async def _resolve_hue_provider(context: AgentToolContext):
     """Resolve Philips Hue credentials and return a ready provider, or None."""
     from onevalet.providers.email.resolver import AccountResolver
     from onevalet.providers.smarthome.philips_hue import PhilipsHueProvider
@@ -36,7 +36,7 @@ async def _resolve_hue_provider(context: DomainToolContext):
     return provider
 
 
-async def _resolve_sonos_provider(context: DomainToolContext):
+async def _resolve_sonos_provider(context: AgentToolContext):
     """Resolve Sonos credentials and return a ready provider, or None."""
     from onevalet.providers.email.resolver import AccountResolver
     from onevalet.providers.smarthome.sonos import SonosProvider
@@ -95,7 +95,7 @@ def _temp_name_to_mirek(name: str) -> Optional[int]:
 # control_lights
 # =============================================================================
 
-async def control_lights(args: dict, context: DomainToolContext) -> str:
+async def control_lights(args: dict, context: AgentToolContext) -> str:
     """Control Philips Hue lights: on/off, brightness, color, color_temperature, scene, status."""
     action = args.get("action", "").lower().strip()
     target = args.get("target", "all").strip()
@@ -288,7 +288,7 @@ def _find_group(groups: list, target: str | None) -> dict | None:
     return None
 
 
-async def control_speaker(args: dict, context: DomainToolContext) -> str:
+async def control_speaker(args: dict, context: AgentToolContext) -> str:
     """Control Sonos speakers: play, pause, skip, volume, mute, unmute, status, play_favorite, favorites."""
     action = args.get("action", "").lower().strip()
     target = args.get("target")

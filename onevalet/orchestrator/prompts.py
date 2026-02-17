@@ -44,14 +44,14 @@ def render_tool_routing(agent_tools: Optional[List[Dict[str, str]]] = None) -> s
     else:
         routing_table = """\
 - Travel and trips: flights, hotels, weather, itinerary → TripPlannerAgent
-- Email: reading, sending, replying, deleting → EmailDomainAgent
-- Calendar: schedule, creating/updating events → CalendarDomainAgent
-- Tasks and reminders: todo lists, reminders → TodoDomainAgent
+- Email: reading, sending, replying, deleting → EmailAgent
+- Calendar: schedule, creating/updating events → CalendarAgent
+- Tasks and reminders: todo lists, reminders → TodoAgent
 - Maps and places: directions, restaurants, POI → MapsAgent
 - Shipments: package tracking, delivery status → ShippingAgent
 - Smart home: lights, speakers → SmartHomeAgent
-- Notion: pages, databases → NotionDomainAgent
-- Google Workspace: docs, sheets, drive → GoogleWorkspaceDomainAgent
+- Notion: pages, databases → NotionAgent
+- Google Workspace: docs, sheets, drive → GoogleWorkspaceAgent
 - Important dates: birthdays, anniversaries → important dates tools
 - Web search: current events, fact-checking → google_search"""
 

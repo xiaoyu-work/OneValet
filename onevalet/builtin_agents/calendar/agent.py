@@ -1,9 +1,9 @@
 """
-CalendarDomainAgent - Domain agent for all calendar-related requests.
+CalendarAgent - Domain agent for all calendar-related requests.
 
 Replaces the separate CalendarAgent, CreateEventAgent, UpdateEventAgent, and
 DeleteEventAgent with a single agent that has its own mini ReAct loop.
-The orchestrator sees only one "CalendarDomainAgent" tool instead of four separate ones.
+The orchestrator sees only one "CalendarAgent" tool instead of four separate ones.
 
 The internal LLM decides which tools to call (query_events, create_event,
 update_event, delete_event) based on the user's request.
@@ -12,7 +12,7 @@ update_event, delete_event) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import (
     query_events,
@@ -26,7 +26,7 @@ from .tools import (
 
 
 @valet(capabilities=["calendar"])
-class CalendarDomainAgent(DomainAgent):
+class CalendarAgent(StandardAgent):
     """Check schedule, create, update, or delete calendar events. Use when the user asks about their schedule, meetings, appointments, or wants to create/change/cancel an event."""
 
     max_domain_turns = 5
@@ -60,7 +60,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="query_events",
             description="Search and list calendar events. Returns events matching the time range and optional keyword query.",
             parameters={
@@ -83,7 +83,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
             },
             executor=query_events,
         ),
-        DomainTool(
+        AgentTool(
             name="create_event",
             description="Create a new calendar event. Requires at least a title and start time.",
             parameters={
@@ -120,7 +120,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
             needs_approval=True,
             get_preview=_preview_create_event,
         ),
-        DomainTool(
+        AgentTool(
             name="update_event",
             description="Update an existing calendar event. Specify the target event and what to change.",
             parameters={
@@ -159,7 +159,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
             needs_approval=True,
             get_preview=_preview_update_event,
         ),
-        DomainTool(
+        AgentTool(
             name="delete_event",
             description="Delete calendar events matching the search criteria.",
             parameters={

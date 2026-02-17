@@ -2,7 +2,7 @@
 Maps Domain Tools — Standalone API functions for MapsAgent's mini ReAct loop.
 
 Extracted from MapSearchAgent, DirectionsAgent, and AirQualityAgent.
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import json
@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
 # search_places
 # =============================================================================
 
-async def search_places(args: dict, context: DomainToolContext) -> str:
+async def search_places(args: dict, context: AgentToolContext) -> str:
     """Search for places using Google Places API (Text Search)."""
     query = args.get("query", "")
     location = args.get("location", "")
@@ -147,7 +147,7 @@ async def search_places(args: dict, context: DomainToolContext) -> str:
 # get_directions
 # =============================================================================
 
-async def get_directions(args: dict, context: DomainToolContext) -> str:
+async def get_directions(args: dict, context: AgentToolContext) -> str:
     """Get directions between two locations using Google Directions API."""
     origin = args.get("origin", "")
     destination = args.get("destination", "")
@@ -247,7 +247,7 @@ async def get_directions(args: dict, context: DomainToolContext) -> str:
 # check_air_quality
 # =============================================================================
 
-async def check_air_quality(args: dict, context: DomainToolContext) -> str:
+async def check_air_quality(args: dict, context: AgentToolContext) -> str:
     """Check air quality using Google Air Quality API."""
     location = args.get("location", "")
 

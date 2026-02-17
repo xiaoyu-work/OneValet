@@ -12,13 +12,13 @@ check_air_quality) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import search_places, get_directions, check_air_quality
 
 
 @valet(capabilities=["maps"])
-class MapsAgent(DomainAgent):
+class MapsAgent(StandardAgent):
     """Find places, restaurants, attractions, get directions, and check air quality. Use when the user asks about nearby places, how to get somewhere, navigation, or local recommendations."""
 
     max_domain_turns = 5
@@ -49,7 +49,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="search_places",
             description="Search for places, restaurants, attractions, or businesses. Returns names, addresses, ratings, and contact info.",
             parameters={
@@ -68,7 +68,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
             },
             executor=search_places,
         ),
-        DomainTool(
+        AgentTool(
             name="get_directions",
             description="Get directions between two locations. Returns distance, duration, and step-by-step navigation.",
             parameters={
@@ -92,7 +92,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
             },
             executor=get_directions,
         ),
-        DomainTool(
+        AgentTool(
             name="check_air_quality",
             description="Check current air quality index (AQI) for a location. Returns AQI value, category, dominant pollutant, and health advice.",
             parameters={

@@ -12,13 +12,13 @@ based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import control_lights, control_speaker
 
 
 @valet(capabilities=["smarthome"])
-class SmartHomeAgent(DomainAgent):
+class SmartHomeAgent(StandardAgent):
     """Control smart lights and speakers. Use when the user wants to turn on/off lights, change brightness or color, play/pause music, or adjust volume."""
 
     max_domain_turns = 5
@@ -48,7 +48,7 @@ Instructions:
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="control_lights",
             description="Control Philips Hue smart lights. Supports: on, off, brightness, color, color_temperature, scene, status.",
             parameters={
@@ -72,7 +72,7 @@ Instructions:
             },
             executor=control_lights,
         ),
-        DomainTool(
+        AgentTool(
             name="control_speaker",
             description="Control Sonos smart speakers. Supports: play, pause, skip_next, skip_previous, volume, mute, unmute, status, play_favorite, favorites.",
             parameters={

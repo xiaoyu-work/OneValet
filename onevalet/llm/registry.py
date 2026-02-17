@@ -73,7 +73,7 @@ class LLMRegistry:
         registry = LLMRegistry.get_instance()
 
         # Register a client
-        registry.register("openai_main", OpenAIClient(model="gpt-4o"))
+        registry.register("openai_main", LiteLLMClient(model="gpt-4o", provider_name="openai"))
 
         # Or register from config
         registry.register_from_config(LLMProviderConfig(
@@ -171,39 +171,9 @@ class LLMRegistry:
                 extra=config.extra or {},
             )
 
-            provider = config.provider.lower()
+            from .litellm_client import LiteLLMClient
+            return LiteLLMClient(config=llm_config, provider_name=config.provider.lower())
 
-            if provider == "openai":
-                from .openai_client import OpenAIClient
-                return OpenAIClient(config=llm_config)
-
-            elif provider == "anthropic":
-                from .anthropic_client import AnthropicClient
-                return AnthropicClient(config=llm_config)
-
-            elif provider == "dashscope":
-                from .dashscope_client import DashScopeClient
-                return DashScopeClient(config=llm_config)
-
-            elif provider == "gemini":
-                from .gemini_client import GeminiClient
-                return GeminiClient(config=llm_config)
-
-            elif provider == "ollama":
-                from .ollama_client import OllamaClient
-                return OllamaClient(config=llm_config)
-
-            elif provider == "azure":
-                from .azure_client import AzureOpenAIClient
-                return AzureOpenAIClient(config=llm_config)
-
-            else:
-                logger.error(f"Unknown LLM provider: {provider}")
-                return None
-
-        except ImportError as e:
-            logger.error(f"Failed to import {config.provider} client: {e}")
-            return None
         except Exception as e:
             logger.error(f"Failed to create {config.provider} client: {e}")
             return None

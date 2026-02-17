@@ -52,6 +52,7 @@ dependencies = [
     "uvicorn>=0.20",
     "momex @ git+https://github.com/xiaoyu-work/momex.git",
     "jinja2>=3.1",
+    "litellm>=1.40",
 ]
 
 [project.optional-dependencies]

@@ -12,13 +12,13 @@ update, delete, history) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import track_shipment
 
 
 @valet(capabilities=["shipping"])
-class ShippingAgent(DomainAgent):
+class ShippingAgent(StandardAgent):
     """Track packages and check delivery status. Use when the user mentions a tracking number, package, shipment, delivery, or asks where their order is."""
 
     max_domain_turns = 5
@@ -54,7 +54,7 @@ Common carrier tracking number formats:
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="track_shipment",
             description=(
                 "Track, query, and manage shipments. "

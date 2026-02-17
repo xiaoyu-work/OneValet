@@ -1,5 +1,5 @@
 """
-GoogleWorkspaceDomainAgent - Domain agent for all Google Workspace operations.
+GoogleWorkspaceAgent - Domain agent for all Google Workspace operations.
 
 Replaces GoogleDocsCreateAgent + GoogleSheetsWriteAgent + 3 standalone tools
 (google_drive_search, google_docs_read, google_sheets_read) with a single agent
@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool, DomainToolContext
+from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
 
 from .client import GoogleWorkspaceClient
 
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Auth helper
 # =============================================================================
 
-async def _get_token(context: DomainToolContext):
+async def _get_token(context: AgentToolContext):
     """Get Google OAuth token using the agent-style helper."""
     from .auth import get_google_token_for_agent
     return await get_google_token_for_agent(context.tenant_id)
@@ -32,7 +32,7 @@ async def _get_token(context: DomainToolContext):
 # Tool executors
 # =============================================================================
 
-async def google_drive_search(args: dict, context: DomainToolContext) -> str:
+async def google_drive_search(args: dict, context: AgentToolContext) -> str:
     """Search the user's Google Drive for files."""
     query = args.get("query", "")
     file_type = args.get("file_type")
@@ -65,7 +65,7 @@ async def google_drive_search(args: dict, context: DomainToolContext) -> str:
         return f"Error searching Google Drive: {e}"
 
 
-async def google_docs_read(args: dict, context: DomainToolContext) -> str:
+async def google_docs_read(args: dict, context: AgentToolContext) -> str:
     """Read the full text content of a Google Doc."""
     document_id = args.get("document_id", "")
     if not document_id:
@@ -89,7 +89,7 @@ async def google_docs_read(args: dict, context: DomainToolContext) -> str:
         return f"Error reading Google Doc: {e}"
 
 
-async def google_sheets_read(args: dict, context: DomainToolContext) -> str:
+async def google_sheets_read(args: dict, context: AgentToolContext) -> str:
     """Read data from a Google Spreadsheet."""
     spreadsheet_id = args.get("spreadsheet_id", "")
     range_ = args.get("range", "")
@@ -143,7 +143,7 @@ async def google_sheets_read(args: dict, context: DomainToolContext) -> str:
         return f"Error reading Google Sheet: {e}"
 
 
-async def google_docs_create(args: dict, context: DomainToolContext) -> str:
+async def google_docs_create(args: dict, context: AgentToolContext) -> str:
     """Create a new Google Doc."""
     title = args.get("title", "Untitled")
     content = args.get("content", "")
@@ -163,7 +163,7 @@ async def google_docs_create(args: dict, context: DomainToolContext) -> str:
         return f"Failed to create Google Doc: {e}"
 
 
-async def google_sheets_write(args: dict, context: DomainToolContext) -> str:
+async def google_sheets_write(args: dict, context: AgentToolContext) -> str:
     """Write data to a Google Spreadsheet."""
     spreadsheet_name = args.get("spreadsheet_name", "")
     range_ = args.get("range", "")
@@ -233,7 +233,7 @@ async def _sheets_write_preview(args: dict, context) -> str:
 # =============================================================================
 
 @valet(capabilities=["google_workspace", "google_docs", "google_sheets", "google_drive"])
-class GoogleWorkspaceDomainAgent(DomainAgent):
+class GoogleWorkspaceAgent(StandardAgent):
     """Search, read, create, and write Google Drive files, Docs, and Sheets. Use when the user mentions Google Docs, Sheets, Drive, or their documents and spreadsheets."""
 
     max_domain_turns = 5
@@ -258,7 +258,7 @@ Instructions:
 7. After getting tool results, provide a clear summary to the user."""
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="google_drive_search",
             description="Search Google Drive for files (documents, spreadsheets, folders). Returns names, IDs, types.",
             parameters={
@@ -272,7 +272,7 @@ Instructions:
             },
             executor=google_drive_search,
         ),
-        DomainTool(
+        AgentTool(
             name="google_docs_read",
             description="Read the full text of a Google Doc by its ID. Use google_drive_search first.",
             parameters={
@@ -284,7 +284,7 @@ Instructions:
             },
             executor=google_docs_read,
         ),
-        DomainTool(
+        AgentTool(
             name="google_sheets_read",
             description="Read data from a Google Spreadsheet by ID. Specify range or omit for first sheet.",
             parameters={
@@ -297,7 +297,7 @@ Instructions:
             },
             executor=google_sheets_read,
         ),
-        DomainTool(
+        AgentTool(
             name="google_docs_create",
             description="Create a new Google Doc with title and content.",
             parameters={
@@ -312,7 +312,7 @@ Instructions:
             needs_approval=True,
             get_preview=_docs_create_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="google_sheets_write",
             description="Write data to a Google Spreadsheet. Searches by name to find the spreadsheet.",
             parameters={

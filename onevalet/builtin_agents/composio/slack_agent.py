@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool, DomainToolContext
+from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
 
 from .client import ComposioClient
 
@@ -37,7 +37,7 @@ def _check_api_key() -> str | None:
 # Tool executors
 # =============================================================================
 
-async def send_message(args: dict, context: DomainToolContext) -> str:
+async def send_message(args: dict, context: AgentToolContext) -> str:
     """Send a message to a Slack channel or user."""
     channel = args.get("channel", "")
     text = args.get("text", "")
@@ -64,7 +64,7 @@ async def send_message(args: dict, context: DomainToolContext) -> str:
         return f"Error sending Slack message: {e}"
 
 
-async def fetch_messages(args: dict, context: DomainToolContext) -> str:
+async def fetch_messages(args: dict, context: AgentToolContext) -> str:
     """Fetch recent messages from a Slack channel."""
     channel = args.get("channel", "")
     limit = args.get("limit", 10)
@@ -89,7 +89,7 @@ async def fetch_messages(args: dict, context: DomainToolContext) -> str:
         return f"Error fetching Slack messages: {e}"
 
 
-async def list_channels(args: dict, context: DomainToolContext) -> str:
+async def list_channels(args: dict, context: AgentToolContext) -> str:
     """List all Slack channels."""
     limit = args.get("limit", 20)
 
@@ -111,7 +111,7 @@ async def list_channels(args: dict, context: DomainToolContext) -> str:
         return f"Error listing Slack channels: {e}"
 
 
-async def find_users(args: dict, context: DomainToolContext) -> str:
+async def find_users(args: dict, context: AgentToolContext) -> str:
     """Search for Slack users."""
     query = args.get("query", "")
 
@@ -135,7 +135,7 @@ async def find_users(args: dict, context: DomainToolContext) -> str:
         return f"Error searching Slack users: {e}"
 
 
-async def create_reminder(args: dict, context: DomainToolContext) -> str:
+async def create_reminder(args: dict, context: AgentToolContext) -> str:
     """Create a Slack reminder."""
     text = args.get("text", "")
     time = args.get("time", "")
@@ -162,7 +162,7 @@ async def create_reminder(args: dict, context: DomainToolContext) -> str:
         return f"Error creating Slack reminder: {e}"
 
 
-async def connect_slack(args: dict, context: DomainToolContext) -> str:
+async def connect_slack(args: dict, context: AgentToolContext) -> str:
     """Initiate OAuth connection to Slack via Composio."""
     entity_id = args.get("entity_id", "default")
 
@@ -227,7 +227,7 @@ async def _create_reminder_preview(args: dict, context) -> str:
 # =============================================================================
 
 @valet(capabilities=["slack", "messaging"])
-class SlackComposioAgent(DomainAgent):
+class SlackComposioAgent(StandardAgent):
     """Send messages, fetch conversations, list channels, find users, and create
     reminders in Slack. Use when the user mentions Slack, channels, or wants to
     send/read messages on Slack."""
@@ -257,7 +257,7 @@ Instructions:
 8. After getting tool results, provide a clear summary to the user."""
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="send_message",
             description="Send a message to a Slack channel or user.",
             parameters={
@@ -279,7 +279,7 @@ Instructions:
             risk_level="write",
             get_preview=_send_message_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="fetch_messages",
             description="Fetch recent messages from a Slack channel.",
             parameters={
@@ -299,7 +299,7 @@ Instructions:
             },
             executor=fetch_messages,
         ),
-        DomainTool(
+        AgentTool(
             name="list_channels",
             description="List all available Slack channels in the workspace.",
             parameters={
@@ -315,7 +315,7 @@ Instructions:
             },
             executor=list_channels,
         ),
-        DomainTool(
+        AgentTool(
             name="find_users",
             description="Search for Slack users by name or email.",
             parameters={
@@ -330,7 +330,7 @@ Instructions:
             },
             executor=find_users,
         ),
-        DomainTool(
+        AgentTool(
             name="create_reminder",
             description="Create a Slack reminder for a specific time.",
             parameters={
@@ -352,7 +352,7 @@ Instructions:
             risk_level="write",
             get_preview=_create_reminder_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="connect_slack",
             description="Connect your Slack account via OAuth. Returns a URL to complete authorization.",
             parameters={

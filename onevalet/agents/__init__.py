@@ -44,10 +44,9 @@ from .discovery import (
     discover_agents,
     discover_agents_from_paths,
 )
-from .domain_agent import (
-    DomainAgent,
-    DomainTool,
-    DomainToolContext,
+from ..standard_agent import (
+    AgentTool,
+    AgentToolContext,
 )
 
 __all__ = [
@@ -63,8 +62,7 @@ __all__ = [
     "AgentDiscovery",
     "discover_agents",
     "discover_agents_from_paths",
-    # Domain Agent
-    "DomainAgent",
-    "DomainTool",
-    "DomainToolContext",
+    # Domain Tools
+    "AgentTool",
+    "AgentToolContext",
 ]

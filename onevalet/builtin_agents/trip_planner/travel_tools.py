@@ -2,7 +2,7 @@
 Travel Domain Tools — Standalone API functions for TravelAgent's mini ReAct loop.
 
 Extracted from FlightSearchAgent, HotelSearchAgent, and WeatherAgent.
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import json
@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,7 @@ async def _convert_to_iata(location: str, llm_client: Any) -> str:
 # search_flights
 # =============================================================================
 
-async def search_flights(args: dict, context: DomainToolContext) -> str:
+async def search_flights(args: dict, context: AgentToolContext) -> str:
     """Search flights via Amadeus Flight Offers Search API."""
     origin = args.get("origin", "")
     destination = args.get("destination", "")
@@ -227,7 +227,7 @@ async def _geocode_location(location: str) -> Optional[Dict[str, float]]:
         return None
 
 
-async def search_hotels(args: dict, context: DomainToolContext) -> str:
+async def search_hotels(args: dict, context: AgentToolContext) -> str:
     """Search hotels via Amadeus Hotel Search API."""
     location = args.get("location", "")
     check_in = args.get("check_in", "")
@@ -328,7 +328,7 @@ async def search_hotels(args: dict, context: DomainToolContext) -> str:
 # check_weather
 # =============================================================================
 
-async def check_weather(args: dict, context: DomainToolContext) -> str:
+async def check_weather(args: dict, context: AgentToolContext) -> str:
     """Check weather via WeatherAPI (current or forecast up to 14 days)."""
     location = args.get("location", "")
     days = args.get("days", 0)

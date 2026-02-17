@@ -5,8 +5,8 @@ Provides a domain agent for querying, creating, updating, and deleting todo task
 across Todoist, Google Tasks, and Microsoft To Do, plus reminder management.
 """
 
-from .agent import TodoDomainAgent
+from .agent import TodoAgent
 
 __all__ = [
-    "TodoDomainAgent",
+    "TodoAgent",
 ]

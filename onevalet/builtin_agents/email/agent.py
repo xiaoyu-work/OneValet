@@ -8,7 +8,7 @@ agent that has its own mini ReAct loop.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import (
     search_emails,
@@ -21,7 +21,7 @@ from .tools import (
 
 
 @valet(capabilities=["email"])
-class EmailDomainAgent(DomainAgent):
+class EmailAgent(StandardAgent):
     """Read, send, reply, delete, and archive emails. Use when the user mentions email, inbox, messages, or wants to send/check/reply to any email."""
 
     max_domain_turns = 6
@@ -55,7 +55,7 @@ Guidelines:
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="search_emails",
             description="Search emails across connected accounts. Returns email list with message_ids.",
             parameters={
@@ -98,7 +98,7 @@ Guidelines:
             },
             executor=search_emails,
         ),
-        DomainTool(
+        AgentTool(
             name="send_email",
             description="Send an email. Requires recipient, subject, and body.",
             parameters={
@@ -127,7 +127,7 @@ Guidelines:
             needs_approval=True,
             get_preview=_preview_send_email,
         ),
-        DomainTool(
+        AgentTool(
             name="reply_email",
             description="Reply to an email. Use message_id from search_emails results.",
             parameters={
@@ -156,7 +156,7 @@ Guidelines:
             needs_approval=True,
             get_preview=_preview_reply_email,
         ),
-        DomainTool(
+        AgentTool(
             name="delete_emails",
             description="Delete emails by message IDs from search_emails results.",
             parameters={
@@ -186,7 +186,7 @@ Guidelines:
             needs_approval=True,
             get_preview=_preview_delete_emails,
         ),
-        DomainTool(
+        AgentTool(
             name="archive_emails",
             description="Archive emails by message IDs from search_emails results.",
             parameters={
@@ -212,7 +212,7 @@ Guidelines:
             needs_approval=True,
             get_preview=_preview_archive_emails,
         ),
-        DomainTool(
+        AgentTool(
             name="mark_as_read",
             description="Mark emails as read by message IDs.",
             parameters={

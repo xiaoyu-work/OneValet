@@ -2,7 +2,7 @@
 Shipment Domain Tools — Standalone API functions for ShippingAgent's mini ReAct loop.
 
 Extracted from ShipmentAgent (tracking.py).
-Each function takes (args: dict, context: DomainToolContext) -> str.
+Each function takes (args: dict, context: AgentToolContext) -> str.
 """
 
 import asyncio
@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from onevalet.agents.domain_agent import DomainToolContext
+from onevalet.standard_agent import AgentToolContext
 
 from .shipment_repo import ShipmentRepository
 
@@ -38,7 +38,7 @@ def _detect_carrier(tracking_number: str) -> Optional[str]:
     return None
 
 
-def _get_repo(context: DomainToolContext) -> Optional[ShipmentRepository]:
+def _get_repo(context: AgentToolContext) -> Optional[ShipmentRepository]:
     """Get shipment repository from context_hints."""
     if not context.context_hints:
         return None
@@ -178,7 +178,7 @@ async def _query_one(
     return _format_shipment_status(result, description)
 
 
-async def track_shipment(args: dict, context: DomainToolContext) -> str:
+async def track_shipment(args: dict, context: AgentToolContext) -> str:
     """Track, query, and manage shipments.
 
     Supports actions: query_one, query_all, update, delete, history.

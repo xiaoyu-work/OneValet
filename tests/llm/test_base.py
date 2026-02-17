@@ -11,7 +11,7 @@ from onevalet.llm.base import (
     ToolCall,
     Usage,
 )
-from onevalet.tools.models import ToolDefinition
+from onevalet.standard_agent import AgentTool
 
 
 # ── Concrete subclass for testing (abstract methods stubbed) ──
@@ -152,8 +152,8 @@ class TestCalculateCost:
 
 class TestFormatTool:
 
-    def test_formats_tool_definition(self, client):
-        tool = ToolDefinition(
+    def test_formats_agent_tool(self, client):
+        tool = AgentTool(
             name="search_web",
             description="Search the internet",
             parameters={

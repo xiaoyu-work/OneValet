@@ -1,9 +1,9 @@
 """
-TodoDomainAgent - Domain agent for all todo, reminder, and task management requests.
+TodoAgent - Domain agent for all todo, reminder, and task management requests.
 
 Replaces the separate TodoQueryAgent, CreateTodoAgent, UpdateTodoAgent, DeleteTodoAgent,
 ReminderAgent, TaskManagementAgent, and PlannerAgent with a single agent that has its own
-mini ReAct loop. The orchestrator sees only one "TodoDomainAgent" tool instead of seven.
+mini ReAct loop. The orchestrator sees only one "TodoAgent" tool instead of seven.
 
 The internal LLM decides which tools to call (query_tasks, create_task, update_task,
 delete_task, set_reminder, manage_reminders) based on the user's request.
@@ -12,7 +12,7 @@ delete_task, set_reminder, manage_reminders) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool
+from onevalet.standard_agent import StandardAgent, AgentTool
 
 from .tools import (
     query_tasks,
@@ -58,7 +58,7 @@ async def _delete_task_preview(args: dict, context) -> str:
 
 
 @valet(capabilities=["todo", "reminder", "task"])
-class TodoDomainAgent(DomainAgent):
+class TodoAgent(StandardAgent):
     """List, create, complete, and delete todo tasks; set and manage reminders. Use when the user mentions tasks, todos, to-do lists, reminders, or wants to be reminded about something."""
 
     max_domain_turns = 5
@@ -97,7 +97,7 @@ in your text response WITHOUT calling any tools.
         )
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="query_tasks",
             description="List or search the user's todo tasks across all connected providers (Todoist, Google Tasks, Microsoft To Do).",
             parameters={
@@ -116,7 +116,7 @@ in your text response WITHOUT calling any tools.
             },
             executor=query_tasks,
         ),
-        DomainTool(
+        AgentTool(
             name="create_task",
             description="Create a new todo task on the user's connected provider.",
             parameters={
@@ -145,7 +145,7 @@ in your text response WITHOUT calling any tools.
             needs_approval=True,
             get_preview=_create_task_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="update_task",
             description="Mark a todo task as complete by searching for it. Returns task list if multiple matches found.",
             parameters={
@@ -167,7 +167,7 @@ in your text response WITHOUT calling any tools.
             needs_approval=True,
             get_preview=_update_task_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="delete_task",
             description="Delete a todo task by searching for it. Returns task list if multiple matches found.",
             parameters={
@@ -189,7 +189,7 @@ in your text response WITHOUT calling any tools.
             needs_approval=True,
             get_preview=_delete_task_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="set_reminder",
             description="Create a time-based reminder (one-time or recurring) via TriggerEngine.",
             parameters={
@@ -221,7 +221,7 @@ in your text response WITHOUT calling any tools.
             },
             executor=set_reminder,
         ),
-        DomainTool(
+        AgentTool(
             name="manage_reminders",
             description="List, show details, update, pause, resume, or delete scheduled reminders and automations.",
             parameters={

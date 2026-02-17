@@ -1,7 +1,7 @@
 """
 Important Dates Tools - CRUD for birthdays, anniversaries, and other important dates
 
-These tools use CredentialStore via the ToolExecutionContext.credentials
+These tools use CredentialStore via the AgentToolContext.credentials
 attribute. The application is responsible for providing a data-access layer
 (e.g. a database client) that implements the actual storage.
 
@@ -22,12 +22,12 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from onevalet.tools import ToolRegistry, ToolDefinition, ToolCategory, ToolExecutionContext
+from onevalet.standard_agent import AgentToolContext
 
 logger = logging.getLogger(__name__)
 
 
-def _get_store(context: Optional[ToolExecutionContext]):
+def _get_store(context: Optional[AgentToolContext]):
     """Extract the important_dates_store from context metadata."""
     if not context:
         return None
@@ -83,9 +83,9 @@ def _parse_date(date_str: str) -> Optional[datetime]:
 # Executors
 # ---------------------------------------------------------------------------
 
-async def get_important_dates_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def get_important_dates_executor(args: dict, context: AgentToolContext = None) -> str:
     """Get upcoming important dates."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -95,7 +95,7 @@ async def get_important_dates_executor(args: dict, context: ToolExecutionContext
     days_ahead = args.get("days_ahead", 60)
 
     try:
-        dates = await store.get_important_dates(user_id=context.user_id, days_ahead=days_ahead)
+        dates = await store.get_important_dates(user_id=context.tenant_id, days_ahead=days_ahead)
         if not dates:
             return "No upcoming important dates found."
 
@@ -120,9 +120,9 @@ async def get_important_dates_executor(args: dict, context: ToolExecutionContext
         return f"Error retrieving important dates: {e}"
 
 
-async def search_important_dates_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def search_important_dates_executor(args: dict, context: AgentToolContext = None) -> str:
     """Search for important dates by name or title."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -135,7 +135,7 @@ async def search_important_dates_executor(args: dict, context: ToolExecutionCont
 
     try:
         dates = await store.search_important_dates(
-            user_id=context.user_id, search_term=search_term, limit=10,
+            user_id=context.tenant_id, search_term=search_term, limit=10,
         )
         if not dates:
             return f"No important dates found matching '{search_term}'."
@@ -163,9 +163,9 @@ async def search_important_dates_executor(args: dict, context: ToolExecutionCont
         return f"Error searching: {e}"
 
 
-async def add_important_date_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def add_important_date_executor(args: dict, context: AgentToolContext = None) -> str:
     """Add a new important date."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -199,7 +199,7 @@ async def add_important_date_executor(args: dict, context: ToolExecutionContext 
         date_data["relationship"] = relationship
 
     try:
-        result = await store.create_important_date(context.user_id, date_data)
+        result = await store.create_important_date(context.tenant_id, date_data)
         if result:
             recurring_text = " (yearly)" if recurring else ""
             return f"Added: {title} on {date_obj.strftime('%B %d')}{recurring_text}"
@@ -209,9 +209,9 @@ async def add_important_date_executor(args: dict, context: ToolExecutionContext 
         return f"Error adding date: {e}"
 
 
-async def update_important_date_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def update_important_date_executor(args: dict, context: AgentToolContext = None) -> str:
     """Update an existing important date."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -223,7 +223,7 @@ async def update_important_date_executor(args: dict, context: ToolExecutionConte
         return "Error: Please specify which date to update"
 
     try:
-        dates = await store.search_important_dates(context.user_id, search_term, limit=5)
+        dates = await store.search_important_dates(context.tenant_id, search_term, limit=5)
         if not dates:
             return f"No important date found matching '{search_term}'"
         if len(dates) > 1:
@@ -249,7 +249,7 @@ async def update_important_date_executor(args: dict, context: ToolExecutionConte
         if not updates:
             return "No changes specified. Provide new_date or new_title."
 
-        result = await store.update_important_date(context.user_id, date_to_update["id"], updates)
+        result = await store.update_important_date(context.tenant_id, date_to_update["id"], updates)
         if result:
             return f"Updated: {date_to_update.get('title')}"
         return "Error: Could not update the date"
@@ -259,9 +259,9 @@ async def update_important_date_executor(args: dict, context: ToolExecutionConte
         return f"Error updating: {e}"
 
 
-async def delete_important_date_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def delete_important_date_executor(args: dict, context: AgentToolContext = None) -> str:
     """Delete an important date."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -273,7 +273,7 @@ async def delete_important_date_executor(args: dict, context: ToolExecutionConte
         return "Error: Please specify which date to delete"
 
     try:
-        dates = await store.search_important_dates(context.user_id, search_term, limit=5)
+        dates = await store.search_important_dates(context.tenant_id, search_term, limit=5)
         if not dates:
             return f"No important date found matching '{search_term}'"
         if len(dates) > 1:
@@ -283,7 +283,7 @@ async def delete_important_date_executor(args: dict, context: ToolExecutionConte
             return "\n".join(lines)
 
         date_to_delete = dates[0]
-        success = await store.delete_important_date(context.user_id, date_to_delete["id"])
+        success = await store.delete_important_date(context.tenant_id, date_to_delete["id"])
         if success:
             return f"Deleted: {date_to_delete.get('title')}"
         return "Error: Could not delete the date"
@@ -301,9 +301,9 @@ _DATE_TYPE_EMOJI = {
 _DEFAULT_EMOJI = "\U0001f4c5"    # 📅
 
 
-async def get_today_reminders_executor(args: dict, context: ToolExecutionContext = None) -> str:
+async def get_today_reminders_executor(args: dict, context: AgentToolContext = None) -> str:
     """Get today's important-date reminders for the daily digest."""
-    if not context or not context.user_id:
+    if not context or not context.tenant_id:
         return "Error: User ID not available"
 
     store = _get_store(context)
@@ -311,7 +311,7 @@ async def get_today_reminders_executor(args: dict, context: ToolExecutionContext
         return "Error: Important dates storage not configured"
 
     try:
-        reminders = await store.get_today_reminders(user_id=context.user_id)
+        reminders = await store.get_today_reminders(user_id=context.tenant_id)
         if not reminders:
             return "No important-date reminders for today."
 
@@ -342,17 +342,14 @@ async def get_today_reminders_executor(args: dict, context: ToolExecutionContext
 
 
 # ---------------------------------------------------------------------------
-# Registration
+# Schemas (used by orchestrator to build AgentTool instances)
 # ---------------------------------------------------------------------------
 
-def register_important_dates_tools() -> None:
-    """Register all important dates tools with the global ToolRegistry."""
-    registry = ToolRegistry.get_instance()
-
-    registry.register(ToolDefinition(
-        name="get_important_dates",
-        description="Get upcoming important dates like birthdays and anniversaries.",
-        parameters={
+IMPORTANT_DATES_TOOL_DEFS = [
+    {
+        "name": "get_important_dates",
+        "description": "Get upcoming important dates like birthdays and anniversaries.",
+        "parameters": {
             "type": "object",
             "properties": {
                 "days_ahead": {
@@ -363,14 +360,12 @@ def register_important_dates_tools() -> None:
             },
             "required": [],
         },
-        executor=get_important_dates_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="search_important_dates",
-        description="Search for a specific important date by person name or event title.",
-        parameters={
+        "executor": get_important_dates_executor,
+    },
+    {
+        "name": "search_important_dates",
+        "description": "Search for a specific important date by person name or event title.",
+        "parameters": {
             "type": "object",
             "properties": {
                 "search_term": {
@@ -380,14 +375,12 @@ def register_important_dates_tools() -> None:
             },
             "required": ["search_term"],
         },
-        executor=search_important_dates_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="add_important_date",
-        description="Add a new important date like a birthday or anniversary.",
-        parameters={
+        "executor": search_important_dates_executor,
+    },
+    {
+        "name": "add_important_date",
+        "description": "Add a new important date like a birthday or anniversary.",
+        "parameters": {
             "type": "object",
             "properties": {
                 "title": {
@@ -418,14 +411,12 @@ def register_important_dates_tools() -> None:
             },
             "required": ["title", "date"],
         },
-        executor=add_important_date_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="update_important_date",
-        description="Update an existing important date's date or title.",
-        parameters={
+        "executor": add_important_date_executor,
+    },
+    {
+        "name": "update_important_date",
+        "description": "Update an existing important date's date or title.",
+        "parameters": {
             "type": "object",
             "properties": {
                 "search_term": {
@@ -443,14 +434,12 @@ def register_important_dates_tools() -> None:
             },
             "required": ["search_term"],
         },
-        executor=update_important_date_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="delete_important_date",
-        description="Delete an important date.",
-        parameters={
+        "executor": update_important_date_executor,
+    },
+    {
+        "name": "delete_important_date",
+        "description": "Delete an important date.",
+        "parameters": {
             "type": "object",
             "properties": {
                 "search_term": {
@@ -460,23 +449,16 @@ def register_important_dates_tools() -> None:
             },
             "required": ["search_term"],
         },
-        executor=delete_important_date_executor,
-        category=ToolCategory.USER,
-    ))
-
-    registry.register(ToolDefinition(
-        name="get_today_reminders",
-        description=(
-            "Get today's important-date reminders for the daily digest. "
-            "Returns dates whose remind_days_before window includes today."
-        ),
-        parameters={
+        "executor": delete_important_date_executor,
+    },
+    {
+        "name": "get_today_reminders",
+        "description": "Get today's important-date reminders for the daily digest. Returns dates whose remind_days_before window includes today.",
+        "parameters": {
             "type": "object",
             "properties": {},
             "required": [],
         },
-        executor=get_today_reminders_executor,
-        category=ToolCategory.USER,
-    ))
-
-    logger.info("Important dates tools registered")
+        "executor": get_today_reminders_executor,
+    },
+]

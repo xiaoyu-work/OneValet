@@ -1,5 +1,5 @@
 """
-NotionDomainAgent - Domain agent for all Notion operations.
+NotionAgent - Domain agent for all Notion operations.
 
 Replaces NotionCreatePageAgent + NotionUpdatePageAgent + 3 standalone tools
 (notion_search, notion_read_page, notion_query_database) with a single agent
@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict, List
 
 from onevalet import valet
-from onevalet.agents.domain_agent import DomainAgent, DomainTool, DomainToolContext
+from onevalet.standard_agent import StandardAgent, AgentTool, AgentToolContext
 
 from .client import NotionClient
 
@@ -123,7 +123,7 @@ def _extract_property_value(prop: Dict[str, Any]) -> str:
 # Tool executors
 # =============================================================================
 
-async def notion_search(args: dict, context: DomainToolContext) -> str:
+async def notion_search(args: dict, context: AgentToolContext) -> str:
     """Search Notion pages and databases by keyword."""
     query = args.get("query", "")
     filter_type = args.get("filter_type")
@@ -159,7 +159,7 @@ async def notion_search(args: dict, context: DomainToolContext) -> str:
         return f"Error searching Notion: {e}"
 
 
-async def notion_read_page(args: dict, context: DomainToolContext) -> str:
+async def notion_read_page(args: dict, context: AgentToolContext) -> str:
     """Read the full content of a Notion page."""
     page_id = args.get("page_id", "")
     if not page_id:
@@ -182,7 +182,7 @@ async def notion_read_page(args: dict, context: DomainToolContext) -> str:
         return f"Error reading Notion page: {e}"
 
 
-async def notion_query_database(args: dict, context: DomainToolContext) -> str:
+async def notion_query_database(args: dict, context: AgentToolContext) -> str:
     """Query a Notion database and return rows."""
     database_id = args.get("database_id", "")
     filter_obj = args.get("filter")
@@ -220,7 +220,7 @@ async def notion_query_database(args: dict, context: DomainToolContext) -> str:
         return f"Error querying Notion database: {e}"
 
 
-async def notion_create_page(args: dict, context: DomainToolContext) -> str:
+async def notion_create_page(args: dict, context: AgentToolContext) -> str:
     """Create a new Notion page."""
     title = args.get("title", "")
     content = args.get("content", "")
@@ -260,7 +260,7 @@ async def notion_create_page(args: dict, context: DomainToolContext) -> str:
         return "Couldn't create the Notion page. Please check your API key and permissions."
 
 
-async def notion_update_page(args: dict, context: DomainToolContext) -> str:
+async def notion_update_page(args: dict, context: AgentToolContext) -> str:
     """Update an existing Notion page by appending content."""
     page_title = args.get("page_title", "")
     content = args.get("content", "")
@@ -314,7 +314,7 @@ async def _update_page_preview(args: dict, context) -> str:
 # =============================================================================
 
 @valet(capabilities=["notion"])
-class NotionDomainAgent(DomainAgent):
+class NotionAgent(StandardAgent):
     """Search, read, create, and update Notion pages and databases. Use when the user mentions Notion, their notes, wiki, or knowledge base in Notion."""
 
     max_domain_turns = 5
@@ -339,7 +339,7 @@ Instructions:
 7. After getting tool results, provide a clear summary to the user."""
 
     domain_tools = [
-        DomainTool(
+        AgentTool(
             name="notion_search",
             description="Search Notion workspace for pages and databases by keyword. Use short keywords (1-2 words).",
             parameters={
@@ -353,7 +353,7 @@ Instructions:
             },
             executor=notion_search,
         ),
-        DomainTool(
+        AgentTool(
             name="notion_read_page",
             description="Read the full content of a Notion page by its ID. Use notion_search first to find the page ID.",
             parameters={
@@ -365,7 +365,7 @@ Instructions:
             },
             executor=notion_read_page,
         ),
-        DomainTool(
+        AgentTool(
             name="notion_query_database",
             description="Query a Notion database to get rows with properties. Use notion_search with filter_type='database' first.",
             parameters={
@@ -380,7 +380,7 @@ Instructions:
             },
             executor=notion_query_database,
         ),
-        DomainTool(
+        AgentTool(
             name="notion_create_page",
             description="Create a new Notion page with title and content.",
             parameters={
@@ -396,7 +396,7 @@ Instructions:
             needs_approval=True,
             get_preview=_create_page_preview,
         ),
-        DomainTool(
+        AgentTool(
             name="notion_update_page",
             description="Update an existing Notion page by appending content. Searches by title.",
             parameters={

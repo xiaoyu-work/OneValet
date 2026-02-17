@@ -55,10 +55,10 @@ Quick Start (Recommended):
                 raw_message=f"Hello, {self.name}!"
             )
 
-Built-in LLM Client:
-    from onevalet.llm import OpenAIClient, AnthropicClient
+Built-in LLM Client (powered by litellm):
+    from onevalet.llm import LiteLLMClient
 
-    client = OpenAIClient(api_key="sk-xxx")
+    client = LiteLLMClient(model="gpt-4o", provider_name="openai", api_key="sk-xxx")
     response = await client.chat_completion(messages=[...])
 
     # With streaming
@@ -100,7 +100,12 @@ from .standard_agent import (
     StandardAgent,
     RequiredField,
     AgentState,
+    AgentTool,
+    AgentToolContext,
 )
+
+# Tool Decorator
+from .tool_decorator import tool
 
 # Message System
 from .message import (
@@ -124,17 +129,8 @@ from .protocols import (
 
 # Tools
 from .tools import (
-    ToolRegistry,
-    ToolExecutor,
-    ToolDefinition,
     ToolCall,
     ToolResult,
-    ToolCategory,
-    ToolExecutionContext,
-    # Tool decorator
-    tool,
-    get_tool_definition,
-    ToolDiscovery,
 )
 
 # MCP Integration
@@ -177,16 +173,6 @@ from .app import OneValet
 # Memory
 from .memory import MomexMemory
 
-# Formatter (Multi-model support)
-from .formatter import (
-    Provider,
-    FormatterConfig,
-    FormatterBase,
-    get_formatter,
-    OpenAIFormatter,
-    AnthropicFormatter,
-)
-
 # Streaming
 from .streaming import (
     StreamMode,
@@ -213,12 +199,7 @@ from .llm import (
     StreamChunk,
     LLMRegistry,
     LLMProviderConfig,
-    OpenAIClient,
-    AnthropicClient,
-    AzureOpenAIClient,
-    DashScopeClient,
-    GeminiClient,
-    OllamaClient,
+    LiteLLMClient,
 )
 
 __all__ = [
@@ -238,6 +219,10 @@ __all__ = [
     "StandardAgent",
     "RequiredField",
     "AgentState",
+    "AgentTool",
+    "AgentToolContext",
+    # Tool Decorator
+    "tool",
     # Message
     "Message",
     "TextBlock",
@@ -254,16 +239,8 @@ __all__ = [
     # Protocols
     "LLMClientProtocol",
     # Tools
-    "ToolRegistry",
-    "ToolExecutor",
-    "ToolDefinition",
     "ToolCall",
     "ToolResult",
-    "ToolCategory",
-    "ToolExecutionContext",
-    "tool",
-    "get_tool_definition",
-    "ToolDiscovery",
     # MCP
     "MCPClientProtocol",
     "MCPClient",
@@ -292,13 +269,6 @@ __all__ = [
     "OneValet",
     # Memory
     "MomexMemory",
-    # Formatter
-    "Provider",
-    "FormatterConfig",
-    "FormatterBase",
-    "get_formatter",
-    "OpenAIFormatter",
-    "AnthropicFormatter",
     # Streaming
     "StreamMode",
     "EventType",
@@ -318,10 +288,5 @@ __all__ = [
     "StreamChunk",
     "LLMRegistry",
     "LLMProviderConfig",
-    "OpenAIClient",
-    "AnthropicClient",
-    "AzureOpenAIClient",
-    "DashScopeClient",
-    "GeminiClient",
-    "OllamaClient",
+    "LiteLLMClient",
 ]
