@@ -65,7 +65,7 @@ class LLMRegistry:
     """
     Singleton registry for managing LLM clients.
 
-    Similar to ToolRegistry, provides centralized management of LLM clients
+    Provides centralized management of LLM clients
     that can be injected into agents based on configuration.
 
     Example:

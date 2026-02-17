@@ -1,5 +1,5 @@
 """
-GoogleWorkspaceAgent - Domain agent for all Google Workspace operations.
+GoogleWorkspaceAgent - Agent for all Google Workspace operations.
 
 Replaces GoogleDocsCreateAgent + GoogleSheetsWriteAgent + 3 standalone tools
 (google_drive_search, google_docs_read, google_sheets_read) with a single agent
@@ -11,7 +11,8 @@ import logging
 from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.models import AgentToolContext
+from onevalet.standard_agent import StandardAgent
 from onevalet.tool_decorator import tool
 
 from .client import GoogleWorkspaceClient
@@ -251,7 +252,7 @@ async def google_sheets_write(
 
 
 # =============================================================================
-# Domain Agent
+# Agent
 # =============================================================================
 
 @valet(capabilities=["google_workspace", "google_docs", "google_sheets", "google_drive"])

@@ -1,5 +1,5 @@
 """
-Todo Domain Tools - Standalone API functions for TodoAgent's mini ReAct loop.
+Todo Tools - Standalone API functions for TodoAgent's mini ReAct loop.
 
 Extracted from TodoQueryAgent, CreateTodoAgent, UpdateTodoAgent, DeleteTodoAgent,
 ReminderAgent, TaskManagementAgent, and PlannerAgent.
@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet.tool_decorator import tool
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

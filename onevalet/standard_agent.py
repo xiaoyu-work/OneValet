@@ -51,10 +51,7 @@ Legacy Example (still supported):
 import asyncio
 import json
 import logging
-import re
-from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 from typing import List, Dict, Optional, Callable, Any, AsyncIterator, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
@@ -62,6 +59,7 @@ from .base_agent import BaseAgent
 from .fields import InputField, OutputField
 from .llm.base import LLMResponse, ToolCall as LLMToolCall
 from .message import Message
+from .models import RequiredField, AgentState, AgentToolContext, AgentTool
 from .protocols import LLMClientProtocol
 from .result import AgentResult, AgentStatus, ApprovalResult
 from .streaming.engine import StreamEngine
@@ -99,108 +97,6 @@ __COMPLETE_TASK_SCHEMA: Dict[str, Any] = {
         },
     },
 }
-
-
-# ===== Field Definition =====
-
-@dataclass
-class RequiredField:
-    """
-    Defines a required field for an agent
-
-    Attributes:
-        name: Field name (e.g., "recipient", "subject")
-        description: Human-readable description
-        prompt: Question to ask user when field is missing
-        validator: Optional validation function (returns bool)
-        required: Whether this field is required (default: True)
-
-    Example:
-        RequiredField(
-            name="email",
-            description="Recipient email address",
-            prompt="What email address should I send to?",
-            validator=lambda v: "@" in v,  # Custom validator
-            required=True
-        )
-    """
-    name: str
-    description: str
-    prompt: str
-    validator: Optional[Callable[[str], bool]] = None
-    required: bool = True
-
-
-@dataclass
-class AgentState:
-    """
-    Complete agent state snapshot for serialization
-    """
-    agent_id: str
-    agent_type: str
-    tenant_id: str
-    status: AgentStatus
-    required_fields: List[RequiredField]
-    collected_fields: Dict[str, Any]
-    context_summary: str
-    created_at: datetime
-    last_active: datetime
-    error_message: Optional[str] = None
-
-
-# ===== Domain Tool Definitions =====
-
-
-@dataclass
-class AgentToolContext:
-    """Context passed to tool executors.
-
-    Provides access to shared resources that tool functions need.
-    Used by both agent-level tools (tools) and orchestrator-level
-    builtin tools.
-    """
-
-    llm_client: Any = None
-    tenant_id: str = ""
-    user_profile: Optional[Dict[str, Any]] = None
-    context_hints: Optional[Dict[str, Any]] = None
-    credentials: Any = None  # CredentialStore instance
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class AgentTool:
-    """A tool available inside a StandardAgent's mini ReAct loop.
-
-    Attributes:
-        name: Tool function name (used in LLM tool_calls).
-        description: What this tool does (shown to domain LLM).
-        parameters: JSON Schema for tool arguments.
-        executor: Async function(args: dict, context: AgentToolContext) -> str.
-        needs_approval: If True, pause execution for user confirmation before running.
-        risk_level: One of "read", "write", "destructive".
-        get_preview: Async function to generate human-readable preview for approval.
-    """
-
-    name: str
-    description: str
-    parameters: Dict[str, Any]
-    executor: Callable
-    needs_approval: bool = False
-    risk_level: str = "read"  # "read", "write", "destructive"
-    category: str = "utility"
-    get_preview: Optional[Callable] = None
-
-    def to_openai_schema(self) -> Dict[str, Any]:
-        """Convert to OpenAI function-calling tool schema."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
 
 
 # ===== State Transitions =====
@@ -432,7 +328,7 @@ class StandardAgent(BaseAgent):
                 if spec.name not in self.collected_fields:
                     self.collected_fields[spec.name] = spec.default
 
-    # ===== Domain ReAct Support =====
+    # ===== Agent ReAct Support =====
 
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop.
@@ -1321,10 +1217,10 @@ Return JSON only."""
         if memories:
             logger.debug(f"Set {len(memories)} recalled memories for {self.agent_id}")
 
-    # ===== Domain ReAct Loop =====
+    # ===== Agent ReAct Loop =====
 
     async def _run_react(self) -> AgentResult:
-        """Core mini ReAct loop with domain tools."""
+        """Core mini ReAct loop with agent tools."""
         tool_schemas = [t.to_openai_schema() for t in self.tools]
         # Always inject complete_task
         tool_schemas.append(_COMPLETE_TASK_SCHEMA)
@@ -1499,7 +1395,7 @@ Return JSON only."""
                     })
                     continue
 
-            tool = self._find_domain_tool(tc.name)
+            tool = self._find_tool(tc.name)
             if tool is None:
                 error_text = f"Error: Unknown tool '{tc.name}'"
                 self._tool_trace.append(
@@ -1586,7 +1482,7 @@ Return JSON only."""
                     }
                 )
             except asyncio.TimeoutError:
-                logger.error(f"Domain tool {tc.name} timed out after {self.tool_timeout}s")
+                logger.error(f"Tool {tc.name} timed out after {self.tool_timeout}s")
                 result_str = f"Error: tool '{tc.name}' timed out after {self.tool_timeout}s"
                 self._tool_trace.append(
                     {
@@ -1596,7 +1492,7 @@ Return JSON only."""
                     }
                 )
             except Exception as e:
-                logger.error(f"Domain tool {tc.name} failed: {e}", exc_info=True)
+                logger.error(f"Tool {tc.name} failed: {e}", exc_info=True)
                 result_str = f"Error executing {tc.name}: {e}"
                 self._tool_trace.append(
                     {
@@ -1714,8 +1610,8 @@ Return JSON only."""
         t_lower = t.lower()
         return any(s in t_lower for s in question_signals)
 
-    def _find_domain_tool(self, name: str) -> Optional[AgentTool]:
-        """Find a domain tool by name."""
+    def _find_tool(self, name: str) -> Optional[AgentTool]:
+        """Find an agent tool by name."""
         for tool in self.tools:
             if tool.name == name:
                 return tool

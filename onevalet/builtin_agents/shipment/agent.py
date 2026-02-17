@@ -1,7 +1,7 @@
 """
-ShippingAgent - Domain agent for all shipment tracking and management.
+ShippingAgent - Agent for all shipment tracking and management.
 
-Replaces the old ShipmentAgent (StandardAgent) with a single DomainAgent
+Replaces the old ShipmentAgent (StandardAgent) with a single agent
 that has its own mini ReAct loop. The orchestrator sees only one
 "ShippingAgent" tool instead of a raw StandardAgent with InputFields.
 

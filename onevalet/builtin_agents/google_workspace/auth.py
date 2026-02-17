@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 
 import httpx
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

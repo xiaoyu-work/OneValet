@@ -19,7 +19,7 @@ from enum import Enum
 from ..protocols import LLMClientProtocol
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from ..standard_agent import AgentTool
+    from ..models import AgentTool
 
 
 class StopReason(str, Enum):

@@ -8,7 +8,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 
-from ..standard_agent import AgentTool, AgentToolContext
+from ..models import AgentTool, AgentToolContext
 from .protocol import MCPClientProtocol
 from .models import MCPTool
 

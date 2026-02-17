@@ -1,5 +1,5 @@
 """
-MapsAgent - Domain agent for all maps and location-related requests.
+MapsAgent - Agent for all maps and location-related requests.
 
 Replaces the separate MapSearchAgent, DirectionsAgent, and AirQualityAgent
 with a single agent that has its own mini ReAct loop. The orchestrator sees

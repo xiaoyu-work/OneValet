@@ -1,5 +1,5 @@
 """
-Email tools for EmailAgent domain agent.
+Email tools for EmailAgent.
 
 Extracted from legacy email agents (SendEmailAgent, ReadEmailAgent,
 ReplyEmailAgent, DeleteEmailAgent, ArchiveEmailAgent, MarkReadEmailAgent).
@@ -9,7 +9,7 @@ import html
 from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet.tool_decorator import tool
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

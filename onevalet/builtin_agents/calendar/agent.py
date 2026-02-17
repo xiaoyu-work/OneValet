@@ -1,5 +1,5 @@
 """
-CalendarAgent - Domain agent for all calendar-related requests.
+CalendarAgent - Agent for all calendar-related requests.
 
 Replaces the separate CalendarAgent, CreateEventAgent, UpdateEventAgent, and
 DeleteEventAgent with a single agent that has its own mini ReAct loop.

@@ -1,5 +1,5 @@
 """
-Shipment Domain Tools — Standalone API functions for ShippingAgent's mini ReAct loop.
+Shipment Tools — Standalone API functions for ShippingAgent's mini ReAct loop.
 
 Extracted from ShipmentAgent (tracking.py).
 Each function takes (args: dict, context: AgentToolContext) -> str.
@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Annotated, Any, Dict, List, Optional
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 from onevalet.tool_decorator import tool
 
 from .shipment_repo import ShipmentRepository

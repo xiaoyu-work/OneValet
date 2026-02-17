@@ -1,7 +1,7 @@
 """
 Todo agents for OneValet
 
-Provides a domain agent for querying, creating, updating, and deleting todo tasks
+Provides an agent for querying, creating, updating, and deleting todo tasks
 across Todoist, Google Tasks, and Microsoft To Do, plus reminder management.
 """
 

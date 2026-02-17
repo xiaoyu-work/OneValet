@@ -1,5 +1,5 @@
 """
-Maps Domain Tools — Standalone API functions for MapsAgent's mini ReAct loop.
+Maps Tools — Standalone API functions for MapsAgent's mini ReAct loop.
 
 Extracted from MapSearchAgent, DirectionsAgent, and AirQualityAgent.
 Each function takes (args: dict, context: AgentToolContext) -> str.
@@ -13,7 +13,7 @@ from typing import Annotated, Any, Dict, Optional
 
 import httpx
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)

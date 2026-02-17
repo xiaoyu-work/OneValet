@@ -1,5 +1,5 @@
 """
-SmartHome Domain Tools - Standalone API functions for SmartHomeAgent's mini ReAct loop.
+SmartHome Tools - Standalone API functions for SmartHomeAgent's mini ReAct loop.
 
 Extracted from LightControlAgent and SpeakerControlAgent.
 Each function takes (args: dict, context: AgentToolContext) -> str.
@@ -8,7 +8,7 @@ Each function takes (args: dict, context: AgentToolContext) -> str.
 import logging
 from typing import Annotated, Any, Dict, Optional, Tuple
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)

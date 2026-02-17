@@ -1,5 +1,5 @@
 """
-NotionAgent - Domain agent for all Notion operations.
+NotionAgent - Agent for all Notion operations.
 
 Replaces NotionCreatePageAgent + NotionUpdatePageAgent + 3 standalone tools
 (notion_search, notion_read_page, notion_query_database) with a single agent
@@ -11,7 +11,8 @@ import logging
 from typing import Annotated, Any, Dict, List, Optional
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.models import AgentToolContext
+from onevalet.standard_agent import StandardAgent
 from onevalet.tool_decorator import tool
 
 from .client import NotionClient
@@ -331,7 +332,7 @@ async def notion_update_page(
 
 
 # =============================================================================
-# Domain Agent
+# Agent
 # =============================================================================
 
 @valet(capabilities=["notion"])

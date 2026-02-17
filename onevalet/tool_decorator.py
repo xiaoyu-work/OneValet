@@ -9,7 +9,7 @@ Usage::
 
     from typing import Annotated
     from onevalet.tool_decorator import tool
-    from onevalet.standard_agent import AgentToolContext
+    from onevalet.models import AgentToolContext
 
     @tool
     async def search_emails(
@@ -51,7 +51,7 @@ from typing import (
     get_type_hints,
 )
 
-from .standard_agent import AgentTool, AgentToolContext
+from .models import AgentTool, AgentToolContext
 
 # ---------------------------------------------------------------------------
 # Internal helpers

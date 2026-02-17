@@ -1,5 +1,5 @@
 """
-Calendar Domain Tools — Standalone API functions for CalendarAgent's mini ReAct loop.
+Calendar Tools — Standalone API functions for CalendarAgent's mini ReAct loop.
 
 Extracted from CalendarAgent, CreateEventAgent, UpdateEventAgent, and DeleteEventAgent.
 """
@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from typing import Annotated, Dict, Optional
 
 from onevalet.tool_decorator import tool
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

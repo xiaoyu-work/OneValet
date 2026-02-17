@@ -1,7 +1,7 @@
 """
 Email agents for OneValet
 
-Provides a domain agent for managing email (read, send, reply, delete, archive)
+Provides an agent for managing email (read, send, reply, delete, archive)
 and agents for email importance evaluation and preference management.
 """
 

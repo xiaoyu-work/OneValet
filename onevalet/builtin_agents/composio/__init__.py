@@ -1,7 +1,7 @@
 """
 Composio integration for OneValet.
 
-Provides per-app DomainAgents powered by the Composio OAuth proxy platform,
+Provides per-app agents powered by the Composio OAuth proxy platform,
 enabling access to 1000+ third-party app integrations with a single API key.
 
 Agents:

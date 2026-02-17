@@ -7,7 +7,7 @@ to list connected accounts and user profile information.
 
 import logging
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 """
-SmartHomeAgent - Domain agent for all smart home control requests.
+SmartHomeAgent - Agent for all smart home control requests.
 
 Replaces the separate LightControlAgent and SpeakerControlAgent
 with a single agent that has its own mini ReAct loop. The orchestrator sees

@@ -1,5 +1,5 @@
 """
-Maps domain agent for OneValet.
+Maps agent for OneValet.
 
 Provides a single MapsAgent that handles place search, directions, and air quality
 via an internal mini ReAct loop.

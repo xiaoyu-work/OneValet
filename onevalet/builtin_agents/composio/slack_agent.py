@@ -1,5 +1,5 @@
 """
-SlackComposioAgent - Domain agent for Slack operations via Composio.
+SlackComposioAgent - Agent for Slack operations via Composio.
 
 Provides send/fetch messages, list channels, find users, and create reminders
 using the Composio OAuth proxy platform.
@@ -10,7 +10,8 @@ import logging
 from typing import Annotated
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.models import AgentToolContext
+from onevalet.standard_agent import StandardAgent
 from onevalet.tool_decorator import tool
 
 from .client import ComposioClient
@@ -247,7 +248,7 @@ async def connect_slack(
 
 
 # =============================================================================
-# Domain Agent
+# Agent
 # =============================================================================
 
 @valet(capabilities=["slack", "messaging"])

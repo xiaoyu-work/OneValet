@@ -1,5 +1,5 @@
 """
-GitHubComposioAgent - Domain agent for GitHub operations via Composio.
+GitHubComposioAgent - Agent for GitHub operations via Composio.
 
 Provides create/list issues, create/list pull requests, and search repositories
 using the Composio OAuth proxy platform.
@@ -10,7 +10,8 @@ import logging
 from typing import Annotated, Any, Dict, List
 
 from onevalet import valet
-from onevalet.standard_agent import StandardAgent, AgentToolContext
+from onevalet.models import AgentToolContext
+from onevalet.standard_agent import StandardAgent
 from onevalet.tool_decorator import tool
 
 from .client import ComposioClient
@@ -286,7 +287,7 @@ async def connect_github(
 
 
 # =============================================================================
-# Domain Agent
+# Agent
 # =============================================================================
 
 @valet(capabilities=["github", "code", "repository"])

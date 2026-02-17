@@ -84,7 +84,8 @@ if TYPE_CHECKING:
     from ..protocols import LLMClientProtocol
     from ..memory.momex import MomexMemory
 
-from ..standard_agent import StandardAgent, AgentTool, AgentToolContext
+from ..models import AgentTool, AgentToolContext
+from ..standard_agent import StandardAgent
 from ..config import AgentRegistry
 
 logger = logging.getLogger(__name__)
@@ -1726,7 +1727,7 @@ class Orchestrator:
         """Build the orchestrator's builtin tools as AgentTool instances.
 
         These are lightweight tools the orchestrator calls directly
-        (not via an agent). Replaces the old ToolRegistry approach.
+        (not via an agent).
         """
         from ..builtin_agents.tools.google_search import (
             google_search_executor, GOOGLE_SEARCH_SCHEMA,

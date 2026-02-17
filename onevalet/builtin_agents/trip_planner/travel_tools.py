@@ -1,5 +1,5 @@
 """
-Travel Domain Tools — Standalone API functions for TravelAgent's mini ReAct loop.
+Travel Tools — Standalone API functions for TravelAgent's mini ReAct loop.
 
 Extracted from FlightSearchAgent, HotelSearchAgent, and WeatherAgent.
 """
@@ -11,7 +11,7 @@ from typing import Annotated, Any, Dict, Optional
 
 import httpx
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 from onevalet.tool_decorator import tool
 
 logger = logging.getLogger(__name__)

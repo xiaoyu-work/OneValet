@@ -22,7 +22,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from onevalet.standard_agent import AgentToolContext
+from onevalet.models import AgentToolContext
 
 logger = logging.getLogger(__name__)
 

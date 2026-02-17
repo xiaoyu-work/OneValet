@@ -3,7 +3,7 @@ OneValet MCP Integration - Model Context Protocol support
 
 Allows MCP servers to be registered as tool providers for agents.
 MCP tools are automatically converted to OneValet tools and registered
-in the ToolRegistry.
+to AgentTool instances.
 
 Example:
     from onevalet.mcp import MCPClient, MCPToolProvider
@@ -16,7 +16,7 @@ Example:
     provider = MCPToolProvider(client)
     await provider.register_tools()
 
-    # Now MCP tools are available in ToolRegistry
+    # Now MCP tools are available as AgentTool instances
     executor = ToolExecutor(llm_client=my_llm)
     result = await executor.run_with_tools(
         messages=[...],

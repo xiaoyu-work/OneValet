@@ -1,5 +1,5 @@
 """
-EmailAgent - Domain agent for all email-related requests.
+EmailAgent - Agent for all email-related requests.
 
 Replaces SendEmailAgent, ReadEmailAgent, ReplyEmailAgent, DeleteEmailAgent,
 ArchiveEmailAgent, MarkReadEmailAgent with a single agent that has its own

@@ -1,5 +1,5 @@
 """
-TodoAgent - Domain agent for all todo, reminder, and task management requests.
+TodoAgent - Agent for all todo, reminder, and task management requests.
 
 Replaces the separate TodoQueryAgent, CreateTodoAgent, UpdateTodoAgent, DeleteTodoAgent,
 ReminderAgent, TaskManagementAgent, and PlannerAgent with a single agent that has its own

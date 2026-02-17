@@ -11,7 +11,7 @@ from onevalet.llm.base import (
     ToolCall,
     Usage,
 )
-from onevalet.standard_agent import AgentTool
+from onevalet.models import AgentTool
 
 
 # ── Concrete subclass for testing (abstract methods stubbed) ──
