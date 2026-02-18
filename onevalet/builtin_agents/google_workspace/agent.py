@@ -280,10 +280,10 @@ Instructions:
 6. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 7. After getting tool results, provide a clear summary to the user."""
 
-    tools = [
+    tools = (
         google_drive_search,
         google_docs_read,
         google_sheets_read,
         google_docs_create,
         google_sheets_write,
-    ]
+    )

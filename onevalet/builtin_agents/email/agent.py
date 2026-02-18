@@ -54,4 +54,4 @@ Guidelines:
             weekday=now.strftime('%A'),
         )
 
-    tools = [search_emails, send_email, reply_email, delete_emails, archive_emails, mark_as_read]
+    tools = (search_emails, send_email, reply_email, delete_emails, archive_emails, mark_as_read)

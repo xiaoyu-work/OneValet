@@ -320,11 +320,11 @@ Instructions:
 7. If the user's request is ambiguous or missing repository info, ask for clarification WITHOUT calling any tools.
 8. After getting tool results, provide a clear summary to the user."""
 
-    tools = [
+    tools = (
         create_issue,
         list_issues,
         create_pull_request,
         list_pull_requests,
         search_repositories,
         connect_github,
-    ]
+    )

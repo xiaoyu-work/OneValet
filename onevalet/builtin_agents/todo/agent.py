@@ -63,4 +63,4 @@ in your text response WITHOUT calling any tools.
             weekday=now.strftime('%A'),
         )
 
-    tools = [query_tasks, create_task, update_task, delete_task, set_reminder, manage_reminders]
+    tools = (query_tasks, create_task, update_task, delete_task, set_reminder, manage_reminders)

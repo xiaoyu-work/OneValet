@@ -53,6 +53,6 @@ Common carrier tracking number formats:
             weekday=now.strftime('%A'),
         )
 
-    tools = [
+    tools = (
         track_shipment,
-    ]
+    )

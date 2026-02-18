@@ -203,8 +203,8 @@ class LiteLLMClient(BaseLLMClient):
         if self.config.track_costs:
             try:
                 cost = litellm.completion_cost(completion_response=response)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Cost calculation failed: {e}")
         if usage and cost is not None:
             usage.cost = cost
 

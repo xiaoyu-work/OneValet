@@ -48,8 +48,8 @@ ASK the user for it in your text response WITHOUT calling any tools.
             weekday=now.strftime('%A'),
         )
 
-    tools = [
+    tools = (
         search_places,
         get_directions,
         check_air_quality,
-    ]
+    )

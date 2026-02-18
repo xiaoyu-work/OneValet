@@ -5,9 +5,10 @@ import os
 import pathlib
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.security import APIKeyHeader
 
 from ..app import OneValet
 
@@ -19,7 +20,9 @@ _STATIC_DIR = pathlib.Path(__file__).resolve().parent.parent / "static"
 _app: Optional[OneValet] = None
 
 _SUPPORTED_PROVIDERS = ["openai", "anthropic", "azure", "dashscope", "gemini", "ollama"]
-_INTERNAL_SERVICE_KEY = os.getenv("ONEVALET_SERVICE_KEY", "")
+
+# Issue #15: Use None default so we can detect "not set" vs "empty string"
+_INTERNAL_SERVICE_KEY = os.getenv("ONEVALET_SERVICE_KEY")
 
 
 def _try_load_app():
@@ -36,11 +39,15 @@ def _try_load_app():
         _app = None
 
 
-_try_load_app()
+# Issue #14: Removed module-level _try_load_app() call.
+# Now lazy-loaded inside require_app() on first request.
 
 
 def require_app() -> OneValet:
-    """Raise 503 if app is not configured."""
+    """Raise 503 if app is not configured. Lazy-loads on first call."""
+    global _app
+    if _app is None:
+        _try_load_app()
     if _app is None:
         raise HTTPException(503, "Not configured. Complete setup in Settings.")
     return _app
@@ -48,9 +55,49 @@ def require_app() -> OneValet:
 
 def verify_service_key(request: Request):
     """Verify X-Service-Key header for internal endpoints."""
+    if _INTERNAL_SERVICE_KEY is None:
+        raise HTTPException(
+            500,
+            "ONEVALET_SERVICE_KEY is not configured. "
+            "Set the ONEVALET_SERVICE_KEY environment variable to enable internal endpoints.",
+        )
     key = request.headers.get("x-service-key", "")
-    if not _INTERNAL_SERVICE_KEY or key != _INTERNAL_SERVICE_KEY:
+    if key != _INTERNAL_SERVICE_KEY:
         raise HTTPException(403, "Invalid service key")
+
+
+# ── Issue #3: Optional API key authentication ──
+
+_API_KEY = os.getenv("ONEVALET_API_KEY")
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_auth_warning_logged = False
+
+
+async def verify_api_key(
+    request: Request,
+    api_key_header_value: Optional[str] = Security(_api_key_header),
+):
+    """Verify API key from Authorization: Bearer <key> or X-API-Key header.
+
+    When ONEVALET_API_KEY is not set, all requests are allowed (dev mode).
+    When set, a valid key is required on sensitive endpoints.
+    """
+    if _API_KEY is None:
+        # Dev mode: no authentication required
+        return None
+
+    # Check X-API-Key header first
+    if api_key_header_value and api_key_header_value == _API_KEY:
+        return api_key_header_value
+
+    # Check Authorization: Bearer <key>
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if token == _API_KEY:
+            return token
+
+    raise HTTPException(401, "Invalid or missing API key")
 
 
 def mask_api_key(key: str) -> dict:
@@ -145,12 +192,27 @@ def get_app_instance() -> Optional[OneValet]:
 def _create_api() -> FastAPI:
     """Create and configure the FastAPI app with routes."""
     _api = FastAPI(title="OneValet", version="0.1.1")
+
+    # Issue #2: Configurable CORS origins from env var
+    allowed_origins_str = os.getenv(
+        "ONEVALET_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:5173",
+    )
+    allowed_origins = [o.strip() for o in allowed_origins_str.split(",") if o.strip()]
     _api.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Issue #3: Log warning if no API key is set
+    if _API_KEY is None:
+        logger.warning(
+            "ONEVALET_API_KEY is not set. API endpoints are unauthenticated. "
+            "Set ONEVALET_API_KEY environment variable to enable authentication."
+        )
+
     from .routes import register_routes
     register_routes(_api)
     return _api

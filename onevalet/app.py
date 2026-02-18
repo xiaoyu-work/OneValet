@@ -309,6 +309,125 @@ class OneValet:
             self._email_handler = None
             logger.info("OneValet shut down")
 
+    # ── Public API methods (issue #12) ──
+
+    async def list_credentials(self, tenant_id: str = "default", service: Optional[str] = None) -> List[dict]:
+        """List stored credentials for a tenant."""
+        await self._ensure_initialized()
+        return await self._credential_store.list(tenant_id, service=service)
+
+    async def save_credential(self, tenant_id: str, service: str, credentials: dict, account_name: str = "primary") -> None:
+        """Save a credential entry and reload API keys into env."""
+        await self._ensure_initialized()
+        await self._credential_store.save(tenant_id=tenant_id, service=service, credentials=credentials, account_name=account_name)
+        await self._load_api_keys_to_env()
+
+    async def delete_credential(self, tenant_id: str, service: str, account_name: str) -> bool:
+        """Delete a credential entry. Returns True if deleted."""
+        await self._ensure_initialized()
+        return await self._credential_store.delete(tenant_id=tenant_id, service=service, account_name=account_name)
+
+    async def find_credential_by_email(self, email: str, service: Optional[str] = None):
+        """Find credentials by email address."""
+        await self._ensure_initialized()
+        return await self._credential_store.find_by_email(email, service)
+
+    async def get_credential(self, tenant_id: str, service: str, account_name: str = "primary"):
+        """Get full credentials for a specific service/account."""
+        await self._ensure_initialized()
+        return await self._credential_store.get(tenant_id, service, account_name)
+
+    async def save_credential_raw(self, tenant_id: str, service: str, credentials: dict, account_name: str = "primary") -> None:
+        """Save credentials without reloading API keys (for internal/OAuth use)."""
+        await self._ensure_initialized()
+        await self._credential_store.save(tenant_id=tenant_id, service=service, credentials=credentials, account_name=account_name)
+
+    async def save_oauth_state(self, tenant_id: str, service: str, redirect_after: Optional[str] = None, account_name: str = "primary") -> str:
+        """Save OAuth state and return the state token."""
+        await self._ensure_initialized()
+        return await self._credential_store.save_oauth_state(
+            tenant_id=tenant_id, service=service,
+            redirect_after=redirect_after, account_name=account_name,
+        )
+
+    async def consume_oauth_state(self, state: str) -> Optional[dict]:
+        """Consume and return OAuth state data."""
+        await self._ensure_initialized()
+        return await self._credential_store.consume_oauth_state(state)
+
+    async def clear_session(self, tenant_id: str = "default") -> None:
+        """Clear conversation history for a tenant."""
+        await self._ensure_initialized()
+        self._momex.clear_history(tenant_id=tenant_id, session_id=tenant_id)
+
+    async def handle_message(self, tenant_id: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> "AgentResult":
+        """Send a message and get a response via the orchestrator."""
+        await self._ensure_initialized()
+        return await self._orchestrator.handle_message(
+            tenant_id=tenant_id, message=message, metadata=metadata,
+        )
+
+    async def stream_message(self, tenant_id: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> AsyncIterator["AgentEvent"]:
+        """Stream a message response via the orchestrator."""
+        await self._ensure_initialized()
+        async for event in self._orchestrator.stream_message(
+            tenant_id=tenant_id, message=message, metadata=metadata,
+        ):
+            yield event
+
+    async def list_tasks(self, tenant_id: str = "default") -> list:
+        """List trigger tasks for a tenant."""
+        await self._ensure_initialized()
+        if not self._trigger_engine:
+            return []
+        return await self._trigger_engine.list_tasks(user_id=tenant_id)
+
+    async def create_task(self, **kwargs):
+        """Create a new trigger task. Passes kwargs to TriggerEngine.create_task."""
+        await self._ensure_initialized()
+        if not self._trigger_engine:
+            raise RuntimeError("TriggerEngine not available")
+        return await self._trigger_engine.create_task(**kwargs)
+
+    async def update_task(self, task_id: str, **kwargs):
+        """Update a trigger task. Passes kwargs to TriggerEngine.update_task_status."""
+        await self._ensure_initialized()
+        if not self._trigger_engine:
+            raise RuntimeError("TriggerEngine not available")
+        return await self._trigger_engine.update_task_status(task_id, **kwargs)
+
+    async def delete_task(self, task_id: str) -> bool:
+        """Delete a trigger task."""
+        await self._ensure_initialized()
+        if not self._trigger_engine:
+            raise RuntimeError("TriggerEngine not available")
+        return await self._trigger_engine.delete_task(task_id)
+
+    async def get_config(self) -> dict:
+        """Return a copy of the raw configuration dict."""
+        return dict(self._config)
+
+    async def save_config(self, config: dict) -> None:
+        """Update the in-memory configuration."""
+        self._config = config
+
+    async def ingest_event(self, event) -> None:
+        """Publish an event to the EventBus."""
+        await self._ensure_initialized()
+        if self._event_bus is None:
+            raise RuntimeError("EventBus not available")
+        await self._event_bus.publish(event)
+
+    @property
+    def trigger_engine(self):
+        """Access the trigger engine (may be None)."""
+        return self._trigger_engine
+
+    @property
+    def event_bus(self):
+        """Access the event bus (may be None)."""
+        return self._event_bus
+
     async def chat(
         self,
         message_or_tenant_id: str,

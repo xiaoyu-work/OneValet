@@ -10,7 +10,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="OneValet API Server")
     parser.add_argument("--ui", action="store_true", help="Serve demo frontend (/ and /settings)")
-    parser.add_argument("--host", default=os.getenv("ONEVALET_HOST", "0.0.0.0"))
+    parser.add_argument("--host", default=os.getenv("ONEVALET_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("ONEVALET_PORT", "8000")))
     args = parser.parse_args()
 

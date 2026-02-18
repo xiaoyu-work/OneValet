@@ -106,7 +106,9 @@ class AgentResult:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "AgentResult":
         """Create AgentResult from dictionary"""
-        status = data.get("status")
+        if "status" not in data:
+            raise ValueError("AgentResult.from_dict requires a 'status' key")
+        status = data["status"]
         if isinstance(status, str):
             status = AgentStatus(status)
 

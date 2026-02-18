@@ -1,4 +1,4 @@
-﻿"""
+"""
 OneValet Orchestrator - Central coordinator using ReAct loop
 
 This module provides an extensible Orchestrator using the Template Method pattern

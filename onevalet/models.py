@@ -6,10 +6,11 @@ so that other modules can import them without pulling in the full agent class.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import List, Dict, Optional, Callable, Any
+from typing import List, Dict, Optional, Callable, Any, TYPE_CHECKING
 
-from .result import AgentStatus
+if TYPE_CHECKING:
+    from .llm.base import BaseLLMClient
+    from .credentials.store import CredentialStore
 
 
 # ===== Field Definition =====
@@ -42,23 +43,6 @@ class RequiredField:
     required: bool = True
 
 
-@dataclass
-class AgentState:
-    """
-    Complete agent state snapshot for serialization
-    """
-    agent_id: str
-    agent_type: str
-    tenant_id: str
-    status: AgentStatus
-    required_fields: List[RequiredField]
-    collected_fields: Dict[str, Any]
-    context_summary: str
-    created_at: datetime
-    last_active: datetime
-    error_message: Optional[str] = None
-
-
 # ===== Agent Tool Definitions =====
 
 
@@ -71,11 +55,11 @@ class AgentToolContext:
     builtin tools.
     """
 
-    llm_client: Any = None
+    llm_client: Optional["BaseLLMClient"] = None
     tenant_id: str = ""
     user_profile: Optional[Dict[str, Any]] = None
     context_hints: Optional[Dict[str, Any]] = None
-    credentials: Any = None  # CredentialStore instance
+    credentials: Optional["CredentialStore"] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

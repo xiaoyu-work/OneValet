@@ -3,20 +3,20 @@
 import dataclasses
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from ..app import require_app
+from ..app import require_app, verify_api_key
 from ..models import ChatRequest, ChatResponse
 
 router = APIRouter()
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(req: ChatRequest):
     app = require_app()
-    result = await app.chat(
-        message_or_tenant_id=req.tenant_id,
+    result = await app.handle_message(
+        tenant_id=req.tenant_id,
         message=req.message,
         metadata=req.metadata,
     )
@@ -26,13 +26,13 @@ async def chat(req: ChatRequest):
     )
 
 
-@router.post("/stream")
+@router.post("/stream", dependencies=[Depends(verify_api_key)])
 async def stream(req: ChatRequest):
     app = require_app()
 
     async def event_generator():
-        async for event in app.stream(
-            message_or_tenant_id=req.tenant_id,
+        async for event in app.stream_message(
+            tenant_id=req.tenant_id,
             message=req.message,
             metadata=req.metadata,
         ):
@@ -70,10 +70,9 @@ async def health():
     return {"status": "ok"}
 
 
-@router.post("/api/clear-session")
+@router.post("/api/clear-session", dependencies=[Depends(verify_api_key)])
 async def clear_session(tenant_id: str = "default"):
     """Clear conversation history for a tenant."""
     app = require_app()
-    await app._ensure_initialized()
-    app._momex.clear_history(tenant_id=tenant_id, session_id=tenant_id)
+    await app.clear_session(tenant_id)
     return {"status": "ok", "message": "Session history cleared"}

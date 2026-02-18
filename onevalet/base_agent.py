@@ -8,7 +8,7 @@ Provides:
 """
 
 import logging
-from typing import Callable, Optional, Dict
+from typing import Any, Callable, Optional, Dict
 from uuid import uuid4
 from collections import OrderedDict
 
@@ -64,7 +64,7 @@ class BaseAgent:
         self._instance_pre_reply_hooks: Dict[str, Callable] = OrderedDict()
         self._instance_post_reply_hooks: Dict[str, Callable] = OrderedDict()
 
-    async def reply(self, msg: Message = None) -> Message:
+    async def reply(self, msg: Message = None) -> Any:
         """
         Main entry point - handles hooks and calls _do_reply
 

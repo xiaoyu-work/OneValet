@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ─── Google OAuth ───
+# --- Google OAuth ---
 
 
 @router.get("/api/oauth/google/authorize")
@@ -35,9 +35,8 @@ async def google_oauth_authorize(
     from ...oauth.google_oauth import GoogleOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="google",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -53,13 +52,12 @@ async def google_oauth_authorize(
 
 @router.get("/api/oauth/google/callback")
 async def google_oauth_callback(request: Request, code: str, state: str):
-    """Google OAuth callback — exchange code for tokens and store credentials."""
+    """Google OAuth callback -- exchange code for tokens and store credentials."""
     from ...oauth.google_oauth import GoogleOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -87,7 +85,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         }
 
         for svc in ("gmail", "google_calendar", "google_tasks", "google_drive"):
-            await app._credential_store.save(
+            await app.save_credential_raw(
                 tenant_id=tenant_id, service=svc,
                 credentials=credentials, account_name=account_name,
             )
@@ -100,7 +98,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
-# ─── Microsoft OAuth ───
+# --- Microsoft OAuth ---
 
 
 @router.get("/api/oauth/microsoft/authorize")
@@ -114,9 +112,8 @@ async def microsoft_oauth_authorize(
     from ...oauth.microsoft_oauth import MicrosoftOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="microsoft",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -132,13 +129,12 @@ async def microsoft_oauth_authorize(
 
 @router.get("/api/oauth/microsoft/callback")
 async def microsoft_oauth_callback(request: Request, code: str, state: str):
-    """Microsoft OAuth callback — exchange code for tokens and store credentials."""
+    """Microsoft OAuth callback -- exchange code for tokens and store credentials."""
     from ...oauth.microsoft_oauth import MicrosoftOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -166,7 +162,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         }
 
         for svc in ("outlook", "outlook_calendar", "microsoft_todo", "onedrive"):
-            await app._credential_store.save(
+            await app.save_credential_raw(
                 tenant_id=tenant_id, service=svc,
                 credentials=credentials, account_name=account_name,
             )
@@ -179,7 +175,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
-# ─── Todoist OAuth ───
+# --- Todoist OAuth ---
 
 
 @router.get("/api/oauth/todoist/authorize")
@@ -191,13 +187,12 @@ async def todoist_oauth_authorize(
 ):
     """Initiate Todoist OAuth flow. Returns authorization URL."""
     app = require_app()
-    await app._ensure_initialized()
 
     client_id = os.getenv("TODOIST_CLIENT_ID")
     if not client_id:
         raise HTTPException(400, "Todoist OAuth not configured. Set TODOIST_CLIENT_ID in Settings > OAuth Apps.")
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="todoist",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -212,11 +207,10 @@ async def todoist_oauth_authorize(
 
 @router.get("/api/oauth/todoist/callback")
 async def todoist_oauth_callback(request: Request, code: str, state: str):
-    """Todoist OAuth callback — exchange code for token and store credentials."""
+    """Todoist OAuth callback -- exchange code for token and store credentials."""
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -264,7 +258,7 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
             "scopes": ["data:read_write"],
         }
 
-        await app._credential_store.save(
+        await app.save_credential_raw(
             tenant_id=tenant_id, service="todoist",
             credentials=credentials, account_name=account_name,
         )
@@ -277,7 +271,7 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
-# ─── Hue OAuth ───
+# --- Hue OAuth ---
 
 
 @router.get("/api/oauth/hue/authorize")
@@ -291,9 +285,8 @@ async def hue_oauth_authorize(
     from ...oauth.hue_oauth import HueOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="hue",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -309,13 +302,12 @@ async def hue_oauth_authorize(
 
 @router.get("/api/oauth/hue/callback")
 async def hue_oauth_callback(request: Request, code: str, state: str):
-    """Hue OAuth callback — exchange code for tokens and store credentials."""
+    """Hue OAuth callback -- exchange code for tokens and store credentials."""
     from ...oauth.hue_oauth import HueOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -339,7 +331,7 @@ async def hue_oauth_callback(request: Request, code: str, state: str):
             "token_expiry": tokens["token_expiry"],
         }
 
-        await app._credential_store.save(
+        await app.save_credential_raw(
             tenant_id=tenant_id, service="philips_hue",
             credentials=credentials, account_name=account_name,
         )
@@ -352,7 +344,7 @@ async def hue_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
-# ─── Sonos OAuth ───
+# --- Sonos OAuth ---
 
 
 @router.get("/api/oauth/sonos/authorize")
@@ -366,9 +358,8 @@ async def sonos_oauth_authorize(
     from ...oauth.sonos_oauth import SonosOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="sonos",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -384,13 +375,12 @@ async def sonos_oauth_authorize(
 
 @router.get("/api/oauth/sonos/callback")
 async def sonos_oauth_callback(request: Request, code: str, state: str):
-    """Sonos OAuth callback — exchange code for tokens and store credentials."""
+    """Sonos OAuth callback -- exchange code for tokens and store credentials."""
     from ...oauth.sonos_oauth import SonosOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -414,7 +404,7 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
             "token_expiry": tokens["token_expiry"],
         }
 
-        await app._credential_store.save(
+        await app.save_credential_raw(
             tenant_id=tenant_id, service="sonos",
             credentials=credentials, account_name=account_name,
         )
@@ -427,7 +417,7 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
-# ─── Dropbox OAuth ───
+# --- Dropbox OAuth ---
 
 
 @router.get("/api/oauth/dropbox/authorize")
@@ -441,9 +431,8 @@ async def dropbox_oauth_authorize(
     from ...oauth.dropbox_oauth import DropboxOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state = await app._credential_store.save_oauth_state(
+    state = await app.save_oauth_state(
         tenant_id=tenant_id, service="dropbox",
         redirect_after=redirect_after, account_name=account_name,
     )
@@ -459,13 +448,12 @@ async def dropbox_oauth_authorize(
 
 @router.get("/api/oauth/dropbox/callback")
 async def dropbox_oauth_callback(request: Request, code: str, state: str):
-    """Dropbox OAuth callback — exchange code for tokens and store credentials."""
+    """Dropbox OAuth callback -- exchange code for tokens and store credentials."""
     from ...oauth.dropbox_oauth import DropboxOAuth
 
     app = require_app()
-    await app._ensure_initialized()
 
-    state_data = await app._credential_store.consume_oauth_state(state)
+    state_data = await app.consume_oauth_state(state)
     if not state_data:
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
@@ -491,7 +479,7 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
             "token_expiry": tokens["token_expiry"],
         }
 
-        await app._credential_store.save(
+        await app.save_credential_raw(
             tenant_id=tenant_id, service="dropbox",
             credentials=credentials, account_name=account_name,
         )

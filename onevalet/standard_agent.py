@@ -56,10 +56,11 @@ from typing import List, Dict, Optional, Callable, Any, AsyncIterator, Tuple, TY
 from uuid import uuid4
 
 from .base_agent import BaseAgent
-from .fields import InputField, OutputField
+from .constants import COMPLETE_TASK_TOOL_NAME, COMPLETE_TASK_SCHEMA
+from .fields import InputField
 from .llm.base import LLMResponse, ToolCall as LLMToolCall
 from .message import Message
-from .models import RequiredField, AgentState, AgentToolContext, AgentTool
+from .models import RequiredField, AgentToolContext, AgentTool
 from .protocols import LLMClientProtocol
 from .result import AgentResult, AgentStatus, ApprovalResult
 from .streaming.engine import StreamEngine
@@ -70,33 +71,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Re-declared here to avoid circular import with orchestrator package.
-# Canonical definition lives in onevalet.orchestrator.react_config.
-__COMPLETE_TASK_TOOL_NAME = "complete_task"
-__COMPLETE_TASK_SCHEMA: Dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": __COMPLETE_TASK_TOOL_NAME,
-        "description": (
-            "Call this tool to signal that you have completed the user's request "
-            "and provide your final response. Use this when you have finished all "
-            "necessary tool calls and are ready to deliver the final answer."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "result": {
-                    "type": "string",
-                    "description": (
-                        "Your final response to the user. This should be comprehensive "
-                        "and include all relevant information gathered from tool calls."
-                    ),
-                },
-            },
-            "required": ["result"],
-        },
-    },
-}
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Log exceptions from fire-and-forget tasks instead of silently dropping them."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task failed: %s", exc, exc_info=exc)
 
 
 # ===== State Transitions =====
@@ -182,9 +164,9 @@ class StandardAgent(BaseAgent):
     _input_specs: List["InputSpec"] = []
     _output_specs: List["OutputSpec"] = []
 
-    # Domain ReAct loop configuration (active when tools is non-empty)
+    # Agent ReAct loop configuration (active when tools is non-empty)
     domain_system_prompt: str = ""
-    tools: List[AgentTool] = []
+    tools: tuple = ()
     max_turns: int = 5
     max_complete_task_retries: int = 3
     tool_timeout: float = 30.0  # seconds per tool call
@@ -254,7 +236,7 @@ class StandardAgent(BaseAgent):
         # Recalled memories from orchestrator (when enable_memory=true)
         self._recalled_memories: List[Dict[str, Any]] = []
 
-        # Domain ReAct loop state (only active when tools is non-empty)
+        # Agent ReAct loop state (only active when tools is non-empty)
         self._react_messages: List[Dict[str, Any]] = []
         self._react_turn: int = 0
         self._pending_tool_call: Optional[Tuple[LLMToolCall, AgentTool, Dict[str, Any]]] = None
@@ -397,7 +379,7 @@ class StandardAgent(BaseAgent):
         resumes the ReAct loop with the user's answer.
         Otherwise, continues InputField collection.
         """
-        # Domain ReAct path: resume loop with user's follow-up
+        # Agent ReAct path: resume loop with user's follow-up
         if self.tools and self._react_messages:
             user_text = msg.get_text() if msg else ""
             if not user_text:
@@ -451,7 +433,7 @@ class StandardAgent(BaseAgent):
         Otherwise, uses the InputField-based approval flow.
         """
         if self._pending_tool_call:
-            # Domain ReAct path: LLM-based approval parsing
+            # Agent ReAct path: LLM-based approval parsing
             user_input = msg.get_text() if msg else ""
             approval = await self._parse_approval_with_llm(user_input)
 
@@ -533,7 +515,7 @@ class StandardAgent(BaseAgent):
                 )
         """
         if self.tools:
-            # Domain ReAct path
+            # Agent ReAct path
             if self._pending_tool_call:
                 return await self._resume_after_approval()
 
@@ -1012,9 +994,10 @@ Return JSON only."""
         if self._streaming_enabled:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._stream_engine.emit_state_change(
+                task = loop.create_task(self._stream_engine.emit_state_change(
                     old_status.value, new_status.value
                 ))
+                task.add_done_callback(_log_task_exception)
             except RuntimeError:
                 pass  # No running loop
 
@@ -1223,7 +1206,7 @@ Return JSON only."""
         """Core mini ReAct loop with agent tools."""
         tool_schemas = [t.to_openai_schema() for t in self.tools]
         # Always inject complete_task
-        tool_schemas.append(_COMPLETE_TASK_SCHEMA)
+        tool_schemas.append(COMPLETE_TASK_SCHEMA)
         messages = self._react_messages
 
         if self._remaining_tool_calls:
@@ -1362,7 +1345,7 @@ Return JSON only."""
         """Execute tool calls. Returns AgentResult if paused for approval, None otherwise."""
         for i, tc in enumerate(tool_calls):
             # Intercept complete_task — extract result and finish
-            if tc.name == _COMPLETE_TASK_TOOL_NAME:
+            if tc.name == COMPLETE_TASK_TOOL_NAME:
                 try:
                     args = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
                 except (json.JSONDecodeError, TypeError):
@@ -1370,7 +1353,7 @@ Return JSON only."""
                 result_text = args.get("result", "")
                 if result_text:
                     self._tool_trace.append({
-                        "tool": _COMPLETE_TASK_TOOL_NAME,
+                        "tool": COMPLETE_TASK_TOOL_NAME,
                         "status": "ok",
                         "summary": result_text[:240],
                     })

@@ -47,7 +47,7 @@ Instructions:
             weekday=now.strftime('%A'),
         )
 
-    tools = [
+    tools = (
         control_lights,
         control_speaker,
-    ]
+    )

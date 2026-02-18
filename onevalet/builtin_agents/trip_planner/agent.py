@@ -1,4 +1,4 @@
-﻿"""
+"""
 TripPlannerAgent - Cross-domain travel planning agent.
 
 This agent orchestrates multiple domains to produce executable itineraries:
@@ -98,7 +98,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
     async def on_running(self, msg):
         return await super().on_running(msg)
 
-    tools = [
+    tools = (
         check_weather,
         search_places,
         get_directions,
@@ -107,6 +107,6 @@ Only execute write actions (calendar/todo) after explicit user consent.
         query_events,
         create_event,
         create_task,
-    ]
+    )
 
 

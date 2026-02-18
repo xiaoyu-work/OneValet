@@ -38,6 +38,7 @@ Example:
 
 import os
 import logging
+import threading
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, field
 
@@ -91,12 +92,15 @@ class LLMRegistry:
     """
 
     _instance: Optional["LLMRegistry"] = None
+    _lock: threading.Lock = threading.Lock()
 
     @classmethod
     def get_instance(cls) -> "LLMRegistry":
-        """Get singleton instance"""
+        """Get singleton instance (thread-safe with double-checked locking)"""
         if cls._instance is None:
-            cls._instance = cls()
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls()
         return cls._instance
 
     @classmethod
@@ -258,17 +262,20 @@ class LLMRegistry:
         return self._configs.get(name)
 
     def clear(self) -> None:
-        """Clear all registered clients"""
-        # Close any clients that support it
+        """Clear all registered clients (fire-and-forget for async clients)"""
         for name, client in self._clients.items():
             if hasattr(client, 'close'):
                 try:
                     import asyncio
                     if asyncio.iscoroutinefunction(client.close):
-                        # Try to close async
                         try:
                             loop = asyncio.get_running_loop()
-                            loop.create_task(client.close())
+                            task = loop.create_task(client.close())
+                            task.add_done_callback(
+                                lambda t, n=name: logger.warning(
+                                    f"Error closing LLM client {n}: {t.exception()}"
+                                ) if t.exception() else None
+                            )
                         except RuntimeError:
                             # No running loop, skip async close
                             pass
@@ -282,6 +289,27 @@ class LLMRegistry:
         self._default_provider = None
         self._routing_provider = None
         logger.info("LLM Registry cleared")
+
+    async def aclose(self) -> None:
+        """Async close: properly await all client close() calls."""
+        errors = []
+        for name, client in self._clients.items():
+            if hasattr(client, 'close'):
+                try:
+                    import asyncio
+                    if asyncio.iscoroutinefunction(client.close):
+                        await client.close()
+                    else:
+                        client.close()
+                except Exception as e:
+                    errors.append((name, e))
+                    logger.warning(f"Error closing LLM client {name}: {e}")
+
+        self._clients.clear()
+        self._configs.clear()
+        self._default_provider = None
+        self._routing_provider = None
+        logger.info("LLM Registry closed (async)")
 
     def __contains__(self, name: str) -> bool:
         return name in self._clients

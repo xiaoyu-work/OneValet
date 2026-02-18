@@ -281,11 +281,11 @@ Instructions:
 7. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 8. After getting tool results, provide a clear summary to the user."""
 
-    tools = [
+    tools = (
         send_message,
         fetch_messages,
         list_channels,
         find_users,
         create_reminder,
         connect_slack,
-    ]
+    )

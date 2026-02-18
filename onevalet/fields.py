@@ -145,10 +145,10 @@ class OutputField:
 
     def __init__(
         self,
-        type: Type = str,
+        field_type: Type = str,
         description: str = "",
     ):
-        self.type = type
+        self.type = field_type
         self.description = description
         self.name: Optional[str] = None
 

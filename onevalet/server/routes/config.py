@@ -4,7 +4,7 @@ import logging
 import os
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from ...app import OneValet
 from ..app import (
@@ -14,6 +14,7 @@ from ..app import (
     mask_config,
     require_app,
     set_app,
+    verify_api_key,
 )
 from ..models import ConfigRequest
 
@@ -27,7 +28,7 @@ async def get_status():
     return {"configured": get_app_instance() is not None}
 
 
-@router.get("/api/config")
+@router.get("/api/config", dependencies=[Depends(verify_api_key)])
 async def get_config():
     """Return current configuration (API key masked)."""
     _app = get_app_instance()
@@ -40,7 +41,7 @@ async def get_config():
     return {}
 
 
-@router.post("/api/config")
+@router.post("/api/config", dependencies=[Depends(verify_api_key)])
 async def save_config(req: ConfigRequest):
     """Save configuration to config.yaml and reinitialize the app."""
     _app = get_app_instance()

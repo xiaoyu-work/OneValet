@@ -360,10 +360,10 @@ Instructions:
 6. If the user's request is ambiguous, ask for clarification WITHOUT calling any tools.
 7. After getting tool results, provide a clear summary to the user."""
 
-    tools = [
+    tools = (
         notion_search,
         notion_read_page,
         notion_query_database,
         notion_create_page,
         notion_update_page,
-    ]
+    )

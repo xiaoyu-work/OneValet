@@ -1,4 +1,4 @@
-﻿"""
+"""
 Agent-Tool Execution - Execute agents as tools in the ReAct loop
 
 Per design doc sections 4.1 and 6:

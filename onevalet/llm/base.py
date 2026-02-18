@@ -12,7 +12,7 @@ import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import (
-    Dict, Any, List, Optional, Union, AsyncIterator, Callable, TypeVar
+    Dict, Any, List, Optional, Union, AsyncIterator, Callable
 )
 from enum import Enum
 
