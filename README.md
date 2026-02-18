@@ -75,6 +75,50 @@ database: postgresql://user:pass@host:5432/dbname
 | `base_url` | No | Custom endpoint (required for Azure) |
 | `system_prompt` | No | System prompt / personality |
 
+## Model Routing
+
+OneValet can automatically route each request to the best LLM based on task complexity. Simple tasks (greetings, quick lookups) go to cheap/fast models; complex tasks (trip planning, multi-agent workflows) go to stronger models. This can cut API costs significantly without sacrificing quality.
+
+### How It Works
+
+1. A lightweight **classifier** model scores every incoming request on a 1-100 complexity scale.
+2. A set of **rules** maps score ranges to registered LLM providers.
+3. The selected provider is used for the **entire** ReAct loop of that request (all turns).
+
+### Setup
+
+Add `llm_providers` and `model_routing` sections to your `config.yaml`:
+
+```yaml
+llm_providers:
+  strong:
+    provider: anthropic
+    model: claude-sonnet-4-20250514
+    api_key: ${ANTHROPIC_API_KEY}
+  fast:
+    provider: openai
+    model: gpt-4o-mini
+    api_key: ${OPENAI_API_KEY}
+  cheap:
+    provider: dashscope
+    model: deepseek-chat
+    api_key: ${DEEPSEEK_API_KEY}
+
+model_routing:
+  enabled: true
+  classifier_provider: fast     # which provider scores the request
+  default_provider: fast        # fallback if classifier fails
+  rules:
+    - score_range: [1, 30]      # trivial: greetings, quick Q&A
+      provider: cheap
+    - score_range: [31, 70]     # standard: single-agent tasks
+      provider: fast
+    - score_range: [71, 100]    # complex: multi-agent, trip planning
+      provider: strong
+```
+
+When `model_routing.enabled` is not set or `false`, OneValet uses the single LLM defined in the `llm` section (the default behavior).
+
 ## License
 
 [MIT](LICENSE)

@@ -17,6 +17,41 @@ embedding:
 # system_prompt: |
 #   Your name is Jarvis. You speak in a warm, butler-like tone.
 
+# ---------------------------------------------------------------------------
+# Model Routing — route requests to different LLMs based on complexity
+#
+# When enabled, a lightweight classifier scores each request (1-100) and
+# selects the best provider.  Simple tasks go to cheap/fast models; complex
+# tasks go to strong models.  This can dramatically reduce API costs.
+#
+# Requires llm_providers to define at least the providers referenced in rules.
+# ---------------------------------------------------------------------------
+# llm_providers:
+#   strong:
+#     provider: anthropic
+#     model: claude-sonnet-4-20250514
+#     api_key: ${ANTHROPIC_API_KEY}
+#   fast:
+#     provider: openai
+#     model: gpt-4o-mini
+#     api_key: ${OPENAI_API_KEY}
+#   cheap:
+#     provider: dashscope
+#     model: deepseek-chat
+#     api_key: ${DEEPSEEK_API_KEY}
+#
+# model_routing:
+#   enabled: true
+#   classifier_provider: fast          # which provider scores the request
+#   default_provider: fast             # fallback if classifier fails
+#   rules:
+#     - score_range: [1, 30]           # trivial: greetings, quick Q&A
+#       provider: cheap
+#     - score_range: [31, 70]          # standard: single-agent tasks
+#       provider: fast
+#     - score_range: [71, 100]         # complex: multi-agent, trip planning
+#       provider: strong
+
 # Callbacks — OneValet POSTs notifications here (e.g. important emails, trigger results)
 # callbacks:
 #   notify_url: http://localhost:8001/webhook/onevalet/callback

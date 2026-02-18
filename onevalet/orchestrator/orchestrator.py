@@ -80,6 +80,7 @@ from .transcript_repair import repair_transcript
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
+    from ..llm.router import ModelRouter
     from ..msghub import MessageHub
     from ..protocols import LLMClientProtocol
     from ..memory.momex import MomexMemory
@@ -192,6 +193,7 @@ class Orchestrator:
         rate_limiter: Optional[Callable] = None,
         post_process_hooks: Optional[List[Callable]] = None,
         tool_policy_filter: Optional[ToolPolicyFilter] = None,
+        model_router: Optional["ModelRouter"] = None,
     ):
         """
         Initialize Orchestrator.
@@ -221,6 +223,10 @@ class Orchestrator:
                 order; each receives the result returned by the previous hook.
                 Useful for profile detection, usage recording, response wrapping,
                 or sending notifications without subclassing the orchestrator.
+            model_router: Optional ``ModelRouter`` instance for complexity-based
+                model routing.  When provided, the first turn of each ReAct loop
+                classifies the request and selects a provider from the
+                ``LLMRegistry``.  Subsequent turns reuse the same provider.
         """
         # Configuration
         self.config = config or OrchestratorConfig()
@@ -251,6 +257,7 @@ class Orchestrator:
         self.rate_limiter = rate_limiter
         self._post_process_hooks: List[Callable] = list(post_process_hooks or [])
         self._tool_policy_filter = tool_policy_filter
+        self._model_router = model_router
 
         # Audit logging
         self._audit = AuditLogger()
@@ -577,6 +584,21 @@ class Orchestrator:
             data={"tenant_id": tenant_id},
         )
 
+        # Model routing: classify once before the loop, reuse for all turns.
+        routed_llm_client = None
+        if self._model_router:
+            try:
+                from ..llm.router import RoutingDecision
+                decision = await self._model_router.route(messages)
+                routed_llm_client = self._model_router.registry.get(decision.provider)
+                if routed_llm_client:
+                    logger.info(
+                        f"[ReAct] ModelRouter selected provider='{decision.provider}' "
+                        f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
+                    )
+            except Exception as e:
+                logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
+
         for turn in range(1, self._react_config.max_turns + 1):
             # Context guard with summarization
             messages = await self._summarize_and_trim(messages)
@@ -589,6 +611,7 @@ class Orchestrator:
                 tool_choice = first_turn_tool_choice if turn == 1 else "auto"
                 response = await self._llm_call_with_retry(
                     messages, tool_schemas, tool_choice=tool_choice,
+                    llm_client_override=routed_llm_client,
                 )
             except Exception as e:
                 yield AgentEvent(
@@ -624,6 +647,7 @@ class Orchestrator:
                     try:
                         response = await self._llm_call_with_retry(
                             messages, tool_schemas, tool_choice="required",
+                            llm_client_override=routed_llm_client,
                         )
                     except Exception as e:
                         yield AgentEvent(
@@ -658,6 +682,7 @@ class Orchestrator:
                     try:
                         fallback_resp = await self._llm_call_with_retry(
                             messages, tool_schemas=[], tool_choice=None,
+                            llm_client_override=routed_llm_client,
                         )
                         final_response = (
                             getattr(fallback_resp, "content", None)
@@ -951,7 +976,10 @@ class Orchestrator:
                 ),
             })
             try:
-                response = await self._llm_call_with_retry(messages, tool_schemas=None)
+                response = await self._llm_call_with_retry(
+                    messages, tool_schemas=None,
+                    llm_client_override=routed_llm_client,
+                )
                 final_text = response.content or ""
                 usage = getattr(response, "usage", None)
                 if usage:
@@ -993,6 +1021,7 @@ class Orchestrator:
         messages: List[Dict[str, Any]],
         tool_schemas: Optional[List[Dict[str, Any]]],
         tool_choice: Optional[Any] = None,
+        llm_client_override: Optional[Any] = None,
     ) -> Any:
         """LLM call with error recovery strategy per design doc section 3.3.
 
@@ -1004,7 +1033,11 @@ class Orchestrator:
         Args:
             tool_choice: Override for tool_choice param ("auto", "required", "none").
                          If None, the LLM client uses its default ("auto").
+            llm_client_override: Optional LLM client to use instead of
+                ``self.llm_client``.  Set by the model router when
+                complexity-based routing is active.
         """
+        client = llm_client_override or self.llm_client
         last_error = None
         for attempt in range(self._react_config.llm_max_retries + 1):
             try:
@@ -1016,7 +1049,7 @@ class Orchestrator:
                     logger.info(f"[LLM] Sending {len(tool_schemas)} tools, tool_choice={tool_choice or 'auto'}, sample: {json.dumps(tool_schemas[0], ensure_ascii=False)[:200]}")
                 else:
                     logger.info("[LLM] Sending request with NO tools")
-                response = await self.llm_client.chat_completion(**kwargs)
+                response = await client.chat_completion(**kwargs)
                 # Debug: log what came back
                 tc = getattr(response, 'tool_calls', None)
                 sr = getattr(response, 'stop_reason', None)

@@ -24,6 +24,7 @@ Usage:
 from .base import BaseLLMClient, LLMConfig, LLMResponse, StreamChunk
 from .litellm_client import LiteLLMClient
 from .registry import LLMRegistry, LLMProviderConfig
+from .router import ModelRouter, RoutingRule, RoutingDecision
 
 __all__ = [
     "BaseLLMClient",
@@ -33,4 +34,7 @@ __all__ = [
     "LiteLLMClient",
     "LLMRegistry",
     "LLMProviderConfig",
+    "ModelRouter",
+    "RoutingRule",
+    "RoutingDecision",
 ]

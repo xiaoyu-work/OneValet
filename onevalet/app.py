@@ -93,6 +93,7 @@ class OneValet:
         self._event_bus = None
         self._trigger_engine = None
         self._email_handler = None
+        self._model_router = None
 
     async def _ensure_initialized(self) -> None:
         """Lazy initialization — runs once on first chat()/stream() call."""
@@ -175,6 +176,51 @@ class OneValet:
         llm_registry.register("default", self._llm_client)
         llm_registry.set_default("default")
 
+        # 6b. Additional LLM providers (for model routing)
+        from .llm.base import LLMConfig as _LLMConfig
+        from .llm.litellm_client import LiteLLMClient as _LiteLLMClient
+        for name, prov_cfg in cfg.get("llm_providers", {}).items():
+            if name == "default":
+                continue  # already registered above
+            try:
+                _prov_llm_config = _LLMConfig(
+                    model=prov_cfg["model"],
+                    api_key=prov_cfg.get("api_key"),
+                    base_url=prov_cfg.get("base_url"),
+                )
+                _prov_client = _LiteLLMClient(
+                    config=_prov_llm_config,
+                    provider_name=prov_cfg.get("provider", "openai"),
+                )
+                llm_registry.register(name, _prov_client)
+                logger.info(f"Registered LLM provider: {name} ({prov_cfg.get('provider')}/{prov_cfg['model']})")
+            except Exception as e:
+                logger.warning(f"Failed to register LLM provider '{name}': {e}")
+
+        # 6c. Model Router (complexity-based routing)
+        self._model_router = None
+        routing_cfg = cfg.get("model_routing", {})
+        if routing_cfg.get("enabled"):
+            from .llm.router import ModelRouter, RoutingRule
+            rules = []
+            for rule_cfg in routing_cfg.get("rules", []):
+                score_range = rule_cfg.get("score_range", [0, 100])
+                rules.append(RoutingRule(
+                    min_score=score_range[0],
+                    max_score=score_range[1],
+                    provider=rule_cfg["provider"],
+                ))
+            self._model_router = ModelRouter(
+                registry=llm_registry,
+                classifier_provider=routing_cfg.get("classifier_provider", "default"),
+                rules=rules or None,
+                default_provider=routing_cfg.get("default_provider", "default"),
+            )
+            logger.info(
+                f"ModelRouter enabled: classifier={routing_cfg.get('classifier_provider', 'default')}, "
+                f"{len(rules or [])} rules"
+            )
+
         # 7. TriggerEngine + EventBus + Notifications
         from .triggers import (
             TriggerEngine, EventBus, OrchestratorExecutor,
@@ -209,6 +255,7 @@ class OneValet:
             database=self._database,
             system_prompt=cfg.get("system_prompt", ""),
             trigger_engine=self._trigger_engine,
+            model_router=self._model_router,
         )
         await self._orchestrator.initialize()
 
@@ -307,6 +354,7 @@ class OneValet:
             self._event_bus = None
             self._trigger_engine = None
             self._email_handler = None
+            self._model_router = None
             logger.info("OneValet shut down")
 
     # ── Public API methods (issue #12) ──
