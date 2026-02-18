@@ -12,6 +12,7 @@ delete_task, set_reminder, manage_reminders) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
+from onevalet.constants import TODO_SERVICES
 from onevalet.standard_agent import StandardAgent
 
 from .tools import (
@@ -24,7 +25,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["todo", "reminder", "task"])
+@valet(capabilities=["todo", "reminder", "task"], requires_service=list(TODO_SERVICES))
 class TodoAgent(StandardAgent):
     """List, create, complete, and delete todo tasks; set and manage reminders. Use when the user mentions tasks, todos, to-do lists, reminders, or wants to be reminded about something."""
 

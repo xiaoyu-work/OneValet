@@ -7,11 +7,12 @@ Reuses AccountResolver logic, searching todoist, google_tasks, and microsoft_tod
 import logging
 from typing import List, Optional
 
+from onevalet.constants import TODO_SERVICES
 from onevalet.providers.email.resolver import AccountResolver
 
 logger = logging.getLogger(__name__)
 
-_TODO_SERVICES = ("todoist", "google_tasks", "microsoft_todo")
+_TODO_SERVICES = TODO_SERVICES
 
 
 class TodoAccountResolver:

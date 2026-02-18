@@ -14,10 +14,12 @@ Handles:
 import logging
 from typing import Any, Dict, List, Optional
 
+from onevalet.constants import EMAIL_SERVICES
+
 logger = logging.getLogger(__name__)
 
 
-_EMAIL_SERVICES = ("gmail", "outlook")
+_EMAIL_SERVICES = EMAIL_SERVICES
 
 
 class AccountResolver:

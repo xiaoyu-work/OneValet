@@ -12,12 +12,13 @@ based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
+from onevalet.constants import SMARTHOME_SERVICES
 from onevalet.standard_agent import StandardAgent
 
 from .tools import control_lights, control_speaker
 
 
-@valet(capabilities=["smarthome"])
+@valet(capabilities=["smarthome"], requires_service=list(SMARTHOME_SERVICES))
 class SmartHomeAgent(StandardAgent):
     """Control smart lights and speakers. Use when the user wants to turn on/off lights, change brightness or color, play/pause music, or adjust volume."""
 

@@ -376,7 +376,7 @@ class Orchestrator:
             return await self.post_process(agent_result, context)
 
         # Step 4: Build tool schemas (all lightweight — ReAct picks directly)
-        tool_schemas = self._build_tool_schemas()
+        tool_schemas = await self._build_tool_schemas(tenant_id)
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
 
         # Step 5: Build LLM messages
@@ -495,7 +495,7 @@ class Orchestrator:
             return
 
         # Build tool schemas (all lightweight — ReAct picks directly)
-        tool_schemas = self._build_tool_schemas()
+        tool_schemas = await self._build_tool_schemas(tenant_id)
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
         messages = self._build_llm_messages(context, message)
 
@@ -1420,13 +1420,16 @@ class Orchestrator:
     # Change F: max number of agent-tools included as full schemas (Tier 1)
     TIER1_AGENT_TOOL_LIMIT = 8
 
-    def _build_tool_schemas(self) -> List[Dict[str, Any]]:
+    async def _build_tool_schemas(self, tenant_id: str) -> List[Dict[str, Any]]:
         """Build combined tool schemas: regular tools + agent-tools.
 
         All agent-tool schemas are lightweight (name + description +
         task_instruction only).  They are split into two tiers:
         - Tier 1: First N agents included directly as tool schemas
         - Tier 2: Remaining agents accessible via delegate_to_agent meta-tool
+
+        Agents whose ``requires_service`` has no overlap with the tenant's
+        configured credentials are excluded automatically.
         """
         schemas: List[Dict[str, Any]] = []
 
@@ -1438,7 +1441,10 @@ class Orchestrator:
             schemas.append(tool.to_openai_schema())
 
         # Agent-tools: split into Tier 1 and Tier 2
-        agent_tool_schemas = self._agent_registry.get_all_agent_tool_schemas()
+        agent_tool_schemas = await self._agent_registry.get_all_agent_tool_schemas(
+            tenant_id=tenant_id,
+            credential_store=self.credential_store,
+        )
         tier1_schemas = agent_tool_schemas[:self.TIER1_AGENT_TOOL_LIMIT]
         self._tier2_agent_schemas = agent_tool_schemas[self.TIER1_AGENT_TOOL_LIMIT:]
 
@@ -1478,7 +1484,7 @@ class Orchestrator:
 
         # Apply tool policy filter if configured
         if self._tool_policy_filter:
-            schemas = self._tool_policy_filter.filter_tools(schemas)
+            schemas = self._tool_policy_filter.filter_tools(schemas, tenant_id=tenant_id)
 
         logger.info(
             f"[Tools] {len(schemas)} total available "

@@ -14,11 +14,12 @@ Services stored in CredentialStore:
 import logging
 from typing import Dict, List, Optional
 
+from onevalet.constants import IMAGE_SERVICES
 from onevalet.providers.email.resolver import AccountResolver
 
 logger = logging.getLogger(__name__)
 
-_IMAGE_SERVICES = ("image_openai", "image_azure", "image_gemini", "image_seedream")
+_IMAGE_SERVICES = IMAGE_SERVICES
 
 # Map service names to provider names used by the factory
 _SERVICE_TO_PROVIDER = {

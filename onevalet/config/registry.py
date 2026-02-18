@@ -5,7 +5,7 @@ Agents are registered via @valet decorator only.
 """
 
 import logging
-from typing import Dict, List, Any, Optional, Type, Callable
+from typing import Dict, List, Any, Optional, Set, Type, Callable
 
 from ..mcp.provider import MCPToolProvider, MCPManager
 from ..mcp.protocol import MCPClientProtocol
@@ -161,13 +161,56 @@ class AgentRegistry:
 
     # ===== Routing =====
 
-    def get_all_agent_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Return enhanced tool schemas for all agents with expose_as_tool=True."""
+    async def _get_tenant_services(
+        self,
+        tenant_id: Optional[str],
+        credential_store: Optional[Any],
+    ) -> Optional[Set[str]]:
+        """Query CredentialStore for the set of services a tenant has configured.
+
+        Returns ``None`` when tenant filtering is not applicable (no tenant_id
+        or no credential_store), which signals callers to skip filtering.
+        """
+        if not tenant_id or not credential_store:
+            return None
+        accounts = await credential_store.list(tenant_id)
+        return {a["service"] for a in accounts}
+
+    def _agent_available_for_tenant(
+        self,
+        metadata: Any,
+        tenant_services: Optional[Set[str]],
+    ) -> bool:
+        """Check whether *metadata* passes the requires_service filter."""
+        if tenant_services is None:
+            return True
+        required: List[str] = metadata.extra.get("requires_service", [])
+        if not required:
+            return True
+        # Agent is available if tenant has at least one required service
+        return bool(set(required) & tenant_services)
+
+    async def get_all_agent_tool_schemas(
+        self,
+        tenant_id: Optional[str] = None,
+        credential_store: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return enhanced tool schemas for all agents with expose_as_tool=True.
+
+        When *tenant_id* and *credential_store* are provided, agents whose
+        ``requires_service`` has no overlap with the tenant's configured
+        services are excluded automatically.
+        """
         from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
+
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         schemas = []
         for name, metadata in self._get_agent_registry().items():
             if not getattr(metadata, 'expose_as_tool', True):
+                continue
+            if not self._agent_available_for_tenant(metadata, tenant_services):
+                logger.debug(f"Skipping agent {name}: tenant {tenant_id} missing required service")
                 continue
             schema = generate_tool_schema(metadata.agent_class)
             schema = enhance_agent_tool_schema(metadata.agent_class, schema)
@@ -183,15 +226,25 @@ class AgentRegistry:
             return None
         return get_schema_version(agent_class)
 
-    def get_agent_descriptions(self) -> str:
+    async def get_agent_descriptions(
+        self,
+        tenant_id: Optional[str] = None,
+        credential_store: Optional[Any] = None,
+    ) -> str:
         """
         Get formatted agent descriptions for LLM routing prompt.
 
         Includes all available info: description, inputs, outputs.
+        Applies the same tenant-aware filtering as get_all_agent_tool_schemas.
         """
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
+
         lines = ["Available agents:"]
 
         for name, metadata in self._get_agent_registry().items():
+            if not self._agent_available_for_tenant(metadata, tenant_services):
+                continue
+
             description = metadata.description or metadata.agent_class.__doc__ or ""
             lines.append(f"- **{name}**: {description}")
 

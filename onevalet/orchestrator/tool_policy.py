@@ -1,20 +1,22 @@
 """
 Tool policy filter layer for the orchestrator.
 
-Provides global and per-agent tool filtering with two layers:
+Provides global, per-agent, and per-tenant tool filtering with three layers:
 
 1. **Global** -- deny-list and optional allow-list applied to every request.
 2. **Agent-level** -- per-agent-type overrides (allow/deny sets).
+3. **Tenant-level** -- per-tenant deny-list for permission-based exclusion.
 
-Filter order: global deny -> global allow -> agent deny -> agent allow.
+Filter order: global deny -> global allow -> agent deny -> agent allow -> tenant deny.
 
 Usage::
 
     policy = ToolPolicyFilter()
     policy.set_global_deny({"dangerous_tool"})
     policy.set_agent_policy("email_agent", deny={"send_sms"})
+    policy.set_tenant_deny("tenant_123", {"SmartHomeAgent"})
 
-    filtered = policy.filter_tools(all_schemas, agent_type="email_agent")
+    filtered = policy.filter_tools(all_schemas, agent_type="email_agent", tenant_id="tenant_123")
 """
 
 from dataclasses import dataclass, field
@@ -31,12 +33,13 @@ class AgentToolPolicy:
 
 
 class ToolPolicyFilter:
-    """Two-layer tool policy filter (global + agent-level)."""
+    """Three-layer tool policy filter (global + agent-level + tenant-level)."""
 
     def __init__(self) -> None:
         self._global_deny: Set[str] = set()
         self._global_allow: Optional[Set[str]] = None  # if set, only these tools allowed
         self._agent_policies: Dict[str, AgentToolPolicy] = {}
+        self._tenant_deny: Dict[str, Set[str]] = {}
 
     # ------------------------------------------------------------------
     # Configuration API
@@ -63,6 +66,14 @@ class ToolPolicyFilter:
             deny=set(deny) if deny is not None else set(),
         )
 
+    def set_tenant_deny(self, tenant_id: str, tool_names: Set[str]) -> None:
+        """Set the deny-list for a specific tenant."""
+        self._tenant_deny[tenant_id] = set(tool_names)
+
+    def clear_tenant_deny(self, tenant_id: str) -> None:
+        """Remove the deny-list for a specific tenant."""
+        self._tenant_deny.pop(tenant_id, None)
+
     # ------------------------------------------------------------------
     # Filtering
     # ------------------------------------------------------------------
@@ -76,7 +87,12 @@ class ToolPolicyFilter:
             return name if isinstance(name, str) else None
         return None
 
-    def is_tool_allowed(self, tool_name: str, agent_type: Optional[str] = None) -> bool:
+    def is_tool_allowed(
+        self,
+        tool_name: str,
+        agent_type: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+    ) -> bool:
         """Check whether a single tool is allowed under current policies."""
         # Global deny
         if tool_name in self._global_deny:
@@ -94,18 +110,25 @@ class ToolPolicyFilter:
             if ap.allow is not None and tool_name not in ap.allow:
                 return False
 
+        # Tenant-level deny
+        if tenant_id and tenant_id in self._tenant_deny:
+            if tool_name in self._tenant_deny[tenant_id]:
+                return False
+
         return True
 
     def filter_tools(
         self,
         tool_schemas: List[Dict],
         agent_type: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> List[Dict]:
-        """Filter tool schemas through global + agent policies.
+        """Filter tool schemas through global + agent + tenant policies.
 
         Args:
             tool_schemas: List of OpenAI-format tool schema dicts.
             agent_type: Optional agent type for agent-level filtering.
+            tenant_id: Optional tenant ID for tenant-level filtering.
 
         Returns:
             Filtered list of tool schemas (order preserved).
@@ -116,7 +139,7 @@ class ToolPolicyFilter:
             if name is None:
                 result.append(schema)  # keep schemas we can't parse
                 continue
-            if self.is_tool_allowed(name, agent_type):
+            if self.is_tool_allowed(name, agent_type, tenant_id):
                 result.append(schema)
         return result
 
@@ -124,6 +147,7 @@ class ToolPolicyFilter:
         self,
         tool_name: str,
         agent_type: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[str]:
         """Return a human-readable reason why a tool was filtered, or None if allowed."""
         if tool_name in self._global_deny:
@@ -138,5 +162,9 @@ class ToolPolicyFilter:
                 return f"tool '{tool_name}' is denied for agent '{agent_type}'"
             if ap.allow is not None and tool_name not in ap.allow:
                 return f"tool '{tool_name}' is not in the allow list for agent '{agent_type}'"
+
+        if tenant_id and tenant_id in self._tenant_deny:
+            if tool_name in self._tenant_deny[tenant_id]:
+                return f"tool '{tool_name}' is denied for tenant '{tenant_id}'"
 
         return None

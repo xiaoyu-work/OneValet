@@ -10,11 +10,12 @@ Services in CredentialStore:
 import logging
 from typing import Dict, List, Optional
 
+from onevalet.constants import STORAGE_SERVICES
 from onevalet.providers.email.resolver import AccountResolver
 
 logger = logging.getLogger(__name__)
 
-_STORAGE_SERVICES = ("google_drive", "onedrive", "dropbox")
+_STORAGE_SERVICES = STORAGE_SERVICES
 
 _SERVICE_TO_PROVIDER = {
     "google_drive": "google",

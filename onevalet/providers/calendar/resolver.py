@@ -7,11 +7,12 @@ Reuses AccountResolver logic, searching google_calendar and outlook_calendar ser
 import logging
 from typing import List, Optional
 
+from onevalet.constants import CALENDAR_SERVICES
 from onevalet.providers.email.resolver import AccountResolver
 
 logger = logging.getLogger(__name__)
 
-_CALENDAR_SERVICES = ("google_calendar", "outlook_calendar")
+_CALENDAR_SERVICES = CALENDAR_SERVICES
 
 
 class CalendarAccountResolver:

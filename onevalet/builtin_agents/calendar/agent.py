@@ -12,6 +12,7 @@ update_event, delete_event) based on the user's request.
 from datetime import datetime
 
 from onevalet import valet
+from onevalet.constants import CALENDAR_SERVICES
 from onevalet.standard_agent import StandardAgent
 
 from .tools import (
@@ -22,7 +23,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["calendar"])
+@valet(capabilities=["calendar"], requires_service=list(CALENDAR_SERVICES))
 class CalendarAgent(StandardAgent):
     """Check schedule, create, update, or delete calendar events. Use when the user asks about their schedule, meetings, appointments, or wants to create/change/cancel an event."""
 

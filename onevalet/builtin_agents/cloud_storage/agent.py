@@ -15,11 +15,12 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from onevalet import valet, StandardAgent, InputField, AgentStatus, AgentResult, Message, ApprovalResult
+from onevalet.constants import STORAGE_SERVICES
 
 logger = logging.getLogger(__name__)
 
 
-@valet()
+@valet(requires_service=list(STORAGE_SERVICES))
 class CloudStorageAgent(StandardAgent):
     """Search and manage files in cloud storage (Dropbox, Google Drive, OneDrive). Use when the user asks about their files or wants to share/upload."""
 

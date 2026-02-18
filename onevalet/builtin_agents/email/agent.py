@@ -8,6 +8,7 @@ mini ReAct loop.
 from datetime import datetime
 
 from onevalet import valet
+from onevalet.constants import EMAIL_SERVICES
 from onevalet.standard_agent import StandardAgent
 
 from .tools import (
@@ -20,7 +21,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["email"])
+@valet(capabilities=["email"], requires_service=list(EMAIL_SERVICES))
 class EmailAgent(StandardAgent):
     """Read, send, reply, delete, and archive emails. Use when the user mentions email, inbox, messages, or wants to send/check/reply to any email."""
 

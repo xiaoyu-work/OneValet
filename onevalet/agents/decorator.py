@@ -150,6 +150,7 @@ def valet(
     capabilities: Optional[List[str]] = None,
     enable_memory: bool = False,
     expose_as_tool: bool = True,
+    requires_service: Optional[List[str]] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> Union[Type, Callable[[Type], Type]]:
     """
@@ -167,6 +168,10 @@ def valet(
         capabilities: What this agent can do (for routing decisions)
         enable_memory: If True, orchestrator will auto recall/store memories
         expose_as_tool: If True, agent is exposed as a tool in the ReAct loop (default: True)
+        requires_service: Credential service names this agent depends on.
+            The agent is only available to a tenant who has at least one of
+            these services configured in CredentialStore.  When omitted the
+            agent is always available.
         extra: App-specific extensions (e.g., required_tier)
 
     The decorator automatically extracts:
@@ -184,6 +189,11 @@ def valet(
         # Extract InputField and OutputField from class
         inputs, outputs = _extract_fields(cls)
 
+        # Build extra dict, merging caller-supplied extra with requires_service
+        merged_extra = dict(extra) if extra else {}
+        if requires_service:
+            merged_extra["requires_service"] = list(requires_service)
+
         # Create metadata
         metadata = AgentMetadata(
             name=cls.__name__,
@@ -196,7 +206,7 @@ def valet(
             module=cls.__module__,
             enable_memory=enable_memory,
             expose_as_tool=expose_as_tool,
-            extra=extra or {},
+            extra=merged_extra,
         )
 
         # Attach metadata to class

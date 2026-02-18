@@ -144,6 +144,31 @@ class TestValetDecorator:
 
         assert AGENT_REGISTRY["TestAgentHidden"].expose_as_tool is False
 
+    def test_requires_service_stored_in_extra(self):
+        @valet(requires_service=["gmail", "outlook"])
+        class TestAgentRequires:
+            """test"""
+
+        meta = AGENT_REGISTRY["TestAgentRequires"]
+        assert meta.extra["requires_service"] == ["gmail", "outlook"]
+
+    def test_requires_service_default_none(self):
+        @valet
+        class TestAgentNoRequires:
+            """test"""
+
+        meta = AGENT_REGISTRY["TestAgentNoRequires"]
+        assert "requires_service" not in meta.extra
+
+    def test_requires_service_merged_with_extra(self):
+        @valet(requires_service=["gmail"], extra={"tier": "premium"})
+        class TestAgentMerged:
+            """test"""
+
+        meta = AGENT_REGISTRY["TestAgentMerged"]
+        assert meta.extra["requires_service"] == ["gmail"]
+        assert meta.extra["tier"] == "premium"
+
 
 # =========================================================================
 # get_agent_metadata / is_valet
