@@ -15,7 +15,7 @@ uv sync --extra openai        # or: --extra anthropic, --all-extras
 ### 2. Start
 
 ```bash
-python -m onevalet --ui
+uv run onevalet --ui
 ```
 
 Open **http://localhost:8000** in your browser.
