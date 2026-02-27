@@ -32,6 +32,9 @@ class ShipmentRepository(Repository):
         UNIQUE (tenant_id, tracking_number)
     );
     """
+    SETUP_SQL = [
+        "CREATE INDEX IF NOT EXISTS idx_shipments_tenant_id ON shipments (tenant_id)",
+    ]
 
     async def get_user_shipments(
         self, tenant_id: str, is_active: bool = True

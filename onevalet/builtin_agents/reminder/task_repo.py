@@ -31,6 +31,9 @@ class TaskRepository(Repository):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
     """
+    SETUP_SQL = [
+        "CREATE INDEX IF NOT EXISTS idx_tasks_tenant_id ON tasks (tenant_id)",
+    ]
 
     async def get_user_tasks(
         self, tenant_id: str, status: Optional[str] = None
