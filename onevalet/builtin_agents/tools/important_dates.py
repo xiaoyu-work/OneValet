@@ -95,7 +95,7 @@ async def get_important_dates_executor(args: dict, context: AgentToolContext = N
     days_ahead = args.get("days_ahead", 60)
 
     try:
-        dates = await store.get_important_dates(user_id=context.tenant_id, days_ahead=days_ahead)
+        dates = await store.get_important_dates(tenant_id=context.tenant_id, days_ahead=days_ahead)
         if not dates:
             return "No upcoming important dates found."
 
@@ -135,7 +135,7 @@ async def search_important_dates_executor(args: dict, context: AgentToolContext 
 
     try:
         dates = await store.search_important_dates(
-            user_id=context.tenant_id, search_term=search_term, limit=10,
+            tenant_id=context.tenant_id, search_term=search_term, limit=10,
         )
         if not dates:
             return f"No important dates found matching '{search_term}'."
@@ -311,7 +311,7 @@ async def get_today_reminders_executor(args: dict, context: AgentToolContext = N
         return "Error: Important dates storage not configured"
 
     try:
-        reminders = await store.get_today_reminders(user_id=context.tenant_id)
+        reminders = await store.get_today_reminders(tenant_id=context.tenant_id)
         if not reminders:
             return "No important-date reminders for today."
 

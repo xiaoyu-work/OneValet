@@ -16,7 +16,7 @@ class ShipmentRepository(Repository):
     CREATE_TABLE_SQL = """
     CREATE TABLE IF NOT EXISTS shipments (
         id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id         TEXT NOT NULL,
+        tenant_id         TEXT NOT NULL,
         tracking_number TEXT NOT NULL,
         carrier         TEXT,
         tracking_url    TEXT,
@@ -29,33 +29,33 @@ class ShipmentRepository(Repository):
         is_active       BOOLEAN DEFAULT TRUE,
         created_at      TIMESTAMPTZ DEFAULT NOW(),
         updated_at      TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE (user_id, tracking_number)
+        UNIQUE (tenant_id, tracking_number)
     );
     """
 
     async def get_user_shipments(
-        self, user_id: str, is_active: bool = True
+        self, tenant_id: str, is_active: bool = True
     ) -> List[Dict[str, Any]]:
         """Get all shipments for a user filtered by active status."""
         rows = await self.db.fetch(
-            "SELECT * FROM shipments WHERE user_id = $1 AND is_active = $2 "
+            "SELECT * FROM shipments WHERE tenant_id = $1 AND is_active = $2 "
             "ORDER BY updated_at DESC",
-            user_id,
+            tenant_id,
             is_active,
         )
         return [dict(r) for r in rows]
 
     async def upsert_shipment(
         self,
-        user_id: str,
+        tenant_id: str,
         tracking_number: str,
         carrier: str,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
-        """Insert or update a shipment keyed on (user_id, tracking_number)."""
+        """Insert or update a shipment keyed on (tenant_id, tracking_number)."""
         # Build the full data dict
         data: Dict[str, Any] = {
-            "user_id": user_id,
+            "tenant_id": tenant_id,
             "tracking_number": tracking_number,
             "carrier": carrier,
         }
@@ -84,7 +84,7 @@ class ShipmentRepository(Repository):
         values = list(data.values())
 
         # Build SET clause for ON CONFLICT — update everything except the key columns
-        update_cols = [c for c in columns if c not in ("user_id", "tracking_number")]
+        update_cols = [c for c in columns if c not in ("tenant_id", "tracking_number")]
         set_clause = ", ".join(
             f"{c} = EXCLUDED.{c}" for c in update_cols
         )
@@ -93,7 +93,7 @@ class ShipmentRepository(Repository):
         query = (
             f"INSERT INTO shipments ({', '.join(columns)}) "
             f"VALUES ({', '.join(placeholders)}) "
-            f"ON CONFLICT (user_id, tracking_number) DO UPDATE SET {set_clause} "
+            f"ON CONFLICT (tenant_id, tracking_number) DO UPDATE SET {set_clause} "
             f"RETURNING *"
         )
 
@@ -139,13 +139,13 @@ class ShipmentRepository(Repository):
         return dict(row) if row else None
 
     async def archive_shipment_by_tracking(
-        self, user_id: str, tracking_number: str
+        self, tenant_id: str, tracking_number: str
     ) -> Optional[Dict[str, Any]]:
-        """Set is_active=FALSE for a shipment by user_id + tracking_number."""
+        """Set is_active=FALSE for a shipment by tenant_id + tracking_number."""
         row = await self.db.fetchrow(
             "UPDATE shipments SET is_active = FALSE, updated_at = NOW() "
-            "WHERE user_id = $1 AND tracking_number = $2 RETURNING *",
-            user_id,
+            "WHERE tenant_id = $1 AND tracking_number = $2 RETURNING *",
+            tenant_id,
             tracking_number,
         )
         return dict(row) if row else None

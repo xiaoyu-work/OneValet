@@ -160,7 +160,7 @@ async def _query_one(
     if repo:
         delivered_notified = True if status == "delivered" else None
         await repo.upsert_shipment(
-            user_id=tenant_id,
+            tenant_id=tenant_id,
             tracking_number=tracking_number,
             carrier=carrier,
             tracking_url=result.get("tracking_url"),
@@ -259,7 +259,7 @@ async def track_shipment(
             result = await provider.track(tn, sc)
             if result.get("success"):
                 await repo.upsert_shipment(
-                    user_id=tenant_id,
+                    tenant_id=tenant_id,
                     tracking_number=tn,
                     carrier=sc,
                     tracking_url=result.get("tracking_url"),

@@ -18,7 +18,7 @@ class ImportantDatesRepository(Repository):
     CREATE_TABLE_SQL = """
         CREATE TABLE IF NOT EXISTS important_dates (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            user_id TEXT NOT NULL,
+            tenant_id TEXT NOT NULL,
             title TEXT NOT NULL,
             date DATE NOT NULL,
             date_type TEXT DEFAULT 'custom',
@@ -35,13 +35,13 @@ class ImportantDatesRepository(Repository):
     """
 
     SETUP_SQL = [
-        "CREATE INDEX IF NOT EXISTS idx_important_dates_user_id ON important_dates (user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_tenant_id ON important_dates (tenant_id)",
         "CREATE INDEX IF NOT EXISTS idx_important_dates_date ON important_dates (date)",
-        "CREATE INDEX IF NOT EXISTS idx_important_dates_user_date ON important_dates (user_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_tenant_date ON important_dates (tenant_id, date)",
         "CREATE INDEX IF NOT EXISTS idx_important_dates_is_active ON important_dates (is_active)",
         """
         CREATE OR REPLACE FUNCTION get_upcoming_important_dates(
-            p_user_id TEXT,
+            p_tenant_id TEXT,
             p_days_ahead INTEGER DEFAULT 7
         )
         RETURNS TABLE (
@@ -110,7 +110,7 @@ class ImportantDatesRepository(Repository):
                 d.relationship,
                 d.remind_days_before
             FROM important_dates d
-            WHERE d.user_id = p_user_id
+            WHERE d.tenant_id = p_tenant_id
               AND d.is_active = TRUE
               AND CASE
                     WHEN d.recurring THEN
@@ -139,7 +139,7 @@ class ImportantDatesRepository(Repository):
     ]
 
     async def get_today_important_dates(
-        self, user_id: str
+        self, tenant_id: str
     ) -> List[Dict[str, Any]]:
         """Get dates that need reminding today.
 
@@ -172,7 +172,7 @@ class ImportantDatesRepository(Repository):
                         ELSE date
                     END AS upcoming_date
                 FROM important_dates
-                WHERE user_id = $1
+                WHERE tenant_id = $1
             )
             SELECT *,
                 (upcoming_date - CURRENT_DATE) AS days_until
@@ -183,11 +183,11 @@ class ImportantDatesRepository(Repository):
             )
             ORDER BY days_until ASC
         """
-        rows = await self.db.fetch(query, user_id)
+        rows = await self.db.fetch(query, tenant_id)
         return [dict(r) for r in rows]
 
     async def get_important_dates(
-        self, user_id: str, days_ahead: int = 60
+        self, tenant_id: str, days_ahead: int = 60
     ) -> List[Dict[str, Any]]:
         """Get upcoming dates within N days."""
         query = """
@@ -215,7 +215,7 @@ class ImportantDatesRepository(Repository):
                         ELSE date
                     END AS upcoming_date
                 FROM important_dates
-                WHERE user_id = $1
+                WHERE tenant_id = $1
             )
             SELECT *,
                 (upcoming_date - CURRENT_DATE) AS days_until
@@ -223,29 +223,29 @@ class ImportantDatesRepository(Repository):
             WHERE (upcoming_date - CURRENT_DATE) BETWEEN 0 AND $2
             ORDER BY days_until ASC
         """
-        rows = await self.db.fetch(query, user_id, days_ahead)
+        rows = await self.db.fetch(query, tenant_id, days_ahead)
         return [dict(r) for r in rows]
 
     async def search_important_dates(
-        self, user_id: str, search_term: str, limit: int = 10
+        self, tenant_id: str, search_term: str, limit: int = 10
     ) -> List[Dict[str, Any]]:
         """Search dates by title or person_name (ILIKE)."""
         query = """
             SELECT * FROM important_dates
-            WHERE user_id = $1
+            WHERE tenant_id = $1
               AND (title ILIKE $2 OR person_name ILIKE $2)
             ORDER BY date ASC
             LIMIT $3
         """
         pattern = f"%{search_term}%"
-        rows = await self.db.fetch(query, user_id, pattern, limit)
+        rows = await self.db.fetch(query, tenant_id, pattern, limit)
         return [dict(r) for r in rows]
 
     async def create_important_date(
-        self, user_id: str, data: Dict[str, Any]
+        self, tenant_id: str, data: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Insert a new important date. Returns the created row."""
-        insert_data = {"user_id": user_id, **data}
+        insert_data = {"tenant_id": tenant_id, **data}
         # Serialize remind_days_before to JSONB if it's a list
         if "remind_days_before" in insert_data and isinstance(
             insert_data["remind_days_before"], list
@@ -256,14 +256,14 @@ class ImportantDatesRepository(Repository):
         return await self._insert(insert_data)
 
     async def update_important_date(
-        self, user_id: str, date_id: str, updates: Dict[str, Any]
+        self, tenant_id: str, date_id: str, updates: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """Update an important date. Returns the updated row or None."""
         # Verify ownership
         row = await self.db.fetchrow(
-            "SELECT id FROM important_dates WHERE id = $1 AND user_id = $2",
+            "SELECT id FROM important_dates WHERE id = $1 AND tenant_id = $2",
             date_id,
-            user_id,
+            tenant_id,
         )
         if not row:
             return None
@@ -276,12 +276,12 @@ class ImportantDatesRepository(Repository):
         return await self._update("id", date_id, updates)
 
     async def delete_important_date(
-        self, user_id: str, date_id: str
+        self, tenant_id: str, date_id: str
     ) -> bool:
         """Delete an important date. Returns True if deleted."""
         result = await self.db.execute(
-            "DELETE FROM important_dates WHERE id = $1 AND user_id = $2",
+            "DELETE FROM important_dates WHERE id = $1 AND tenant_id = $2",
             date_id,
-            user_id,
+            tenant_id,
         )
         return result == "DELETE 1"
