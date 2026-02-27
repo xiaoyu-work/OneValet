@@ -234,12 +234,12 @@ class AgentRegistry:
         """
         Get formatted agent descriptions for LLM routing prompt.
 
-        Includes all available info: description, inputs, outputs.
+        Includes descriptions, capabilities, available tools, and inputs/outputs.
         Applies the same tenant-aware filtering as get_all_agent_tool_schemas.
         """
         tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
-        lines = ["Available agents:"]
+        lines = []
 
         for name, metadata in self._get_agent_registry().items():
             if not self._agent_available_for_tenant(metadata, tenant_services):
@@ -248,14 +248,18 @@ class AgentRegistry:
             description = metadata.description or metadata.agent_class.__doc__ or ""
             lines.append(f"- **{name}**: {description}")
 
-            # Inputs
-            if metadata.inputs:
-                input_strs = [f"{i.name}" for i in metadata.inputs]
-                lines.append(f"  - Inputs: {', '.join(input_strs)}")
+            # Capabilities (keywords for intent matching)
+            capabilities = metadata.capabilities
+            if capabilities:
+                lines.append(f"  Keywords: {', '.join(capabilities)}")
 
-            # Outputs
-            if metadata.outputs:
-                output_strs = [f"{o.name}" for o in metadata.outputs]
-                lines.append(f"  - Outputs: {', '.join(output_strs)}")
+            # Tools available to this agent
+            agent_tools = getattr(metadata.agent_class, 'tools', ())
+            if agent_tools:
+                tool_names = []
+                for t in agent_tools:
+                    tname = getattr(t, 'name', None) or getattr(t, '__name__', str(t))
+                    tool_names.append(tname)
+                lines.append(f"  Tools: {', '.join(tool_names)}")
 
         return "\n".join(lines)

@@ -73,7 +73,7 @@ from .react_config import (
 from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
-from .prompts import DEFAULT_SYSTEM_PROMPT
+from .prompts import build_system_prompt, DEFAULT_SYSTEM_PROMPT
 from .audit_logger import AuditLogger
 from .tool_policy import ToolPolicyFilter
 from .transcript_repair import repair_transcript
@@ -387,7 +387,7 @@ class Orchestrator:
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
 
         # Step 5: Build LLM messages
-        messages = self._build_llm_messages(context, message)
+        messages = await self._build_llm_messages(context, message)
 
         # Step 6: Run ReAct loop (consume events silently)
         exec_data: Dict[str, Any] = {}
@@ -504,7 +504,7 @@ class Orchestrator:
         # Build tool schemas (all lightweight — ReAct picks directly)
         tool_schemas = await self._build_tool_schemas(tenant_id)
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
-        messages = self._build_llm_messages(context, message)
+        messages = await self._build_llm_messages(context, message)
 
         # Delegate to shared ReAct loop
         final_response = ""
@@ -1385,7 +1385,7 @@ class Orchestrator:
                 agent_id=agent.agent_id,
             )
 
-    def _build_llm_messages(
+    async def _build_llm_messages(
         self,
         context: Dict[str, Any],
         user_message: str,
@@ -1399,40 +1399,42 @@ class Orchestrator:
         """
         messages: List[Dict[str, Any]] = []
 
-        # System prompt: built-in base + optional user customization
-        system_parts = [DEFAULT_SYSTEM_PROMPT]
+        # Dynamic system prompt: built from live agent registry
+        agent_descriptions = ""
+        if self._agent_registry:
+            try:
+                agent_descriptions = await self._agent_registry.get_agent_descriptions(
+                    tenant_id=context.get("tenant_id"),
+                    credential_store=self.credential_store,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to get agent descriptions: {e}")
+
+        system_prompt = build_system_prompt(agent_descriptions=agent_descriptions)
+
+        system_parts = [system_prompt]
         if self.system_prompt:
             system_parts.append(self.system_prompt)
 
-        # Framework context
-        framework_parts = []
+        # Runtime context
         now = datetime.now(timezone.utc)
-        framework_parts.append(f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        system_parts.append(f"\n[Context]\nCurrent time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-        if framework_parts:
-            system_parts.append("\n[Context]\n" + "\n".join(framework_parts))
-
-        # NOTE: The system prompt lists agent/tool names as a routing table
-        # so the LLM knows WHICH tool to call for each domain. The detailed
-        # schemas are still passed only via the native `tools` parameter.
-
-        # Change F: Add Tier 2 agent catalog for delegate_to_agent
+        # Tier 2 agent catalog (for delegate_to_agent awareness)
         tier2 = getattr(self, "_tier2_agent_schemas", [])
         if tier2:
-            catalog_lines = ["## Available agents (use delegate_to_agent to invoke):"]
+            catalog_lines = ["## Tier 2 Agents (use delegate_to_agent to invoke):"]
             for schema in tier2:
                 name = self._tool_name_from_schema(schema) or "unknown"
                 desc = (schema.get("function", {}).get("description", "") or "")
-                # Use first sentence of description for brevity
                 short_desc = desc.split(".")[0] if desc else name
                 catalog_lines.append(f"- {name}: {short_desc}")
             system_parts.append("\n".join(catalog_lines))
 
-        if system_parts:
-            messages.append({
-                "role": "system",
-                "content": "\n\n".join(system_parts),
-            })
+        messages.append({
+            "role": "system",
+            "content": "\n\n".join(system_parts),
+        })
 
         # Conversation history (from Momex short-term memory)
         history = context.get("conversation_history", [])

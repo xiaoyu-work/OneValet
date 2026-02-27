@@ -31,38 +31,51 @@ Even for simple questions (greetings, factual knowledge, math), call `complete_t
 """.strip()
 
 
-def render_tool_routing(agent_tools: Optional[List[Dict[str, str]]] = None) -> str:
-    """Render the domain → agent routing table.
+def render_tool_routing(agent_descriptions: str = "") -> str:
+    """Render the agent routing section.
 
     Args:
-        agent_tools: List of {"domain": ..., "agent": ...} dicts.
-            If None, uses the built-in default routing table.
+        agent_descriptions: Dynamic agent catalog from registry.
+            Contains agent names, descriptions, capabilities, and tools.
+            If empty, renders a minimal fallback.
     """
-    if agent_tools:
-        lines = [f"- {t['domain']} → use {t['agent']}" for t in agent_tools]
-        routing_table = "\n".join(lines)
+    if agent_descriptions:
+        return f"""
+# Agent Routing
+
+You have access to specialized agents below. Each agent handles a specific domain.
+Select the best matching agent based on the user's intent. When in doubt, use a tool — it is better to call a tool and get fresh data than guess from training data.
+
+{agent_descriptions}
+""".strip()
     else:
-        routing_table = """\
-- Travel and trips: flights, hotels, weather, itinerary → TripPlannerAgent
-- Email: reading, sending, replying, deleting → EmailAgent
-- Calendar: schedule, creating/updating events → CalendarAgent
-- Tasks and reminders: todo lists, reminders → TodoAgent
-- Maps and places: directions, restaurants, POI → MapsAgent
-- Shipments: package tracking, delivery status → ShippingAgent
-- Smart home: lights, speakers → SmartHomeAgent
-- Notion: pages, databases → NotionAgent
-- Google Workspace: docs, sheets, drive → GoogleWorkspaceAgent
-- Important dates: birthdays, anniversaries → important dates tools
-- Web search: current events, fact-checking → google_search"""
+        return """
+# Agent Routing
 
-    return f"""
-# Tool Routing
-
-You MUST use the appropriate tool or agent for these domains. Never answer from training data when a tool is available.
-
-{routing_table}
-
+You MUST use the appropriate tool or agent for user requests. Never answer from training data when a tool is available.
 When in doubt, use a tool. It is better to call a tool and get fresh data than guess.
+""".strip()
+
+
+def render_routing_examples() -> str:
+    """Few-shot examples for intent → agent routing."""
+    return """
+# Routing Examples
+
+These examples show how to map user intent to the correct agent:
+
+- "Check my inbox" / "有新邮件吗" → EmailAgent
+- "Send an email to John" / "给张三发邮件" → EmailAgent
+- "What's on my schedule today" / "今天有什么安排" → CalendarAgent
+- "Create a meeting at 3pm" / "下午三点开会" → CalendarAgent
+- "Plan a trip to Tokyo" / "帮我规划东京旅行" → TripPlannerAgent
+- "Track my package" / "查快递" → ShippingAgent
+- "Remind me to call mom" / "提醒我打电话" → TodoAgent
+- "Find nearby coffee shops" / "附近有什么咖啡店" → MapsAgent
+- "Turn off the lights" / "关灯" → SmartHomeAgent
+- "What's the weather in Seattle" → use check_weather tool directly or TripPlannerAgent
+- "Hello" / "你好" → complete_task (no agent needed, just greet back)
+- "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()
 
 
@@ -183,14 +196,15 @@ def render_negative_rules() -> str:
 
 def build_system_prompt(
     *,
-    agent_tools: Optional[List[Dict[str, str]]] = None,
+    agent_descriptions: str = "",
     include_memory: bool = True,
     custom_instructions: str = "",
 ) -> str:
     """Build the full system prompt from modular sections.
 
     Args:
-        agent_tools: Custom domain→agent routing table. None = use defaults.
+        agent_descriptions: Dynamic agent catalog from registry.
+            Contains names, descriptions, capabilities, and tool lists.
         include_memory: Whether to include memory usage section.
         custom_instructions: Extra instructions appended at the end.
 
@@ -200,7 +214,8 @@ def build_system_prompt(
     sections = [
         render_preamble(),
         render_complete_task_mandate(),
-        render_tool_routing(agent_tools),
+        render_tool_routing(agent_descriptions),
+        render_routing_examples(),
         render_workflow(),
         render_tool_usage(),
         render_presenting_results(),
@@ -219,5 +234,5 @@ def build_system_prompt(
     return "\n\n".join(sections)
 
 
-# Default prompt — backward-compatible with existing code
+# Fallback prompt — used when registry is not available
 DEFAULT_SYSTEM_PROMPT = build_system_prompt()
