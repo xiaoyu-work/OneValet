@@ -26,10 +26,117 @@ class ImportantDatesRepository(Repository):
             relationship TEXT,
             recurring BOOLEAN DEFAULT TRUE,
             remind_days_before JSONB DEFAULT '[0, 1, 7]',
+            description TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            last_reminded_year INTEGER,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )
     """
+
+    SETUP_SQL = [
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_user_id ON important_dates (user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_date ON important_dates (date)",
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_user_date ON important_dates (user_id, date)",
+        "CREATE INDEX IF NOT EXISTS idx_important_dates_is_active ON important_dates (is_active)",
+        """
+        CREATE OR REPLACE FUNCTION get_upcoming_important_dates(
+            p_user_id TEXT,
+            p_days_ahead INTEGER DEFAULT 7
+        )
+        RETURNS TABLE (
+            id UUID,
+            title TEXT,
+            description TEXT,
+            original_date DATE,
+            upcoming_date DATE,
+            days_until INTEGER,
+            date_type TEXT,
+            person_name TEXT,
+            relationship TEXT,
+            remind_days_before JSONB
+        )
+        LANGUAGE sql STABLE
+        AS $$
+            SELECT
+                d.id,
+                d.title,
+                d.description,
+                d.date AS original_date,
+                CASE
+                    WHEN d.recurring THEN
+                        CASE
+                            WHEN make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) >= CURRENT_DATE
+                            THEN make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 )
+                            ELSE make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int + 1,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 )
+                        END
+                    ELSE d.date
+                END AS upcoming_date,
+                CASE
+                    WHEN d.recurring THEN
+                        CASE
+                            WHEN make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) >= CURRENT_DATE
+                            THEN (make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) - CURRENT_DATE)::int
+                            ELSE (make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int + 1,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) - CURRENT_DATE)::int
+                        END
+                    ELSE (d.date - CURRENT_DATE)::int
+                END AS days_until,
+                d.date_type,
+                d.person_name,
+                d.relationship,
+                d.remind_days_before
+            FROM important_dates d
+            WHERE d.user_id = p_user_id
+              AND d.is_active = TRUE
+              AND CASE
+                    WHEN d.recurring THEN
+                        CASE
+                            WHEN make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) >= CURRENT_DATE
+                            THEN (make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) - CURRENT_DATE)::int
+                            ELSE (make_date(
+                                    EXTRACT(YEAR FROM CURRENT_DATE)::int + 1,
+                                    EXTRACT(MONTH FROM d.date)::int,
+                                    EXTRACT(DAY FROM d.date)::int
+                                 ) - CURRENT_DATE)::int
+                        END
+                    ELSE (d.date - CURRENT_DATE)::int
+                  END <= p_days_ahead
+            ORDER BY days_until ASC;
+        $$
+        """,
+    ]
 
     async def get_today_important_dates(
         self, user_id: str

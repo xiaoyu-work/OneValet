@@ -8,7 +8,6 @@ Usage (shared pool — recommended):
     db = Database(dsn="postgresql://...")
     await db.initialize()
     store = CredentialStore(db=db)
-    await store.ensure_table()
 
 Usage (standalone — backward compatible):
     store = CredentialStore(dsn="postgresql://...")
@@ -53,6 +52,23 @@ class CredentialStore(Repository):
         PRIMARY KEY (tenant_id, service, account_name)
     )
     """
+    SETUP_SQL = [
+        # Email lookup index for webhook handlers
+        "CREATE INDEX IF NOT EXISTS idx_credentials_email ON credentials ((credentials_json->>'email'))",
+        # OAuth state tokens with automatic expiration
+        """
+        CREATE TABLE IF NOT EXISTS oauth_states (
+            state TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL,
+            service TEXT NOT NULL,
+            redirect_after TEXT,
+            account_name TEXT NOT NULL DEFAULT 'primary',
+            extra_data JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
+        )
+        """,
+    ]
 
     def __init__(self, db: Database = None, dsn: str = None):
         """
@@ -76,12 +92,6 @@ class CredentialStore(Repository):
         if self._standalone:
             await self._db.initialize()
         await self.ensure_table()
-        # Email lookup index for webhook handlers
-        await self.db.execute(
-            "CREATE INDEX IF NOT EXISTS idx_credentials_email "
-            "ON credentials ((credentials_json->>'email'))"
-        )
-        await self._ensure_oauth_states_table()
         logger.info("CredentialStore initialized")
 
     async def close(self) -> None:
@@ -221,21 +231,6 @@ class CredentialStore(Repository):
         }
 
     # ─── OAuth State Management ───
-
-    async def _ensure_oauth_states_table(self) -> None:
-        """Create oauth_states table if it doesn't exist."""
-        await self.db.execute("""
-            CREATE TABLE IF NOT EXISTS oauth_states (
-                state TEXT PRIMARY KEY,
-                tenant_id TEXT NOT NULL,
-                service TEXT NOT NULL,
-                redirect_after TEXT,
-                account_name TEXT NOT NULL DEFAULT 'primary',
-                extra_data JSONB,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
-            )
-        """)
 
     async def save_oauth_state(
         self,

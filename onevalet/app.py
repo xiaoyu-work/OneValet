@@ -114,15 +114,15 @@ class OneValet:
         self._llm_client = LiteLLMClient(config=llm_config, provider_name=provider)
         logger.info(f"LLM client: provider={provider}, model={model}")
 
-        # 2. Database + all tables
-        from .db import Database, ensure_schema
+        # 2. Database
+        from .db import Database
         self._database = Database(dsn=cfg["database"])
         await self._database.initialize()
-        await ensure_schema(self._database)
 
-        # 3. CredentialStore
+        # 3. CredentialStore (ensure_table creates credentials + oauth_states tables)
         from .credentials import CredentialStore
         self._credential_store = CredentialStore(db=self._database)
+        await self._credential_store.initialize()
 
         # Set default store for AccountResolver (agents call it as classmethod)
         from .providers.email.resolver import AccountResolver
