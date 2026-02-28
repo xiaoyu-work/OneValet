@@ -336,6 +336,16 @@ class OneDriveProvider(BaseCloudStorageProvider):
             logger.error(f"OneDrive get storage usage error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def upload_file(
+        self,
+        file_name: str,
+        file_data: bytes,
+        mime_type: str = "image/jpeg",
+        folder_path: str = "",
+    ) -> Dict[str, Any]:
+        """Upload a file to OneDrive. Not yet implemented."""
+        return {"success": False, "error": "OneDrive upload not implemented yet"}
+
     async def refresh_access_token(self) -> Dict[str, Any]:
         """Refresh Microsoft OAuth token for OneDrive."""
         try:

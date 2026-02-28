@@ -375,6 +375,138 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             logger.error(f"Drive share error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def _find_or_create_folder(
+        self, client: httpx.AsyncClient, folder_name: str, parent_id: str = "root",
+    ) -> str:
+        """Find a folder by name under a parent, or create it. Returns folder ID."""
+        q = (
+            f"name = '{folder_name}' and "
+            f"mimeType = 'application/vnd.google-apps.folder' and "
+            f"'{parent_id}' in parents and trashed = false"
+        )
+        resp = await client.get(
+            f"{DRIVE_API}/files",
+            headers=self._auth_headers(),
+            params={"q": q, "fields": "files(id)", "pageSize": 1},
+            timeout=10.0,
+        )
+        if resp.status_code == 200:
+            files = resp.json().get("files", [])
+            if files:
+                return files[0]["id"]
+
+        # Create folder
+        metadata = {
+            "name": folder_name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent_id],
+        }
+        resp = await client.post(
+            f"{DRIVE_API}/files",
+            headers={**self._auth_headers(), "Content-Type": "application/json"},
+            json=metadata,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    async def _ensure_folder_path(
+        self, client: httpx.AsyncClient, folder_path: str,
+    ) -> str:
+        """Ensure a nested folder path exists (e.g. 'OneValet/Receipts/2026-02').
+        Returns the leaf folder ID."""
+        parent_id = "root"
+        for part in folder_path.strip("/").split("/"):
+            if not part:
+                continue
+            parent_id = await self._find_or_create_folder(client, part, parent_id)
+        return parent_id
+
+    async def upload_file(
+        self,
+        file_name: str,
+        file_data: bytes,
+        mime_type: str = "image/jpeg",
+        folder_path: str = "",
+    ) -> Dict[str, Any]:
+        """Upload a file to Google Drive.
+
+        Uses multipart upload (metadata + media) to Drive API v3.
+        Creates the folder path if it doesn't exist.
+        """
+        try:
+            if not await self.ensure_valid_token():
+                return {"success": False, "error": "Failed to refresh access token"}
+
+            async with httpx.AsyncClient() as client:
+                # Ensure folder exists
+                parent_id = "root"
+                if folder_path:
+                    parent_id = await self._ensure_folder_path(client, folder_path)
+
+                # Multipart upload: metadata + file content
+                import json as _json
+
+                metadata = {"name": file_name, "parents": [parent_id]}
+                metadata_bytes = _json.dumps(metadata).encode("utf-8")
+
+                # Build multipart/related body manually
+                boundary = "onevalet_upload_boundary"
+                body = (
+                    f"--{boundary}\r\n"
+                    f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                ).encode("utf-8")
+                body += metadata_bytes
+                body += (
+                    f"\r\n--{boundary}\r\n"
+                    f"Content-Type: {mime_type}\r\n\r\n"
+                ).encode("utf-8")
+                body += file_data
+                body += f"\r\n--{boundary}--".encode("utf-8")
+
+                resp = await client.post(
+                    "https://www.googleapis.com/upload/drive/v3/files",
+                    headers={
+                        **self._auth_headers(),
+                        "Content-Type": f"multipart/related; boundary={boundary}",
+                    },
+                    params={"uploadType": "multipart", "fields": "id,name,webViewLink"},
+                    content=body,
+                    timeout=60.0,
+                )
+
+                if resp.status_code == 401:
+                    if await self.ensure_valid_token(force_refresh=True):
+                        resp = await client.post(
+                            "https://www.googleapis.com/upload/drive/v3/files",
+                            headers={
+                                **self._auth_headers(),
+                                "Content-Type": f"multipart/related; boundary={boundary}",
+                            },
+                            params={"uploadType": "multipart", "fields": "id,name,webViewLink"},
+                            content=body,
+                            timeout=60.0,
+                        )
+
+                if resp.status_code not in (200, 201):
+                    logger.error(f"Drive upload failed: {resp.status_code} - {resp.text}")
+                    return {"success": False, "error": f"Drive API error: {resp.status_code}"}
+
+                data = resp.json()
+                logger.info(f"Drive uploaded file: {file_name} -> {data.get('id')}")
+                return {
+                    "success": True,
+                    "data": {
+                        "id": data.get("id", ""),
+                        "url": data.get("webViewLink", ""),
+                        "name": data.get("name", file_name),
+                    },
+                }
+
+        except Exception as e:
+            logger.error(f"Drive upload error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
     async def get_storage_usage(self) -> Dict[str, Any]:
         """Get Google Drive storage usage information."""
         try:

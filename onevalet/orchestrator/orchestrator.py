@@ -369,9 +369,14 @@ class Orchestrator:
 
         # Store request metadata for tool execution context
         self._current_metadata = metadata or {}
+        self._current_user_images = images
 
         # Step 1: Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
+
+        # Store images in context so agent tools can access them (e.g. receipt scanning)
+        if images:
+            context["user_images"] = images
 
         # Step 2: Check if should process
         if not await self.should_process(message, context):
@@ -507,9 +512,14 @@ class Orchestrator:
 
         # Store request metadata for tool execution context
         self._current_metadata = metadata or {}
+        self._current_user_images = images
 
         # Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
+
+        # Store images in context so agent tools can access them
+        if images:
+            context["user_images"] = images
 
         # Check if should process
         if not await self.should_process(message, context):

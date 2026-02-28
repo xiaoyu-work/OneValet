@@ -130,6 +130,29 @@ class BaseCloudStorageProvider(ABC):
         pass
 
     @abstractmethod
+    async def upload_file(
+        self,
+        file_name: str,
+        file_data: bytes,
+        mime_type: str = "image/jpeg",
+        folder_path: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Upload a file to cloud storage.
+
+        Args:
+            file_name: Name for the uploaded file.
+            file_data: Raw file bytes.
+            mime_type: MIME type of the file.
+            folder_path: Slash-separated folder path (e.g. "OneValet/Receipts/2026-02").
+                         Folders are created if they don't exist.
+
+        Returns:
+            {"success": bool, "data": {"id": str, "url": str, "name": str}, "error": str}
+        """
+        pass
+
+    @abstractmethod
     async def refresh_access_token(self) -> Dict[str, Any]:
         """Refresh OAuth access token."""
         pass

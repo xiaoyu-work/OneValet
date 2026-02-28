@@ -435,6 +435,16 @@ class DropboxProvider(BaseCloudStorageProvider):
             logger.error(f"Dropbox get_storage_usage error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    async def upload_file(
+        self,
+        file_name: str,
+        file_data: bytes,
+        mime_type: str = "image/jpeg",
+        folder_path: str = "",
+    ) -> Dict[str, Any]:
+        """Upload a file to Dropbox. Not yet implemented."""
+        return {"success": False, "error": "Dropbox upload not implemented yet"}
+
     async def refresh_access_token(self) -> Dict[str, Any]:
         """Refresh the Dropbox OAuth2 access token using a refresh token."""
         try:

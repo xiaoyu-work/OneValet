@@ -314,6 +314,18 @@ class OneValet:
         # 9. Load API key credentials into env vars for agent access
         await self._load_api_keys_to_env()
 
+        # 10. Ensure expense/budget/receipt tables exist
+        try:
+            from .builtin_agents.expense.repository import ExpenseRepository
+            from .builtin_agents.expense.budget_repository import BudgetRepository
+            from .builtin_agents.expense.receipt_repository import ReceiptRepository
+            for RepoClass in (ExpenseRepository, BudgetRepository, ReceiptRepository):
+                repo = RepoClass(self._database)
+                await repo.ensure_table()
+            logger.info("Expense/budget/receipt tables ensured")
+        except Exception as e:
+            logger.warning(f"Could not initialize expense tables: {e}")
+
         self._initialized = True
         logger.info("OneValet initialized")
 

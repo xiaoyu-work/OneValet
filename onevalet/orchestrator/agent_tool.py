@@ -101,6 +101,10 @@ async def execute_agent_tool(
         enriched_hints["trigger_engine"] = orchestrator.trigger_engine
         if orchestrator.trigger_engine.cron_service:
             enriched_hints["cron_service"] = orchestrator.trigger_engine.cron_service
+    # Pass user images to agent tools (e.g. for receipt scanning)
+    current_images = getattr(orchestrator, "_current_user_images", None)
+    if current_images:
+        enriched_hints["user_images"] = current_images
 
     # Pass structured handoff via context_hints
     enriched_hints["handoff"] = {
