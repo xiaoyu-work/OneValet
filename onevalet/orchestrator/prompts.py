@@ -210,6 +210,23 @@ After completing all steps, synthesize results and call `complete_task`.
 """.strip()
 
 
+def render_pending_plan(plan_text: str) -> str:
+    """Inject a pending plan the user has not yet approved/rejected."""
+    return f"""
+# Pending Plan
+
+You proposed the following plan in your previous turn:
+
+{plan_text}
+
+The user has now responded. Based on their response:
+- If they approve (e.g. "go ahead", "yes", "ok", or any affirmative): Execute the plan immediately by calling the appropriate tools in order.
+- If they want modifications (e.g. "change step 3", "add weather check"): Adjust the plan and execute the modified version.
+- If they reject (e.g. "never mind", "cancel", "no"): Acknowledge politely and call `complete_task`.
+- If they say something unrelated to the plan: Ignore the plan and handle the new request.
+""".strip()
+
+
 def render_negative_rules() -> str:
     """Things the LLM should never do."""
     return """
@@ -234,6 +251,7 @@ def build_system_prompt(
     include_memory: bool = True,
     include_planning: bool = False,
     approved_plan: str = "",
+    pending_plan: str = "",
     custom_instructions: str = "",
 ) -> str:
     """Build the full system prompt from modular sections.
@@ -244,6 +262,7 @@ def build_system_prompt(
         include_memory: Whether to include memory usage section.
         include_planning: Whether to include planning instructions.
         approved_plan: If set, injects the approved plan for execution.
+        pending_plan: If set, injects a plan awaiting user response.
         custom_instructions: Extra instructions appended at the end.
 
     Returns:
@@ -268,6 +287,9 @@ def build_system_prompt(
 
     if approved_plan:
         sections.insert(3, render_approved_plan(approved_plan))
+
+    if pending_plan:
+        sections.insert(3, render_pending_plan(pending_plan))
 
     if include_memory:
         sections.append(render_memory_usage())

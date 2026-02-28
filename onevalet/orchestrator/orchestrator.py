@@ -265,6 +265,7 @@ class Orchestrator:
 
         # State
         self._initialized = False
+        self._pending_plan: Optional[Dict[str, Any]] = None
 
     @property
     def agent_registry(self) -> Optional[AgentRegistry]:
@@ -612,13 +613,23 @@ class Orchestrator:
         if enable_reasoning:
             logger.info(f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})")
 
-        # ── Planning phase for complex requests ──
-        approved_plan = None
+        # ── Planning phase ──
         enable_planning = routing_score >= self._react_config.planning_score_threshold
-        if enable_planning:
+
+        # Case 1: Pending plan from previous turn — user is responding to it
+        if self._pending_plan and context:
+            pending_plan_text = self._format_plan_text(self._pending_plan)
+            self._pending_plan = None  # consumed
+            logger.info("[ReAct] Pending plan found, injecting into prompt for LLM to handle")
+            messages = await self._build_llm_messages(
+                context, user_message, pending_plan=pending_plan_text,
+            )
+            enable_planning = False  # don't re-plan
+
+        # Case 2: New complex request — generate plan and present to user
+        elif enable_planning:
             logger.info(f"[ReAct] Planning phase triggered (score={routing_score})")
             try:
-                # Build separate planning messages with planning instructions
                 plan_messages = await self._build_llm_messages(
                     context, user_message, include_planning=True,
                 )
@@ -628,18 +639,42 @@ class Orchestrator:
                     llm_client_override=routed_llm_client,
                 )
                 plan_data = self._extract_plan_from_response(plan_response)
-                if plan_data:
+                if plan_data and self._react_config.planning_requires_approval:
+                    # Present plan to user, pause execution
+                    plan_text = self._format_plan_text(plan_data)
+                    friendly = self._format_plan_for_user(plan_data)
+                    self._pending_plan = plan_data
+                    logger.info(f"[ReAct] Plan generated, awaiting approval: {plan_data.get('goal', '')}")
+                    yield AgentEvent(
+                        type=EventType.PLAN_GENERATED,
+                        data={"plan": plan_data, "plan_text": plan_text},
+                    )
+                    # End this turn — return plan as the response
+                    duration_ms = int((time.monotonic() - start_time) * 1000)
+                    yield AgentEvent(
+                        type=EventType.EXECUTION_END,
+                        data={
+                            "final_response": friendly,
+                            "result_status": "WAITING_FOR_APPROVAL",
+                            "turns": 0,
+                            "tool_calls": [],
+                            "token_usage": {"input_tokens": 0, "output_tokens": 0},
+                            "duration_ms": duration_ms,
+                            "pending_approvals": [],
+                        },
+                    )
+                    return  # stop the generator — user needs to respond
+
+                elif plan_data:
+                    # Auto-execute without approval
                     plan_text = self._format_plan_text(plan_data)
                     yield AgentEvent(
                         type=EventType.PLAN_GENERATED,
                         data={"plan": plan_data, "plan_text": plan_text},
                     )
-                    approved_plan = plan_text
-                    logger.info(f"[ReAct] Plan generated: {plan_data.get('goal', '')}")
-
-                    # Rebuild main messages with approved plan injected
+                    logger.info(f"[ReAct] Plan auto-approved: {plan_data.get('goal', '')}")
                     messages = await self._build_llm_messages(
-                        context, user_message, approved_plan=approved_plan,
+                        context, user_message, approved_plan=plan_text,
                     )
                 else:
                     logger.info("[ReAct] LLM did not generate a plan, proceeding directly")
@@ -1232,6 +1267,22 @@ class Orchestrator:
                 lines.append(f"   Reason: {step['reason']}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _format_plan_for_user(plan_data: Dict[str, Any]) -> str:
+        """Format plan as a friendly user-facing message."""
+        lines = [plan_data.get("goal", "")]
+        lines.append("")
+        for step in plan_data.get("steps", []):
+            deps = step.get("depends_on", [])
+            if deps:
+                dep_str = f" (after step {', '.join(map(str, deps))})"
+            else:
+                dep_str = ""
+            lines.append(f"{step['id']}. {step['action']}{dep_str}")
+        lines.append("")
+        lines.append("Ready to execute. You can approve, modify, or cancel.")
+        return "\n".join(lines)
+
     async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
         """Execute a single tool/agent-tool with timeout."""
         tool_name = tool_call.name
@@ -1521,6 +1572,7 @@ class Orchestrator:
         *,
         include_planning: bool = False,
         approved_plan: str = "",
+        pending_plan: str = "",
     ) -> List[Dict[str, Any]]:
         """Build the initial LLM message list.
 
@@ -1532,6 +1584,7 @@ class Orchestrator:
         Args:
             include_planning: If True, adds planning instructions to prompt.
             approved_plan: If set, injects the approved plan for execution.
+            pending_plan: If set, injects a pending plan awaiting user response.
         """
         messages: List[Dict[str, Any]] = []
 
@@ -1550,6 +1603,7 @@ class Orchestrator:
             agent_descriptions=agent_descriptions,
             include_planning=include_planning,
             approved_plan=approved_plan,
+            pending_plan=pending_plan,
         )
 
         system_parts = [system_prompt]
