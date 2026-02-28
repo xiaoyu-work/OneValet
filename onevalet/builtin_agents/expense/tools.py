@@ -165,7 +165,7 @@ async def _budget_warning(budget_repo, expense_repo, tenant_id: str,
     # Check category-specific budget
     cat_budget = await budget_repo.get_budget(tenant_id, category)
     if cat_budget:
-        cat_total = await expense_repo.monthly_total(tenant_id, today.year, today.month)
+        cat_total = await expense_repo.monthly_total(tenant_id, today.year, today.month, category=category)
         limit = cat_budget.get("monthly_limit", 0)
         if limit > 0:
             pct = (cat_total / limit) * 100
@@ -213,7 +213,7 @@ async def log_expense(
     category: Annotated[str, "Expense category: food, transport, shopping, entertainment, housing, health, education, or other."],
     description: Annotated[str, "Brief description of the expense (e.g. 'lunch at cafe')."] = "",
     merchant: Annotated[str, "Merchant or vendor name (e.g. 'Starbucks')."] = "",
-    date: Annotated[str, "Date of expense: 'today', 'yesterday', or YYYY-MM-DD. Defaults to today."] = "today",
+    expense_date: Annotated[str, "Date of expense: 'today', 'yesterday', or YYYY-MM-DD. Defaults to today."] = "today",
     currency: Annotated[str, "Currency code (e.g. USD, EUR). Defaults to USD."] = "USD",
     *,
     context: AgentToolContext,
@@ -224,9 +224,9 @@ async def log_expense(
         return "Expense tracking is not available. Database not configured."
 
     try:
-        expense_date = _parse_date(date)
+        parsed_date = _parse_date(expense_date)
     except Exception:
-        expense_date = _parse_date("today")
+        parsed_date = _parse_date("today")
 
     category_lower = category.strip().lower()
 
@@ -237,7 +237,7 @@ async def log_expense(
             category=category_lower,
             description=description,
             merchant=merchant,
-            date=expense_date,
+            date=parsed_date,
             currency=currency.upper(),
         )
     except Exception as e:
@@ -549,8 +549,12 @@ async def budget_status(
         limit = budget.get("monthly_limit", 0)
         currency = budget.get("currency", "USD")
 
-        # monthly_total returns total across all categories
-        spent = await expense_repo.monthly_total(context.tenant_id, today.year, today.month)
+        if cat == "_total":
+            spent = await expense_repo.monthly_total(context.tenant_id, today.year, today.month)
+        else:
+            spent = await expense_repo.monthly_total(
+                context.tenant_id, today.year, today.month, category=cat,
+            )
 
         remaining = limit - spent
         pct = (spent / limit * 100) if limit > 0 else 0

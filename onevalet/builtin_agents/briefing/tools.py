@@ -33,7 +33,10 @@ def _get_cron_service(context: AgentToolContext):
 
 def _find_briefing_job(cron_service, tenant_id: str):
     """Find the existing Daily Briefing cron job by name, if any."""
-    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    try:
+        jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    except Exception:
+        return None
     for job in jobs:
         if job.name == BRIEFING_JOB_NAME:
             return job
@@ -147,8 +150,8 @@ async def get_briefing(*, context: AgentToolContext) -> str:
 
 @tool
 async def setup_daily_briefing(
-    time: Annotated[str, "Time for the daily briefing in HH:MM 24-hour format (e.g. '08:00')."] = "08:00",
-    timezone: Annotated[str, "IANA timezone for scheduling (e.g. 'America/New_York'). Leave empty for server default."] = "",
+    schedule_time: Annotated[str, "Time for the daily briefing in HH:MM 24-hour format (e.g. '08:00')."] = "08:00",
+    tz: Annotated[str, "IANA timezone for scheduling (e.g. 'America/New_York'). Leave empty for server default."] = "",
     *, context: AgentToolContext,
 ) -> str:
     """Set up or update a recurring daily briefing delivered each morning at the specified time."""
@@ -158,13 +161,13 @@ async def setup_daily_briefing(
 
     # Parse time
     try:
-        parts = time.strip().split(":")
+        parts = schedule_time.strip().split(":")
         hour = int(parts[0])
         minute = int(parts[1]) if len(parts) > 1 else 0
         if not (0 <= hour <= 23 and 0 <= minute <= 59):
             raise ValueError("out of range")
     except (ValueError, IndexError):
-        return f"Invalid time format: '{time}'. Please use HH:MM 24-hour format (e.g. '08:00')."
+        return f"Invalid time format: '{schedule_time}'. Please use HH:MM 24-hour format (e.g. '08:00')."
 
     from onevalet.triggers.cron.models import (
         CronScheduleSpec,
@@ -180,7 +183,7 @@ async def setup_daily_briefing(
     cron_expr = f"{minute} {hour} * * *"
     schedule = CronScheduleSpec(
         expr=cron_expr,
-        tz=timezone or None,
+        tz=tz or None,
     )
 
     # Check if a briefing job already exists
@@ -193,7 +196,7 @@ async def setup_daily_briefing(
                 enabled=True,
             )
             updated = await cron_service.update(existing.id, patch)
-            tz_str = f" ({timezone})" if timezone else ""
+            tz_str = f" ({tz})" if tz else ""
             return (
                 f"Updated daily briefing schedule to {hour:02d}:{minute:02d}{tz_str}.\n"
                 f"Job ID: {updated.id}\n"
@@ -221,7 +224,7 @@ async def setup_daily_briefing(
 
     try:
         job = await cron_service.add(job_input)
-        tz_str = f" ({timezone})" if timezone else ""
+        tz_str = f" ({tz})" if tz else ""
         return (
             f"Daily briefing scheduled at {hour:02d}:{minute:02d}{tz_str}.\n"
             f"Job ID: {job.id}\n"

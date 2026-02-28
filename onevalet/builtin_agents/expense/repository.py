@@ -136,19 +136,32 @@ class ExpenseRepository(Repository):
         return [dict(r) for r in rows]
 
     async def monthly_total(
-        self, tenant_id: str, year: int, month: int
+        self, tenant_id: str, year: int, month: int,
+        category: Optional[str] = None,
     ) -> float:
-        """Return the total expense amount for a given month."""
-        row = await self._db.fetchrow(
-            "SELECT COALESCE(SUM(amount), 0) AS total "
-            "FROM expenses "
-            "WHERE tenant_id = $1 "
-            "AND EXTRACT(YEAR FROM date) = $2 "
-            "AND EXTRACT(MONTH FROM date) = $3",
-            tenant_id,
-            year,
-            month,
-        )
+        """Return the total expense amount for a given month.
+
+        If *category* is provided, returns the total for that category only.
+        """
+        if category is not None:
+            row = await self._db.fetchrow(
+                "SELECT COALESCE(SUM(amount), 0) AS total "
+                "FROM expenses "
+                "WHERE tenant_id = $1 "
+                "AND EXTRACT(YEAR FROM date) = $2 "
+                "AND EXTRACT(MONTH FROM date) = $3 "
+                "AND category = $4",
+                tenant_id, year, month, category,
+            )
+        else:
+            row = await self._db.fetchrow(
+                "SELECT COALESCE(SUM(amount), 0) AS total "
+                "FROM expenses "
+                "WHERE tenant_id = $1 "
+                "AND EXTRACT(YEAR FROM date) = $2 "
+                "AND EXTRACT(MONTH FROM date) = $3",
+                tenant_id, year, month,
+            )
         return float(row["total"]) if row else 0.0
 
     async def search(
