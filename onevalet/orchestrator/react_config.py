@@ -62,6 +62,15 @@ class ReactLoopConfig:
     """Ordered list of LLMRegistry provider names to try when the primary
     model fails after exhausting retries. Example: ["anthropic_main", "deepseek"]."""
 
+    # Planning
+    planning_score_threshold: int = 40
+    """Minimum complexity score to trigger planning phase. Requests with
+    router score >= this value will generate a plan before executing.
+    Set to 0 to always plan, 101 to never plan."""
+    planning_requires_approval: bool = True
+    """Whether to wait for user approval before executing the plan.
+    If False, plan is generated and executed automatically."""
+
     # Extended reasoning (provider-agnostic via litellm reasoning_effort)
     reasoning_score_threshold: int = 51
     """Minimum complexity score to enable reasoning. Requests with

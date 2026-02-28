@@ -56,6 +56,11 @@ class EventType(str, Enum):
     ERROR = "error"
     WARNING = "warning"
 
+    # Planning events
+    PLAN_GENERATED = "plan_generated"
+    PLAN_APPROVED = "plan_approved"
+    PLAN_REJECTED = "plan_rejected"
+
     # Workflow events
     WORKFLOW_START = "workflow_start"
     WORKFLOW_END = "workflow_end"

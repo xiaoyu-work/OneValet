@@ -47,6 +47,57 @@ SERVICE_GOOGLE_TASKS = "google_tasks"
 SERVICE_MICROSOFT_TODO = "microsoft_todo"
 TODO_SERVICES: Tuple[str, ...] = (SERVICE_TODOIST, SERVICE_GOOGLE_TASKS, SERVICE_MICROSOFT_TODO)
 
+GENERATE_PLAN_TOOL_NAME = "generate_plan"
+
+GENERATE_PLAN_SCHEMA: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": GENERATE_PLAN_TOOL_NAME,
+        "description": (
+            "Generate a step-by-step plan for complex multi-step requests. "
+            "Call this BEFORE executing any other tools when the task requires "
+            "multiple agents or steps. The plan will be shown to the user."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "type": "string",
+                    "description": "The user's goal in one sentence",
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "integer"},
+                            "action": {
+                                "type": "string",
+                                "description": "What to do in this step",
+                            },
+                            "agent": {
+                                "type": "string",
+                                "description": "Which agent or tool to use",
+                            },
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Step IDs this depends on (empty = can start immediately)",
+                            },
+                            "reason": {
+                                "type": "string",
+                                "description": "Why this step is needed",
+                            },
+                        },
+                        "required": ["id", "action", "agent"],
+                    },
+                },
+            },
+            "required": ["goal", "steps"],
+        },
+    },
+}
+
 COMPLETE_TASK_TOOL_NAME = "complete_task"
 
 COMPLETE_TASK_SCHEMA: Dict[str, Any] = {

@@ -176,6 +176,40 @@ You have access to the user's long-term memory via the `recall_memory` tool.
 """.strip()
 
 
+def render_planning_instructions() -> str:
+    """Instructions for the planning phase on complex requests."""
+    return """
+# Planning
+
+When you receive a complex request that involves multiple agents or steps, call `generate_plan` FIRST before executing any other tools. The plan will be shown to the user for review.
+
+Use `generate_plan` when the request involves:
+- Multiple domains (email + calendar, flights + hotels, weather + packing)
+- Sequential dependencies (need info from step A before step B)
+- Parallel opportunities (independent lookups that can happen simultaneously)
+- Multi-step workflows (plan a trip, organize a move, prepare for a meeting)
+
+Do NOT use `generate_plan` for:
+- Simple single-tool requests ("check my email", "what's the weather")
+- Greetings or small talk
+- Questions that need only one lookup
+""".strip()
+
+
+def render_approved_plan(plan_text: str) -> str:
+    """Inject an approved plan into the system prompt for execution."""
+    return f"""
+# Approved Plan
+
+Follow this approved plan strictly. Execute each step in order, respecting dependencies.
+Steps with no dependencies can be executed in parallel.
+
+{plan_text}
+
+After completing all steps, synthesize results and call `complete_task`.
+""".strip()
+
+
 def render_negative_rules() -> str:
     """Things the LLM should never do."""
     return """
@@ -198,6 +232,8 @@ def build_system_prompt(
     *,
     agent_descriptions: str = "",
     include_memory: bool = True,
+    include_planning: bool = False,
+    approved_plan: str = "",
     custom_instructions: str = "",
 ) -> str:
     """Build the full system prompt from modular sections.
@@ -206,6 +242,8 @@ def build_system_prompt(
         agent_descriptions: Dynamic agent catalog from registry.
             Contains names, descriptions, capabilities, and tool lists.
         include_memory: Whether to include memory usage section.
+        include_planning: Whether to include planning instructions.
+        approved_plan: If set, injects the approved plan for execution.
         custom_instructions: Extra instructions appended at the end.
 
     Returns:
@@ -224,6 +262,12 @@ def build_system_prompt(
         render_constraints(),
         render_negative_rules(),
     ]
+
+    if include_planning:
+        sections.insert(3, render_planning_instructions())
+
+    if approved_plan:
+        sections.insert(3, render_approved_plan(approved_plan))
 
     if include_memory:
         sections.append(render_memory_usage())

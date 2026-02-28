@@ -70,6 +70,7 @@ from .react_config import (
     ReactLoopConfig, ToolCallRecord, TokenUsage,
     COMPLETE_TASK_TOOL_NAME, COMPLETE_TASK_SCHEMA, CompleteTaskResult,
 )
+from ..constants import GENERATE_PLAN_TOOL_NAME, GENERATE_PLAN_SCHEMA
 from .context_manager import ContextManager
 from .agent_tool import execute_agent_tool, AgentToolResult
 from .approval import collect_batch_approvals
@@ -395,6 +396,8 @@ class Orchestrator:
             messages,
             tool_schemas,
             tenant_id,
+            context=context,
+            user_message=message,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
@@ -511,6 +514,7 @@ class Orchestrator:
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
             messages, tool_schemas, tenant_id,
+            context=context, user_message=message,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
@@ -544,6 +548,8 @@ class Orchestrator:
         tenant_id: str,
         first_turn_tool_choice: Any = "auto",
         retry_with_required_on_empty: bool = False,
+        context: Optional[Dict[str, Any]] = None,
+        user_message: str = "",
     ) -> AsyncIterator[AgentEvent]:
         """Unified ReAct loop implementation yielding streaming events.
 
@@ -605,6 +611,40 @@ class Orchestrator:
         enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
         if enable_reasoning:
             logger.info(f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})")
+
+        # ── Planning phase for complex requests ──
+        approved_plan = None
+        enable_planning = routing_score >= self._react_config.planning_score_threshold
+        if enable_planning:
+            logger.info(f"[ReAct] Planning phase triggered (score={routing_score})")
+            try:
+                # Build separate planning messages with planning instructions
+                plan_messages = await self._build_llm_messages(
+                    context, user_message, include_planning=True,
+                )
+                plan_schemas = [GENERATE_PLAN_SCHEMA, COMPLETE_TASK_SCHEMA]
+                plan_response = await self._llm_call_with_retry(
+                    plan_messages, plan_schemas, tool_choice="auto",
+                    llm_client_override=routed_llm_client,
+                )
+                plan_data = self._extract_plan_from_response(plan_response)
+                if plan_data:
+                    plan_text = self._format_plan_text(plan_data)
+                    yield AgentEvent(
+                        type=EventType.PLAN_GENERATED,
+                        data={"plan": plan_data, "plan_text": plan_text},
+                    )
+                    approved_plan = plan_text
+                    logger.info(f"[ReAct] Plan generated: {plan_data.get('goal', '')}")
+
+                    # Rebuild main messages with approved plan injected
+                    messages = await self._build_llm_messages(
+                        context, user_message, approved_plan=approved_plan,
+                    )
+                else:
+                    logger.info("[ReAct] LLM did not generate a plan, proceeding directly")
+            except Exception as e:
+                logger.warning(f"[ReAct] Planning phase failed, proceeding without plan: {e}")
 
         for turn in range(1, self._react_config.max_turns + 1):
             # Context guard with summarization
@@ -1158,6 +1198,40 @@ class Orchestrator:
 
         return last_error  # type: ignore[return-value]
 
+    # ── Planning helpers ──
+
+    @staticmethod
+    def _extract_plan_from_response(response: Any) -> Optional[Dict[str, Any]]:
+        """Extract generate_plan tool call arguments from an LLM response."""
+        tool_calls = getattr(response, "tool_calls", None)
+        if not tool_calls:
+            return None
+        for tc in tool_calls:
+            if tc.name == GENERATE_PLAN_TOOL_NAME:
+                args = tc.arguments
+                if isinstance(args, str):
+                    args = json.loads(args)
+                return args
+        return None
+
+    @staticmethod
+    def _format_plan_text(plan_data: Dict[str, Any]) -> str:
+        """Format structured plan data into readable text for prompt injection."""
+        lines = [f"**Goal:** {plan_data.get('goal', '')}"]
+        for step in plan_data.get("steps", []):
+            deps = step.get("depends_on", [])
+            dep_str = (
+                f" (after step {', '.join(map(str, deps))})"
+                if deps
+                else " (can start immediately)"
+            )
+            lines.append(
+                f"{step['id']}. [{step.get('agent', '?')}] {step['action']}{dep_str}"
+            )
+            if step.get("reason"):
+                lines.append(f"   Reason: {step['reason']}")
+        return "\n".join(lines)
+
     async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
         """Execute a single tool/agent-tool with timeout."""
         tool_name = tool_call.name
@@ -1444,6 +1518,9 @@ class Orchestrator:
         self,
         context: Dict[str, Any],
         user_message: str,
+        *,
+        include_planning: bool = False,
+        approved_plan: str = "",
     ) -> List[Dict[str, Any]]:
         """Build the initial LLM message list.
 
@@ -1451,6 +1528,10 @@ class Orchestrator:
         - System prompt + recalled memories
         - Conversation history (from Momex short-term memory)
         - Current user message
+
+        Args:
+            include_planning: If True, adds planning instructions to prompt.
+            approved_plan: If set, injects the approved plan for execution.
         """
         messages: List[Dict[str, Any]] = []
 
@@ -1465,7 +1546,11 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"Failed to get agent descriptions: {e}")
 
-        system_prompt = build_system_prompt(agent_descriptions=agent_descriptions)
+        system_prompt = build_system_prompt(
+            agent_descriptions=agent_descriptions,
+            include_planning=include_planning,
+            approved_plan=approved_plan,
+        )
 
         system_parts = [system_prompt]
         if self.system_prompt:
