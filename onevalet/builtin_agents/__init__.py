@@ -16,4 +16,5 @@ Subpackages:
 - smarthome: Philips Hue light control, Sonos speaker control
 - cloud_storage: Unified file search across Google Drive, OneDrive, and Dropbox
 - composio: Slack and GitHub integrations via Composio OAuth proxy (expandable to 1000+ apps)
+- location: User location lookup and geofence-based reminders
 """

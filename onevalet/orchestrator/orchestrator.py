@@ -266,6 +266,7 @@ class Orchestrator:
         # State
         self._initialized = False
         self._pending_plan: Optional[Dict[str, Any]] = None
+        self._current_metadata: Dict[str, Any] = {}
 
     @property
     def agent_registry(self) -> Optional[AgentRegistry]:
@@ -365,6 +366,9 @@ class Orchestrator:
         """
         if not self._initialized:
             await self.initialize()
+
+        # Store request metadata for tool execution context
+        self._current_metadata = metadata or {}
 
         # Step 1: Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
@@ -500,6 +504,9 @@ class Orchestrator:
         """
         if not self._initialized:
             await self.initialize()
+
+        # Store request metadata for tool execution context
+        self._current_metadata = metadata or {}
 
         # Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
@@ -1403,7 +1410,8 @@ class Orchestrator:
 
     def _build_tool_metadata(self) -> dict:
         """Build metadata dict for regular tool execution context."""
-        meta = {}
+        # Start with request-level metadata (contains location, timezone, etc.)
+        meta = dict(self._current_metadata)
         if self.database:
             from onevalet.builtin_agents.digest.important_dates_repo import ImportantDatesRepository
             meta["important_dates_store"] = ImportantDatesRepository(self.database)
@@ -1653,7 +1661,29 @@ class Orchestrator:
 
         # Runtime context
         now = datetime.now(timezone.utc)
-        system_parts.append(f"\n[Context]\nCurrent time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        context_lines = [f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
+
+        # Add user location if available in metadata
+        meta = context.get("metadata") or {}
+        location = meta.get("location")
+        if location and isinstance(location, dict):
+            lat = location.get("lat")
+            lng = location.get("lng")
+            if lat is not None and lng is not None:
+                place = location.get("place_name", "")
+                try:
+                    loc_str = f"User location: {float(lat):.4f}, {float(lng):.4f}"
+                except (TypeError, ValueError):
+                    loc_str = f"User location: {lat}, {lng}"
+                if place:
+                    loc_str += f" ({place})"
+                context_lines.append(loc_str)
+
+        tz = meta.get("timezone")
+        if tz and tz != "UTC":
+            context_lines.append(f"User timezone: {tz}")
+
+        system_parts.append("\n[Context]\n" + "\n".join(context_lines))
 
         # Tier 2 agent catalog (for delegate_to_agent awareness)
         tier2 = getattr(self, "_tier2_agent_schemas", [])
@@ -2016,6 +2046,10 @@ class Orchestrator:
             get_user_accounts_executor, get_user_profile_executor,
             GET_USER_ACCOUNTS_SCHEMA, GET_USER_PROFILE_SCHEMA,
         )
+        from ..builtin_agents.location import (
+            get_user_location_executor, GET_USER_LOCATION_SCHEMA,
+            set_location_reminder_executor, SET_LOCATION_REMINDER_SCHEMA,
+        )
 
         tools: List[AgentTool] = []
 
@@ -2061,6 +2095,22 @@ class Orchestrator:
             parameters=GET_USER_PROFILE_SCHEMA,
             executor=get_user_profile_executor,
             category="user",
+        ))
+
+        # Location tools
+        tools.append(AgentTool(
+            name="get_user_location",
+            description="Get the user's current location (latitude, longitude, and place name). Use when you need the user's precise current location for finding nearby places, calculating distances, or checking proximity.",
+            parameters=GET_USER_LOCATION_SCHEMA,
+            executor=get_user_location_executor,
+            category="location",
+        ))
+        tools.append(AgentTool(
+            name="set_location_reminder",
+            description="Set a location-based reminder that notifies the user when they arrive near a specific place. Use when the user says things like 'remind me to X when I'm near Y' or 'notify me when I get to Z'.",
+            parameters=SET_LOCATION_REMINDER_SCHEMA,
+            executor=set_location_reminder_executor,
+            category="location",
         ))
 
         # Recall memory (only if momex is available)
