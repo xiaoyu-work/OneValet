@@ -601,10 +601,10 @@ class Orchestrator:
             except Exception as e:
                 logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
 
-        # Enable thinking for complex requests on the first turn
-        enable_thinking = routing_score >= self._react_config.thinking_score_threshold
-        if enable_thinking:
-            logger.info(f"[ReAct] Thinking enabled (score={routing_score} >= {self._react_config.thinking_score_threshold})")
+        # Enable reasoning for complex requests on the first turn
+        enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
+        if enable_reasoning:
+            logger.info(f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})")
 
         for turn in range(1, self._react_config.max_turns + 1):
             # Context guard with summarization
@@ -616,17 +616,16 @@ class Orchestrator:
             # LLM call
             try:
                 tool_choice = first_turn_tool_choice if turn == 1 else "auto"
-                # Enable thinking only on the first turn for complex requests
-                thinking_kwargs = {}
-                if enable_thinking and turn == 1:
-                    thinking_kwargs = {
-                        "enable_thinking": True,
-                        "thinking_budget": self._react_config.thinking_budget,
+                # Enable reasoning only on the first turn for complex requests
+                reasoning_kwargs = {}
+                if enable_reasoning and turn == 1:
+                    reasoning_kwargs = {
+                        "reasoning_effort": self._react_config.reasoning_effort,
                     }
                 response = await self._llm_call_with_retry(
                     messages, tool_schemas, tool_choice=tool_choice,
                     llm_client_override=routed_llm_client,
-                    **thinking_kwargs,
+                    **reasoning_kwargs,
                 )
             except Exception as e:
                 yield AgentEvent(

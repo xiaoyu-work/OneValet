@@ -57,13 +57,14 @@ class ReactLoopConfig:
     approval_timeout_minutes: int = 30
     """Approval auto-cancel timeout in minutes."""
 
-    # Thinking / Extended reasoning
-    thinking_score_threshold: int = 51
-    """Minimum complexity score to enable thinking. Requests with
-    router score >= this value will use extended thinking on the
+    # Extended reasoning (provider-agnostic via litellm reasoning_effort)
+    reasoning_score_threshold: int = 51
+    """Minimum complexity score to enable reasoning. Requests with
+    router score >= this value will use extended reasoning on the
     first turn. Set to 0 to always enable, 101 to always disable."""
-    thinking_budget: int = 10000
-    """Max thinking tokens when thinking is enabled."""
+    reasoning_effort: str = "medium"
+    """Reasoning effort level passed to litellm: "low", "medium", or "high".
+    litellm translates this to each provider's native format automatically."""
 
 
 @dataclass
