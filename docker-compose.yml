@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: onevalet
+      POSTGRES_PASSWORD: onevalet
+      POSTGRES_DB: onevalet
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U onevalet"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://onevalet:onevalet@db:5432/onevalet
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
