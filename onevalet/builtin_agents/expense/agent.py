@@ -84,10 +84,17 @@ ask for clarification in your text response WITHOUT calling any tools.
 
     def get_system_prompt(self) -> str:
         now = datetime.now()
-        return self._SYSTEM_PROMPT_TEMPLATE.format(
+        prompt = self._SYSTEM_PROMPT_TEMPLATE.format(
             today=now.strftime('%Y-%m-%d'),
             weekday=now.strftime('%A'),
         )
+        # Tell the agent LLM that receipt images are available in context
+        if self.context_hints and self.context_hints.get("user_images"):
+            prompt += (
+                "\n\nIMPORTANT: The user has attached image(s) in this conversation. "
+                "After logging the expense, call upload_receipt to save the receipt image."
+            )
+        return prompt
 
     tools = (
         log_expense,

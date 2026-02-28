@@ -74,6 +74,8 @@ These examples show how to map user intent to the correct agent:
 - "Find nearby coffee shops" / "附近有什么咖啡店" → MapsAgent
 - "Turn off the lights" / "关灯" → SmartHomeAgent
 - "What's the weather in Seattle" → use check_weather tool directly or TripPlannerAgent
+- "lunch was $15" / "打车花了30" → ExpenseAgent
+- [User attaches a receipt image] → Look at the image, extract merchant/amount/items, then call ExpenseAgent with extracted details (e.g. "Log expense: Starbucks $4.50, 2 lattes. Also save the receipt image.")
 - "Hello" / "你好" → complete_task (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()
