@@ -267,6 +267,7 @@ class Orchestrator:
         self._initialized = False
         self._pending_plan: Optional[Dict[str, Any]] = None
         self._current_metadata: Dict[str, Any] = {}
+        self._current_user_images: Optional[List[Dict[str, Any]]] = None
 
     @property
     def agent_registry(self) -> Optional[AgentRegistry]:

@@ -582,6 +582,7 @@ class OneValet:
         self,
         message_or_tenant_id: str,
         message: Optional[str] = None,
+        images: Optional[list] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> AgentResult:
         """
@@ -594,6 +595,7 @@ class OneValet:
         Args:
             message_or_tenant_id: The message (single-arg) or tenant_id (two-arg).
             message: The message when using multi-tenant mode.
+            images: Optional list of image dicts for multimodal input.
             metadata: Optional metadata dict passed to the orchestrator.
 
         Returns:
@@ -610,6 +612,7 @@ class OneValet:
         return await self._orchestrator.handle_message(
             tenant_id=tenant_id,
             message=actual_message,
+            images=images,
             metadata=metadata,
         )
 
@@ -617,6 +620,7 @@ class OneValet:
         self,
         message_or_tenant_id: str,
         message: Optional[str] = None,
+        images: Optional[list] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> AsyncIterator[AgentEvent]:
         """
@@ -629,6 +633,7 @@ class OneValet:
         Args:
             message_or_tenant_id: The message (single-arg) or tenant_id (two-arg).
             message: The message when using multi-tenant mode.
+            images: Optional list of image dicts for multimodal input.
             metadata: Optional metadata dict passed to the orchestrator.
 
         Returns:
@@ -645,6 +650,7 @@ class OneValet:
         async for event in self._orchestrator.stream_message(
             tenant_id=tenant_id,
             message=actual_message,
+            images=images,
             metadata=metadata,
         ):
             yield event

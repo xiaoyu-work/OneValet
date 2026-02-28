@@ -153,24 +153,19 @@ def _format_expense_table(expenses: list, currency: str = "USD") -> str:
     return "\n".join(lines)
 
 
-def _budget_warning(budget_repo, expense_repo, tenant_id: str,
-                    category: str, currency: str) -> str:
+async def _budget_warning(budget_repo, expense_repo, tenant_id: str,
+                          category: str, currency: str) -> str:
     """Check if spending exceeds or approaches budget limits.
 
     Returns a warning string or empty string.
     """
     warnings = []
     today = date.today()
-    start = today.replace(day=1)
-    if today.month == 12:
-        end = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
-    else:
-        end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
 
     # Check category-specific budget
-    cat_budget = budget_repo.get_budget(tenant_id, category)
+    cat_budget = await budget_repo.get_budget(tenant_id, category)
     if cat_budget:
-        cat_total = expense_repo.monthly_total(tenant_id, start, end, category=category)
+        cat_total = await expense_repo.monthly_total(tenant_id, today.year, today.month)
         limit = cat_budget.get("monthly_limit", 0)
         if limit > 0:
             pct = (cat_total / limit) * 100
@@ -187,9 +182,9 @@ def _budget_warning(budget_repo, expense_repo, tenant_id: str,
                 )
 
     # Check total budget
-    total_budget = budget_repo.get_budget(tenant_id, "_total")
+    total_budget = await budget_repo.get_budget(tenant_id, "_total")
     if total_budget:
-        grand_total = expense_repo.monthly_total(tenant_id, start, end)
+        grand_total = await expense_repo.monthly_total(tenant_id, today.year, today.month)
         limit = total_budget.get("monthly_limit", 0)
         if limit > 0:
             pct = (grand_total / limit) * 100
@@ -236,40 +231,34 @@ async def log_expense(
     category_lower = category.strip().lower()
 
     try:
-        expense_repo.add(
+        await expense_repo.add(
             tenant_id=context.tenant_id,
             amount=amount,
             category=category_lower,
             description=description,
             merchant=merchant,
-            expense_date=expense_date,
+            date=expense_date,
             currency=currency.upper(),
         )
     except Exception as e:
         logger.error(f"Failed to log expense: {e}", exc_info=True)
         return "Sorry, I couldn't log that expense. Please try again."
 
-    # Get monthly total for this category
+    # Get monthly total
     today = _parse_date("today")
-    month_start = today.replace(day=1)
-    if today.month == 12:
-        month_end = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
-    else:
-        month_end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
-
-    cat_total = expense_repo.monthly_total(
-        context.tenant_id, month_start, month_end, category=category_lower,
+    cat_total = await expense_repo.monthly_total(
+        context.tenant_id, today.year, today.month,
     )
 
     desc_part = f" ({description})" if description else ""
     result = (
         f"Logged: {category_lower} {_format_amount(amount, currency)}{desc_part}. "
-        f"This month's {category_lower}: {_format_amount(cat_total, currency)}."
+        f"This month's total: {_format_amount(cat_total, currency)}."
     )
 
     # Check budget warnings
     if budget_repo:
-        warning = _budget_warning(
+        warning = await _budget_warning(
             budget_repo, expense_repo, context.tenant_id, category_lower, currency,
         )
         if warning:
@@ -299,12 +288,12 @@ async def query_expenses(
     start_date, end_date = _parse_period(period)
 
     try:
-        expenses = expense_repo.query(
+        expenses = await expense_repo.query(
             tenant_id=context.tenant_id,
             start_date=start_date,
             end_date=end_date,
-            category=category.strip().lower() if category else "",
-            merchant=merchant.strip() if merchant else "",
+            category=category.strip().lower() if category else None,
+            merchant=merchant.strip() if merchant else None,
             limit=limit,
         )
     except Exception as e:
@@ -357,7 +346,7 @@ async def delete_expense(
         return "Please provide a description, amount, or merchant to identify the expense."
 
     try:
-        matches = expense_repo.search(tenant_id=context.tenant_id, hint=hint.strip())
+        matches = await expense_repo.search(tenant_id=context.tenant_id, query=hint.strip())
     except Exception as e:
         logger.error(f"Failed to search expenses: {e}", exc_info=True)
         return "Sorry, I couldn't search for that expense. Please try again."
@@ -368,7 +357,7 @@ async def delete_expense(
     if len(matches) == 1:
         exp = matches[0]
         try:
-            expense_repo.delete(tenant_id=context.tenant_id, expense_id=exp.get("id"))
+            await expense_repo.delete(tenant_id=context.tenant_id, expense_id=exp.get("id"))
             d = exp.get("date", "")
             if isinstance(d, date):
                 d = d.isoformat()
@@ -416,7 +405,7 @@ async def spending_summary(
     start_date, end_date = _parse_period(period)
 
     try:
-        summary = expense_repo.summary_by_category(
+        summary = await expense_repo.summary_by_category(
             tenant_id=context.tenant_id,
             start_date=start_date,
             end_date=end_date,
@@ -429,8 +418,7 @@ async def spending_summary(
         period_label = period if period else "this month"
         return f"No expenses found for {period_label}."
 
-    # Determine primary currency from first entry
-    currency = summary[0].get("currency", "USD") if summary else "USD"
+    currency = "USD"
 
     lines = []
     period_label = period if period else "this month"
@@ -441,13 +429,13 @@ async def spending_summary(
     grand_total = 0.0
     for row in summary:
         cat = row.get("category", "other")[:14]
-        total = row.get("total", 0.0)
+        total = float(row.get("total_amount", 0))
         count = row.get("count", 0)
         grand_total += total
 
         budget_str = ""
         if budget_repo:
-            budget = budget_repo.get_budget(context.tenant_id, cat.strip())
+            budget = await budget_repo.get_budget(context.tenant_id, cat.strip())
             if budget:
                 limit = budget.get("monthly_limit", 0)
                 if limit > 0:
@@ -465,7 +453,7 @@ async def spending_summary(
     # Grand total with optional total budget comparison
     total_budget_str = ""
     if budget_repo:
-        total_budget = budget_repo.get_budget(context.tenant_id, "_total")
+        total_budget = await budget_repo.get_budget(context.tenant_id, "_total")
         if total_budget:
             limit = total_budget.get("monthly_limit", 0)
             if limit > 0:
@@ -504,7 +492,7 @@ async def set_budget(
     category_lower = category.strip().lower()
 
     try:
-        budget_repo.set_budget(
+        await budget_repo.set_budget(
             tenant_id=context.tenant_id,
             category=category_lower,
             monthly_limit=monthly_limit,
@@ -536,7 +524,7 @@ async def budget_status(
         return "Expense tracking is not available. Database not configured."
 
     try:
-        budgets = budget_repo.get_all_budgets(tenant_id=context.tenant_id)
+        budgets = await budget_repo.get_all_budgets(tenant_id=context.tenant_id)
     except Exception as e:
         logger.error(f"Failed to get budgets: {e}", exc_info=True)
         return "Sorry, I couldn't retrieve your budgets. Please try again."
@@ -561,12 +549,8 @@ async def budget_status(
         limit = budget.get("monthly_limit", 0)
         currency = budget.get("currency", "USD")
 
-        if cat == "_total":
-            spent = expense_repo.monthly_total(context.tenant_id, month_start, month_end)
-        else:
-            spent = expense_repo.monthly_total(
-                context.tenant_id, month_start, month_end, category=cat,
-            )
+        # monthly_total returns total across all categories
+        spent = await expense_repo.monthly_total(context.tenant_id, today.year, today.month)
 
         remaining = limit - spent
         pct = (spent / limit * 100) if limit > 0 else 0
@@ -712,11 +696,9 @@ async def search_receipts(
         start_date, end_date = _parse_period(period)
 
     try:
-        receipts = receipt_repo.search_by_text(
+        receipts = await receipt_repo.search_by_text(
             tenant_id=context.tenant_id,
             query=query.strip(),
-            start_date=start_date,
-            end_date=end_date,
         )
     except Exception as e:
         logger.error(f"Failed to search receipts: {e}", exc_info=True)
@@ -726,9 +708,9 @@ async def search_receipts(
     expense_matches = []
     if expense_repo:
         try:
-            expense_matches = expense_repo.search(
+            expense_matches = await expense_repo.search(
                 tenant_id=context.tenant_id,
-                hint=query.strip(),
+                query=query.strip(),
             )
         except Exception:
             pass
@@ -742,10 +724,10 @@ async def search_receipts(
     if receipts:
         lines.append(f"Found {len(receipts)} receipt(s) matching \"{query}\":\n")
         for i, receipt in enumerate(receipts, 1):
-            d = receipt.get("receipt_date", receipt.get("created_at", ""))
+            d = receipt.get("created_at", "")
             if isinstance(d, (date, datetime)):
                 d = d.isoformat()
-            desc = receipt.get("description", "")
+            desc = receipt.get("ocr_text", "")
             url = receipt.get("storage_url", "")
             line = f"{i}. {d}"
             if desc:

@@ -379,8 +379,9 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
         self, client: httpx.AsyncClient, folder_name: str, parent_id: str = "root",
     ) -> str:
         """Find a folder by name under a parent, or create it. Returns folder ID."""
+        safe_name = folder_name.replace("'", "\\'")
         q = (
-            f"name = '{folder_name}' and "
+            f"name = '{safe_name}' and "
             f"mimeType = 'application/vnd.google-apps.folder' and "
             f"'{parent_id}' in parents and trashed = false"
         )
@@ -390,10 +391,20 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             params={"q": q, "fields": "files(id)", "pageSize": 1},
             timeout=10.0,
         )
+        if resp.status_code == 401:
+            if await self.ensure_valid_token(force_refresh=True):
+                resp = await client.get(
+                    f"{DRIVE_API}/files",
+                    headers=self._auth_headers(),
+                    params={"q": q, "fields": "files(id)", "pageSize": 1},
+                    timeout=10.0,
+                )
         if resp.status_code == 200:
             files = resp.json().get("files", [])
             if files:
                 return files[0]["id"]
+        elif resp.status_code != 200:
+            resp.raise_for_status()
 
         # Create folder
         metadata = {
@@ -446,12 +457,13 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
 
                 # Multipart upload: metadata + file content
                 import json as _json
+                import uuid as _uuid
 
                 metadata = {"name": file_name, "parents": [parent_id]}
                 metadata_bytes = _json.dumps(metadata).encode("utf-8")
 
                 # Build multipart/related body manually
-                boundary = "onevalet_upload_boundary"
+                boundary = f"onevalet_upload_{_uuid.uuid4().hex}"
                 body = (
                     f"--{boundary}\r\n"
                     f"Content-Type: application/json; charset=UTF-8\r\n\r\n"
