@@ -123,6 +123,7 @@ class LLMResponse:
     stop_reason: StopReason = StopReason.END_TURN
     usage: Optional[Usage] = None
     model: Optional[str] = None
+    thinking: Optional[str] = None
 
     # Raw response for debugging
     raw_response: Optional[Any] = None
@@ -133,13 +134,16 @@ class LLMResponse:
         return self.tool_calls is not None and len(self.tool_calls) > 0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "content": self.content,
             "tool_calls": [tc.to_dict() for tc in self.tool_calls] if self.tool_calls else None,
             "stop_reason": self.stop_reason.value,
             "usage": self.usage.to_dict() if self.usage else None,
             "model": self.model,
         }
+        if self.thinking:
+            d["thinking"] = self.thinking
+        return d
 
 
 @dataclass

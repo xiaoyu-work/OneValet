@@ -586,10 +586,12 @@ class Orchestrator:
 
         # Model routing: classify once before the loop, reuse for all turns.
         routed_llm_client = None
+        routing_score = -1
         if self._model_router:
             try:
                 from ..llm.router import RoutingDecision
                 decision = await self._model_router.route(messages)
+                routing_score = decision.score
                 routed_llm_client = self._model_router.registry.get(decision.provider)
                 if routed_llm_client:
                     logger.info(
@@ -598,6 +600,11 @@ class Orchestrator:
                     )
             except Exception as e:
                 logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
+
+        # Enable thinking for complex requests on the first turn
+        enable_thinking = routing_score >= self._react_config.thinking_score_threshold
+        if enable_thinking:
+            logger.info(f"[ReAct] Thinking enabled (score={routing_score} >= {self._react_config.thinking_score_threshold})")
 
         for turn in range(1, self._react_config.max_turns + 1):
             # Context guard with summarization
@@ -609,9 +616,17 @@ class Orchestrator:
             # LLM call
             try:
                 tool_choice = first_turn_tool_choice if turn == 1 else "auto"
+                # Enable thinking only on the first turn for complex requests
+                thinking_kwargs = {}
+                if enable_thinking and turn == 1:
+                    thinking_kwargs = {
+                        "enable_thinking": True,
+                        "thinking_budget": self._react_config.thinking_budget,
+                    }
                 response = await self._llm_call_with_retry(
                     messages, tool_schemas, tool_choice=tool_choice,
                     llm_client_override=routed_llm_client,
+                    **thinking_kwargs,
                 )
             except Exception as e:
                 yield AgentEvent(
@@ -1022,6 +1037,7 @@ class Orchestrator:
         tool_schemas: Optional[List[Dict[str, Any]]],
         tool_choice: Optional[Any] = None,
         llm_client_override: Optional[Any] = None,
+        **extra_kwargs,
     ) -> Any:
         """LLM call with error recovery strategy per design doc section 3.3.
 
@@ -1041,7 +1057,7 @@ class Orchestrator:
         last_error = None
         for attempt in range(self._react_config.llm_max_retries + 1):
             try:
-                kwargs: Dict[str, Any] = {"messages": messages}
+                kwargs: Dict[str, Any] = {"messages": messages, **extra_kwargs}
                 if tool_schemas:
                     kwargs["tools"] = tool_schemas
                     if tool_choice:

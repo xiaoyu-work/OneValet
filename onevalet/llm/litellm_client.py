@@ -164,6 +164,15 @@ class LiteLLMClient(BaseLLMClient):
         if "stop" in kwargs:
             params["stop"] = kwargs["stop"]
 
+        # Extended thinking support (Anthropic Claude, etc.)
+        if kwargs.get("enable_thinking"):
+            budget = kwargs.get("thinking_budget", 10000)
+            params["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            # Thinking models require temperature=1 and no max_tokens
+            params.pop("temperature", None)
+            params.pop("top_p", None)
+            params.pop("max_tokens", None)
+
         logger.info(
             f"[LiteLLM] model={model}, tools={len(tools) if tools else 0}, "
             f"messages={len(messages)}"
@@ -208,12 +217,20 @@ class LiteLLMClient(BaseLLMClient):
         if usage and cost is not None:
             usage.cost = cost
 
+        # Extract thinking content if present (Anthropic extended thinking)
+        thinking = None
+        if hasattr(message, "thinking") and message.thinking:
+            thinking = message.thinking
+        elif hasattr(message, "reasoning_content") and message.reasoning_content:
+            thinking = message.reasoning_content
+
         return LLMResponse(
             content=message.content or "",
             tool_calls=tool_calls,
             stop_reason=stop_reason,
             usage=usage,
             model=getattr(response, "model", self.config.model),
+            thinking=thinking,
             raw_response=response,
         )
 
