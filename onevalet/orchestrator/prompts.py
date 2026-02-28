@@ -107,7 +107,7 @@ def render_tool_usage() -> str:
 # Tool Usage Rules
 
 - **Parallel calls:** When multiple tools are independent (e.g. checking weather AND searching flights), call them in the same turn.
-- **No narration:** Call tools directly. Do NOT say "Let me search for..." before calling a tool.
+- **Brief acknowledgment:** Before calling tools, output a short, natural one-liner so the user knows you're working (e.g. "checking your emails..." or "let me look that up"). Keep it under 10 words. Do NOT output long explanations — just a brief heads-up, then call the tools immediately.
 - **Confirmation required:** For write/destructive operations (send email, delete, create event, update), present a summary and wait for user approval before executing.
 - **Tool declined:** If a tool call is declined or cancelled by the user, respect it immediately. Do NOT re-attempt the same call. Offer an alternative if possible.
 - **Result handling:** Use tool results as-is. Do not fabricate data that was not returned by a tool.
