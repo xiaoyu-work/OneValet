@@ -1967,6 +1967,9 @@ class Orchestrator:
         from ..builtin_agents.tools.google_search import (
             google_search_executor, GOOGLE_SEARCH_SCHEMA,
         )
+        from ..builtin_agents.tools.web_fetch import (
+            web_fetch_executor, WEB_FETCH_SCHEMA,
+        )
         from ..builtin_agents.tools.important_dates import IMPORTANT_DATES_TOOL_DEFS
         from ..builtin_agents.tools.user_tools import (
             get_user_accounts_executor, get_user_profile_executor,
@@ -1981,6 +1984,15 @@ class Orchestrator:
             description="Search the web using Google. Returns titles, URLs, and snippets of top results.",
             parameters=GOOGLE_SEARCH_SCHEMA,
             executor=google_search_executor,
+            category="web",
+        ))
+
+        # Web fetch
+        tools.append(AgentTool(
+            name="web_fetch",
+            description="Fetch a URL and extract its readable content as text. Use this to read articles, documentation, or any web page. Returns the main content with boilerplate removed.",
+            parameters=WEB_FETCH_SCHEMA,
+            executor=web_fetch_executor,
             category="web",
         ))
 

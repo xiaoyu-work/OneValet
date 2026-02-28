@@ -53,6 +53,7 @@ dependencies = [
     "momex @ git+https://github.com/xiaoyu-work/momex.git",
     "jinja2>=3.1",
     "litellm>=1.40",
+    "trafilatura>=2.0",
 ]
 
 [project.optional-dependencies]
