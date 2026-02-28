@@ -251,7 +251,10 @@ class Orchestrator:
         self._registry_initialized = agent_registry is not None
 
         # Agent pool manager
-        self.agent_pool = AgentPoolManager(config=self.config.session)
+        self.agent_pool = AgentPoolManager(
+            config=self.config.session,
+            database=database,
+        )
 
         # Extension hooks
         self.guardrails_checker = guardrails_checker

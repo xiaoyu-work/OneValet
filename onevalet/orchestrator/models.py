@@ -10,7 +10,7 @@ This module defines:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, Any, Optional, Literal, Callable
+from typing import Dict, Any, Optional, Callable
 from enum import Enum
 
 # Attribute name for marking callback handlers
@@ -133,23 +133,17 @@ class SessionConfig:
 
     Attributes:
         enabled: Whether session persistence is enabled
-        backend: Storage backend ("memory" or "redis")
-        active_ttl_seconds: TTL for active pool (default: 10 min)
-        session_ttl_seconds: TTL for session pool (default: 24 hours)
+        session_ttl_seconds: TTL for sessions (default: 24 hours)
         auto_backup_interval_seconds: Background backup interval (default: 60s)
         auto_restore_on_start: Whether to restore sessions on server start
         lazy_restore: Whether to restore sessions on first request
-        redis_url: Redis connection URL (if using redis backend)
         waiting_timeout_seconds: Timeout for WAITING agents before cleanup (default: 5 min)
     """
     enabled: bool = True
-    backend: Literal["memory", "redis"] = "memory"
-    active_ttl_seconds: int = 600  # 10 minutes
     session_ttl_seconds: int = 86400  # 24 hours
     auto_backup_interval_seconds: int = 60
     auto_restore_on_start: bool = True
     lazy_restore: bool = True
-    redis_url: Optional[str] = None
     waiting_timeout_seconds: int = 300  # 5 minutes default for WAITING agents
 
     @classmethod
@@ -157,13 +151,10 @@ class SessionConfig:
         """Create from dictionary"""
         return cls(
             enabled=data.get("enabled", True),
-            backend=data.get("backend", "memory"),
-            active_ttl_seconds=data.get("active_ttl_seconds", 600),
             session_ttl_seconds=data.get("session_ttl_seconds", 86400),
             auto_backup_interval_seconds=data.get("auto_backup_interval_seconds", 60),
             auto_restore_on_start=data.get("auto_restore_on_start", True),
             lazy_restore=data.get("lazy_restore", True),
-            redis_url=data.get("redis_url"),
             waiting_timeout_seconds=data.get("waiting_timeout_seconds", 300),
         )
 
@@ -175,7 +166,6 @@ class OrchestratorConfig:
 
     Attributes:
         config_dir: Path to YAML config directory
-        agent_pool_backend: Where to store agent pool
         session: Session management configuration
         default_timeout_seconds: Default timeout for agent execution
         max_agents_per_user: Maximum concurrent agents per user
@@ -184,7 +174,6 @@ class OrchestratorConfig:
         default_agent_type: Agent type to use when no other agent matches
     """
     config_dir: str = ""
-    agent_pool_backend: Literal["memory", "redis"] = "memory"
     session: SessionConfig = field(default_factory=SessionConfig)
     default_timeout_seconds: int = 300
     max_agents_per_user: int = 10
@@ -200,7 +189,6 @@ class OrchestratorConfig:
 
         return cls(
             config_dir=data.get("config_dir", ""),
-            agent_pool_backend=data.get("agent_pool_backend", "memory"),
             session=session,
             default_timeout_seconds=data.get("default_timeout_seconds", 300),
             max_agents_per_user=data.get("max_agents_per_user", 10),

@@ -4,8 +4,7 @@ OneValet Checkpoint Storage - Backend storage implementations
 This module provides storage backends for checkpoints:
 - MemoryStorage: In-memory storage for testing
 - SQLiteStorage: Local SQLite database
-- RedisStorage: Redis with TTL support (planned)
-- PostgreSQLStorage: PostgreSQL for production (planned)
+- PostgreSQLStorage: PostgreSQL for production (see postgres_storage.py)
 """
 
 from abc import ABC, abstractmethod

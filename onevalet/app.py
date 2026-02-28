@@ -246,7 +246,13 @@ class OneValet:
             self._trigger_engine._notifications.append(callback_notification)
             logger.info(f"CallbackNotification configured: {callback_url}")
 
-        # 8. Orchestrator
+        # 8. Checkpoint storage (PostgreSQL)
+        from .checkpoint import CheckpointManager, PostgreSQLStorage
+        checkpoint_storage = PostgreSQLStorage(db=self._database)
+        await checkpoint_storage.initialize()
+        checkpoint_manager = CheckpointManager(storage=checkpoint_storage)
+
+        # 9. Orchestrator
         from .orchestrator import Orchestrator
         self._orchestrator = Orchestrator(
             momex=self._momex,
@@ -257,6 +263,7 @@ class OneValet:
             system_prompt=cfg.get("system_prompt", ""),
             trigger_engine=self._trigger_engine,
             model_router=self._model_router,
+            checkpoint_manager=checkpoint_manager,
         )
         await self._orchestrator.initialize()
 

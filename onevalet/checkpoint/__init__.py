@@ -13,8 +13,7 @@ Key Features:
 Storage Backends:
 - Memory (testing/development)
 - SQLite (local development)
-- Redis (production, fast TTL support)
-- PostgreSQL (production, queryable)
+- PostgreSQL (production)
 
 Example usage:
     from onevalet.checkpoint import CheckpointManager, MemoryStorage
@@ -45,8 +44,9 @@ from .storage import (
     CheckpointStorage,
     MemoryStorage,
     # SQLiteStorage,  # Available if sqlite installed
-    # RedisStorage,   # Available if redis installed
 )
+
+from .postgres_storage import PostgreSQLStorage
 
 from .manager import (
     CheckpointManager,
@@ -61,6 +61,7 @@ __all__ = [
     # Storage
     "CheckpointStorage",
     "MemoryStorage",
+    "PostgreSQLStorage",
     # Manager
     "CheckpointManager",
     "CheckpointError",

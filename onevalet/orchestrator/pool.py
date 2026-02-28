@@ -3,7 +3,7 @@ OneValet Agent Pool Manager - Manages agent instances per tenant
 
 This module provides:
 - AgentPoolManager: Manages agent lifecycle and storage
-- Memory and Redis backends for agent persistence
+- Memory and PostgreSQL backends for agent persistence
 - Session management with TTL-based cleanup
 
 Tenant isolation:
@@ -11,13 +11,11 @@ Tenant isolation:
 - Use tenant_id="default" for single-tenant deployments
 """
 
-import json
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Any, Callable, TYPE_CHECKING
-from dataclasses import dataclass, field
 
 from .models import AgentPoolEntry, SessionConfig
 
@@ -104,122 +102,21 @@ class MemoryPoolBackend(PoolBackend):
         return list(self._active_tenants)
 
 
-class RedisPoolBackend(PoolBackend):
-    """Redis pool backend for production with TTL support"""
-
-    def __init__(
-        self,
-        redis_url: str = "redis://localhost:6379",
-        active_ttl: int = 600,
-        session_ttl: int = 86400
-    ):
-        self._redis_url = redis_url
-        self._active_ttl = active_ttl
-        self._session_ttl = session_ttl
-        self._redis: Optional[Any] = None
-
-    async def _get_redis(self):
-        """Lazy initialize Redis connection"""
-        if self._redis is None:
-            try:
-                import redis.asyncio as redis
-                self._redis = redis.from_url(self._redis_url)
-            except ImportError:
-                raise ImportError("redis package required for Redis backend. Install with: pip install redis")
-        return self._redis
-
-    def _active_key(self, tenant_id: str) -> str:
-        """Key for active pool (short TTL)"""
-        return f"onevalet:active:{tenant_id}"
-
-    def _session_key(self, tenant_id: str) -> str:
-        """Key for session pool (long TTL)"""
-        return f"onevalet:session:{tenant_id}"
-
-    async def save_agent(self, tenant_id: str, entry: AgentPoolEntry) -> None:
-        r = await self._get_redis()
-        entry_json = json.dumps(entry.to_dict())
-
-        # Save to active pool (short TTL)
-        await r.hset(self._active_key(tenant_id), entry.agent_id, entry_json)
-        await r.expire(self._active_key(tenant_id), self._active_ttl)
-
-        # Save to session pool (long TTL)
-        await r.hset(self._session_key(tenant_id), entry.agent_id, entry_json)
-        await r.expire(self._session_key(tenant_id), self._session_ttl)
-
-        # Track active tenants
-        await r.sadd("onevalet:active_tenants", tenant_id)
-        await r.expire("onevalet:active_tenants", self._session_ttl)
-
-    async def get_agent(self, tenant_id: str, agent_id: str) -> Optional[AgentPoolEntry]:
-        r = await self._get_redis()
-
-        # Try active pool first
-        entry_json = await r.hget(self._active_key(tenant_id), agent_id)
-
-        # Fall back to session pool
-        if not entry_json:
-            entry_json = await r.hget(self._session_key(tenant_id), agent_id)
-
-        if entry_json:
-            return AgentPoolEntry.from_dict(json.loads(entry_json))
-        return None
-
-    async def list_agents(self, tenant_id: str) -> List[AgentPoolEntry]:
-        r = await self._get_redis()
-
-        # Get from active pool first
-        entries = await r.hgetall(self._active_key(tenant_id))
-
-        # If empty, try session pool
-        if not entries:
-            entries = await r.hgetall(self._session_key(tenant_id))
-
-        return [
-            AgentPoolEntry.from_dict(json.loads(v))
-            for v in entries.values()
-        ]
-
-    async def remove_agent(self, tenant_id: str, agent_id: str) -> None:
-        r = await self._get_redis()
-        await r.hdel(self._active_key(tenant_id), agent_id)
-        await r.hdel(self._session_key(tenant_id), agent_id)
-
-        # Clean up tenant from active list if no more agents
-        if not await r.hlen(self._session_key(tenant_id)):
-            await r.srem("onevalet:active_tenants", tenant_id)
-
-    async def clear_tenant(self, tenant_id: str) -> None:
-        r = await self._get_redis()
-        await r.delete(self._active_key(tenant_id))
-        await r.delete(self._session_key(tenant_id))
-        await r.srem("onevalet:active_tenants", tenant_id)
-
-    async def get_active_tenants(self) -> List[str]:
-        r = await self._get_redis()
-        tenants = await r.smembers("onevalet:active_tenants")
-        return [t.decode() if isinstance(t, bytes) else t for t in tenants]
-
-    async def close(self):
-        """Close Redis connection"""
-        if self._redis:
-            await self._redis.close()
-
-
 class AgentPoolManager:
     """
     Manages agent instances per tenant.
 
+    Uses PostgreSQL when a database is provided, falls back to
+    in-memory storage for testing.
+
     Features:
-    - Multiple backend support (memory, redis)
     - Agent lifecycle management
     - Session persistence with TTL
     - Auto-backup and restore
     - Lazy restoration on demand
 
     Usage:
-        pool = AgentPoolManager(config=SessionConfig(backend="memory"))
+        pool = AgentPoolManager(database=db)
 
         # Add agent (tenant_id defaults to "default" for single-tenant)
         pool.add_agent(agent)  # uses agent.tenant_id
@@ -237,17 +134,18 @@ class AgentPoolManager:
     def __init__(
         self,
         config: Optional[SessionConfig] = None,
-        backend: Optional[PoolBackend] = None
+        backend: Optional[PoolBackend] = None,
+        database: Optional[Any] = None,
     ):
         self.config = config or SessionConfig()
 
         if backend:
             self._backend = backend
-        elif self.config.backend == "redis":
-            self._backend = RedisPoolBackend(
-                redis_url=self.config.redis_url or "redis://localhost:6379",
-                active_ttl=self.config.active_ttl_seconds,
-                session_ttl=self.config.session_ttl_seconds
+        elif database is not None:
+            from .postgres_pool import PostgresPoolBackend
+            self._backend = PostgresPoolBackend(
+                db=database,
+                session_ttl=self.config.session_ttl_seconds,
             )
         else:
             self._backend = MemoryPoolBackend()

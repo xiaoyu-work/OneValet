@@ -3,7 +3,7 @@ OneValet Orchestrator Module
 
 Central coordinator for all agents with support for:
 - ReAct loop (Reasoning + Acting) for tool/agent execution
-- Agent pool management (memory and Redis backends)
+- Agent pool management (memory and PostgreSQL backends)
 - Session persistence with TTL
 - Multi-agent collaboration via Agent-Tools
 - Streaming execution events
@@ -29,13 +29,12 @@ Quick Start:
         print(event)
 
 Session Management:
-    Sessions can be persisted using memory or Redis backend:
+    Sessions are automatically persisted to PostgreSQL when a database
+    is provided. Falls back to in-memory storage for testing.
 
     config = OrchestratorConfig(
         session=SessionConfig(
             enabled=True,
-            backend="redis",
-            redis_url="redis://localhost:6379",
             session_ttl_seconds=86400  # 24 hours
         )
     )
@@ -56,8 +55,9 @@ from .pool import (
     AgentPoolManager,
     PoolBackend,
     MemoryPoolBackend,
-    RedisPoolBackend,
 )
+
+from .postgres_pool import PostgresPoolBackend
 
 from .react_config import (
     ReactLoopConfig,
@@ -85,7 +85,7 @@ __all__ = [
     "AgentPoolManager",
     "PoolBackend",
     "MemoryPoolBackend",
-    "RedisPoolBackend",
+    "PostgresPoolBackend",
     # ReAct
     "ReactLoopConfig",
     "ReactLoopResult",
