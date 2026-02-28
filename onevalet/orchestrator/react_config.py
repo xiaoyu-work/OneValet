@@ -57,6 +57,11 @@ class ReactLoopConfig:
     approval_timeout_minutes: int = 30
     """Approval auto-cancel timeout in minutes."""
 
+    # Model fallback
+    fallback_providers: List[str] = field(default_factory=list)
+    """Ordered list of LLMRegistry provider names to try when the primary
+    model fails after exhausting retries. Example: ["anthropic_main", "deepseek"]."""
+
     # Extended reasoning (provider-agnostic via litellm reasoning_effort)
     reasoning_score_threshold: int = 51
     """Minimum complexity score to enable reasoning. Requests with

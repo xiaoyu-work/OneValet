@@ -256,6 +256,14 @@ class LiteLLMClient(BaseLLMClient):
         if "stop" in kwargs:
             params["stop"] = kwargs["stop"]
 
+        # Extended reasoning support (provider-agnostic via litellm)
+        reasoning_effort = kwargs.get("reasoning_effort")
+        if reasoning_effort:
+            params["reasoning_effort"] = reasoning_effort
+            params.pop("temperature", None)
+            params.pop("top_p", None)
+            params.pop("max_tokens", None)
+
         response = await litellm.acompletion(**params)
 
         # Track tool call deltas across chunks

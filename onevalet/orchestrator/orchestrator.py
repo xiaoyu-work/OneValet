@@ -1038,12 +1038,16 @@ class Orchestrator:
         llm_client_override: Optional[Any] = None,
         **extra_kwargs,
     ) -> Any:
-        """LLM call with error recovery strategy per design doc section 3.3.
+        """LLM call with error recovery and model fallback chain.
 
+        Recovery strategy:
         - RateLimitError -> exponential backoff
         - ContextOverflowError -> three-step recovery (trim -> truncate_all -> force_trim)
         - AuthError -> raise immediately
         - TimeoutError -> retry once
+
+        If all retries on the primary client are exhausted, tries each
+        fallback provider from ``ReactLoopConfig.fallback_providers`` in order.
 
         Args:
             tool_choice: Override for tool_choice param ("auto", "required", "none").
@@ -1053,7 +1057,43 @@ class Orchestrator:
                 complexity-based routing is active.
         """
         client = llm_client_override or self.llm_client
-        last_error = None
+        primary_error = await self._llm_call_single_client(
+            client, messages, tool_schemas, tool_choice, **extra_kwargs,
+        )
+        if not isinstance(primary_error, Exception):
+            return primary_error  # success — it's an LLMResponse
+
+        # Primary failed — try fallback providers
+        fallback_providers = self._react_config.fallback_providers
+        if fallback_providers and self._model_router:
+            registry = self._model_router.registry
+            for provider_name in fallback_providers:
+                fallback_client = registry.get(provider_name)
+                if fallback_client is None or fallback_client is client:
+                    continue
+                logger.warning(f"[LLM] Primary failed, trying fallback provider: {provider_name}")
+                result = await self._llm_call_single_client(
+                    fallback_client, messages, tool_schemas, tool_choice, **extra_kwargs,
+                )
+                if not isinstance(result, Exception):
+                    return result
+                logger.warning(f"[LLM] Fallback provider {provider_name} also failed: {result}")
+
+        raise primary_error
+
+    async def _llm_call_single_client(
+        self,
+        client: Any,
+        messages: List[Dict[str, Any]],
+        tool_schemas: Optional[List[Dict[str, Any]]],
+        tool_choice: Optional[Any] = None,
+        **extra_kwargs,
+    ) -> Any:
+        """Try a single LLM client with retries.
+
+        Returns the LLMResponse on success, or the last Exception on failure.
+        """
+        last_error: Optional[Exception] = None
         for attempt in range(self._react_config.llm_max_retries + 1):
             try:
                 kwargs: Dict[str, Any] = {"messages": messages, **extra_kwargs}
@@ -1076,7 +1116,7 @@ class Orchestrator:
                 last_error = e
                 error_name = type(e).__name__.lower()
 
-                # Auth errors: raise immediately
+                # Auth errors: raise immediately (no fallback can help)
                 if "auth" in error_name or "authentication" in error_name or "permission" in error_name:
                     raise
 
@@ -1105,7 +1145,7 @@ class Orchestrator:
                     if attempt == 0:
                         logger.warning("LLM timeout, retrying once")
                         continue
-                    raise
+                    break  # let fallback chain handle it
 
                 # Unknown error: retry with backoff
                 if attempt < self._react_config.llm_max_retries:
@@ -1114,9 +1154,9 @@ class Orchestrator:
                     await asyncio.sleep(delay)
                     continue
 
-                raise
+                break  # exhausted retries, let fallback chain handle it
 
-        raise last_error  # type: ignore[misc]
+        return last_error  # type: ignore[return-value]
 
     async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
         """Execute a single tool/agent-tool with timeout."""
