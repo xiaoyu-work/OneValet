@@ -94,6 +94,7 @@ class OneValet:
         self._trigger_engine = None
         self._email_handler = None
         self._model_router = None
+        self._cron_service = None
 
     async def _ensure_initialized(self) -> None:
         """Lazy initialization — runs once on first chat()/stream() call."""
@@ -259,6 +260,36 @@ class OneValet:
         )
         await self._orchestrator.initialize()
 
+        # CronService setup
+        from .triggers.cron.store import CronJobStore
+        from .triggers.cron.run_log import CronRunLog
+        from .triggers.cron.executor import CronExecutor as CronJobExecutor
+        from .triggers.cron.delivery import CronDeliveryHandler
+        from .triggers.cron.service import CronService
+
+        cron_store_path = cfg.get("cron", {}).get("store", "~/.onevalet/cron/jobs.json") if isinstance(cfg.get("cron"), dict) else "~/.onevalet/cron/jobs.json"
+        cron_store = CronJobStore(store_path=cron_store_path)
+        await cron_store.load()
+
+        cron_data_dir = str(cron_store.store_path.parent)
+        cron_run_log = CronRunLog(data_dir=cron_data_dir)
+        cron_delivery = CronDeliveryHandler(
+            notifications=self._trigger_engine._notifications,
+        )
+        cron_executor = CronJobExecutor(
+            orchestrator=self._orchestrator,
+            store=cron_store,
+            run_log=cron_run_log,
+            delivery=cron_delivery,
+        )
+        self._cron_service = CronService(
+            store=cron_store,
+            executor=cron_executor,
+            run_log=cron_run_log,
+        )
+        self._trigger_engine.set_cron_service(self._cron_service)
+        logger.info(f"CronService initialized (store: {cron_store_path})")
+
         # Register executors with TriggerEngine
         orchestrator_executor = OrchestratorExecutor(self._orchestrator)
         self._trigger_engine.register_executor("orchestrator", orchestrator_executor)
@@ -335,6 +366,8 @@ class OneValet:
         if not self._initialized:
             return
         try:
+            if self._cron_service:
+                await self._cron_service.stop()
             if self._orchestrator:
                 await self._orchestrator.shutdown()
             if self._event_bus:
@@ -355,6 +388,7 @@ class OneValet:
             self._trigger_engine = None
             self._email_handler = None
             self._model_router = None
+            self._cron_service = None
             logger.info("OneValet shut down")
 
     # ── Public API methods (issue #12) ──
@@ -450,6 +484,50 @@ class OneValet:
         if not self._trigger_engine:
             raise RuntimeError("TriggerEngine not available")
         return await self._trigger_engine.delete_task(task_id)
+
+    # ── Cron Job API ──
+
+    @property
+    def cron_service(self):
+        """Access the cron service (may be None)."""
+        return self._cron_service
+
+    async def list_cron_jobs(self, tenant_id: str = "default", include_disabled: bool = False) -> list:
+        """List cron jobs for a tenant."""
+        await self._ensure_initialized()
+        if not self._cron_service:
+            return []
+        return self._cron_service.list_jobs(user_id=tenant_id, include_disabled=include_disabled)
+
+    async def get_cron_job(self, job_id: str):
+        """Get a cron job by ID."""
+        await self._ensure_initialized()
+        if not self._cron_service:
+            return None
+        return self._cron_service.get_job(job_id)
+
+    async def add_cron_job(self, **kwargs):
+        """Create a new cron job."""
+        await self._ensure_initialized()
+        if not self._cron_service:
+            raise RuntimeError("CronService not available")
+        from .triggers.cron.models import CronJobCreate
+        input_data = CronJobCreate(**kwargs)
+        return await self._cron_service.add(input_data)
+
+    async def remove_cron_job(self, job_id: str) -> bool:
+        """Delete a cron job."""
+        await self._ensure_initialized()
+        if not self._cron_service:
+            raise RuntimeError("CronService not available")
+        return await self._cron_service.remove(job_id)
+
+    async def cron_status(self) -> dict:
+        """Get cron scheduler status."""
+        await self._ensure_initialized()
+        if not self._cron_service:
+            return {"running": False, "total_jobs": 0}
+        return await self._cron_service.status()
 
     async def get_config(self) -> dict:
         """Return a copy of the raw configuration dict."""

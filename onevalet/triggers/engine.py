@@ -41,6 +41,7 @@ class TriggerEngine:
         self._check_interval = check_interval
         self._running = False
         self._loop_task: Optional[asyncio.Task] = None
+        self._cron_service: Optional[Any] = None
         # Trigger evaluators (lazy-imported)
         self._schedule_evaluator = None
         self._event_evaluator = None
@@ -120,21 +121,33 @@ class TriggerEngine:
     def get_executor(self, name: str) -> Optional[Any]:
         return self._executors.get(name)
 
+    def set_cron_service(self, cron_service: Any) -> None:
+        """Attach a CronService for timer-based cron job scheduling."""
+        self._cron_service = cron_service
+
+    @property
+    def cron_service(self) -> Optional[Any]:
+        return self._cron_service
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Start the trigger evaluation loop."""
+        """Start the trigger evaluation loop and cron service."""
         if self._running:
             return
         self._running = True
         self._loop_task = asyncio.create_task(self._evaluation_loop())
+        if self._cron_service:
+            await self._cron_service.start()
         logger.info("TriggerEngine started")
 
     async def stop(self) -> None:
-        """Stop the trigger evaluation loop."""
+        """Stop the trigger evaluation loop and cron service."""
         self._running = False
+        if self._cron_service:
+            await self._cron_service.stop()
         if self._loop_task:
             self._loop_task.cancel()
             try:

@@ -99,6 +99,8 @@ async def execute_agent_tool(
         enriched_hints["db"] = orchestrator.database
     if orchestrator.trigger_engine:
         enriched_hints["trigger_engine"] = orchestrator.trigger_engine
+        if orchestrator.trigger_engine.cron_service:
+            enriched_hints["cron_service"] = orchestrator.trigger_engine.cron_service
 
     # Pass structured handoff via context_hints
     enriched_hints["handoff"] = {

@@ -39,14 +39,6 @@ def _get_provider(account):
     return TodoProviderFactory.create_provider(account)
 
 
-def _get_task_repo(context: AgentToolContext):
-    """Get TaskRepository from context hints."""
-    from onevalet.builtin_agents.reminder.task_repo import TaskRepository
-    db = context.context_hints.get("db") if context.context_hints else None
-    if not db:
-        return None
-    return TaskRepository(db)
-
 
 def _format_due_date(due_str: str) -> str:
     """Format due date string to short display format."""
@@ -477,59 +469,52 @@ async def set_reminder(
     *,
     context: AgentToolContext,
 ) -> str:
-    """Create a time-based reminder (one-time or recurring) via TriggerEngine."""
+    """Create a time-based reminder (one-time or recurring) via CronService."""
     if not schedule_datetime:
         return "Error: schedule_datetime is required."
     if not reminder_message:
         return "Error: reminder_message is required."
 
-    # Build trigger config
-    try:
-        if 'T' in schedule_datetime:
-            local_dt = datetime.fromisoformat(schedule_datetime.replace('Z', '+00:00'))
-        else:
-            local_dt = datetime.fromisoformat(schedule_datetime)
+    # Get cron service from context_hints
+    cron_service = context.context_hints.get("cron_service") if context.context_hints else None
+    if not cron_service:
+        return "Sorry, I can't create reminders right now. Please try again later."
 
+    from onevalet.triggers.cron.models import (
+        AtSchedule, CronScheduleSpec,
+        SessionTarget, WakeMode,
+        AgentTurnPayload, DeliveryConfig, DeliveryMode,
+        CronJobCreate,
+    )
+
+    # Build schedule
+    try:
         if schedule_type == "recurring" and cron_expression:
-            trigger_config = {"cron": cron_expression}
+            schedule = CronScheduleSpec(expr=cron_expression)
         else:
-            trigger_config = {"at": local_dt.isoformat()}
+            if 'T' in schedule_datetime:
+                local_dt = datetime.fromisoformat(schedule_datetime.replace('Z', '+00:00'))
+            else:
+                local_dt = datetime.fromisoformat(schedule_datetime)
+            schedule = AtSchedule(at=local_dt.isoformat())
     except Exception as e:
         logger.error(f"Failed to parse schedule_datetime: {e}")
         return "I couldn't process that time. Could you try again?"
 
-    # Get trigger engine from context_hints
-    trigger_engine = context.context_hints.get("trigger_engine") if context.context_hints else None
-    if not trigger_engine:
-        return "Sorry, I can't create reminders right now. Please try again later."
-
     try:
-        task = await trigger_engine.create_task(
+        job = await cron_service.add(CronJobCreate(
+            name=reminder_message[:50],
+            description=f"Reminder: {reminder_message}",
             user_id=context.tenant_id,
-            task_def={
-                "name": reminder_message[:50],
-                "description": f"Reminder: {reminder_message}",
-                "trigger": {
-                    "type": "schedule",
-                    "config": trigger_config,
-                },
-                "action": {
-                    "type": "notify",
-                    "config": {
-                        "message": f"Reminder: {reminder_message}",
-                    },
-                },
-                "output": {
-                    "channel": "sms",
-                },
-                "metadata": {
-                    "created_by": "TodoAgent",
-                    "human_readable_time": human_readable_time,
-                },
-            },
-        )
+            schedule=schedule,
+            session_target=SessionTarget.MAIN,
+            wake_mode=WakeMode.NOW,
+            payload=AgentTurnPayload(message=f"Reminder: {reminder_message}"),
+            delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+            delete_after_run=isinstance(schedule, AtSchedule),
+        ))
 
-        logger.info(f"Created reminder: {task.id}")
+        logger.info(f"Created reminder via CronService: {job.id}")
         time_desc = human_readable_time or schedule_datetime
         return f"Got it! I'll remind you {time_desc}: {reminder_message}"
 
@@ -546,7 +531,7 @@ async def set_reminder(
 async def manage_reminders(
     action: Annotated[str, "What to do with the reminder/automation."],
     task_hint: Annotated[str, "Keywords to identify which reminder/automation (for show/update/pause/resume/delete)."] = "",
-    status_filter: Annotated[str, "Filter by status when listing (default 'all')."] = "all",
+    status_filter: Annotated[str, "Filter by status when listing: 'all', 'active', 'paused' (default 'all')."] = "all",
     new_schedule_datetime: Annotated[Optional[str], "New ISO 8601 datetime for update action."] = None,
     new_cron_expression: Annotated[Optional[str], "New cron expression for update action."] = None,
     new_message: Annotated[Optional[str], "New reminder message for update action."] = None,
@@ -556,25 +541,23 @@ async def manage_reminders(
     context: AgentToolContext,
 ) -> str:
     """List, show details, update, pause, resume, or delete scheduled reminders and automations."""
-    repo = _get_task_repo(context)
-    if not repo:
-        return "Task storage is not available right now."
-
-    trigger_engine = context.context_hints.get("trigger_engine") if context.context_hints else None
+    cron_service = context.context_hints.get("cron_service") if context.context_hints else None
+    if not cron_service:
+        return "Reminder service is not available right now."
 
     if action == "list":
-        return await _list_reminders(repo, context.tenant_id, status_filter)
+        return _list_reminders(cron_service, context.tenant_id, status_filter)
     elif action == "show":
-        return await _show_reminder(repo, context.tenant_id, task_hint)
+        return _show_reminder(cron_service, context.tenant_id, task_hint)
     elif action == "pause":
-        return await _pause_reminder(repo, context.tenant_id, task_hint, trigger_engine)
+        return await _pause_reminder(cron_service, context.tenant_id, task_hint)
     elif action == "resume":
-        return await _resume_reminder(repo, context.tenant_id, task_hint, trigger_engine)
+        return await _resume_reminder(cron_service, context.tenant_id, task_hint)
     elif action == "delete":
-        return await _delete_reminder(repo, context.tenant_id, task_hint, trigger_engine)
+        return await _delete_reminder(cron_service, context.tenant_id, task_hint)
     elif action == "update":
         return await _update_reminder(
-            repo, context.tenant_id, task_hint, trigger_engine,
+            cron_service, context.tenant_id, task_hint,
             new_schedule_datetime, new_cron_expression, new_message,
             human_readable_time, update_type,
         )
@@ -582,28 +565,31 @@ async def manage_reminders(
         return "I'm not sure what you want to do. Try 'show my reminders' or 'delete my medicine reminder'."
 
 
-# ---- Reminder sub-actions ----
+# ---- Reminder sub-actions (CronService-backed) ----
 
-def _match_tasks(tasks: List[Dict], hint: str) -> List[Dict]:
-    """Match tasks by hint keywords."""
-    if not hint or not tasks:
+def _match_jobs(jobs, hint: str):
+    """Match CronJob objects by hint keywords. Returns list of matching jobs."""
+    if not hint or not jobs:
         return []
     hint_lower = hint.lower()
     matched = []
-    for task in tasks:
-        name = (task.get("name") or "").lower()
-        description = (task.get("description") or "").lower()
-        action_config = task.get("action_config", {})
-        message = (action_config.get("message") or "").lower()
-        searchable = f"{name} {description} {message}"
+    for job in jobs:
+        name = (job.name or "").lower()
+        desc = (job.description or "").lower()
+        payload_text = ""
+        if hasattr(job.payload, "message"):
+            payload_text = (job.payload.message or "").lower()
+        elif hasattr(job.payload, "text"):
+            payload_text = (job.payload.text or "").lower()
+        searchable = f"{name} {desc} {payload_text}"
         if hint_lower in searchable:
-            matched.append(task)
+            matched.append(job)
         elif any(word in searchable for word in hint_lower.split()):
-            matched.append(task)
+            matched.append(job)
     return matched
 
 
-def _format_cron(cron_expr: str) -> str:
+def _format_cron_expr(cron_expr: str) -> str:
     """Convert cron expression to human-readable."""
     parts = cron_expr.split()
     if len(parts) != 5:
@@ -636,214 +622,231 @@ def _format_datetime_display(dt_str: str) -> str:
         return str(dt_str)[:16]
 
 
-def _format_schedule(trigger_config: Dict) -> str:
-    """Format trigger config to human-readable schedule."""
-    if trigger_config.get("cron"):
-        return _format_cron(trigger_config["cron"])
-    elif trigger_config.get("at"):
-        return _format_datetime_display(trigger_config["at"])
+def _format_job_schedule(job) -> str:
+    """Format a CronJob's schedule to human-readable string."""
+    from onevalet.triggers.cron.models import AtSchedule, CronScheduleSpec, EverySchedule
+
+    schedule = job.schedule
+    if isinstance(schedule, CronScheduleSpec):
+        return _format_cron_expr(schedule.expr)
+    elif isinstance(schedule, AtSchedule):
+        return _format_datetime_display(schedule.at)
+    elif isinstance(schedule, EverySchedule):
+        secs = schedule.every_ms / 1000
+        if secs >= 3600:
+            return f"every {secs / 3600:.0f}h"
+        elif secs >= 60:
+            return f"every {secs / 60:.0f}m"
+        else:
+            return f"every {secs:.0f}s"
     return "scheduled"
 
 
-async def _list_reminders(repo, tenant_id: str, status_filter: str) -> str:
-    """List all user's reminders/automations."""
-    status_param = None if status_filter == "all" else status_filter
-    tasks = await repo.get_user_tasks(tenant_id, status=status_param)
-    if not tasks:
+def _get_job_message(job) -> str:
+    """Extract the message/text from a job's payload."""
+    if hasattr(job.payload, "message"):
+        return job.payload.message or ""
+    elif hasattr(job.payload, "text"):
+        return job.payload.text or ""
+    return ""
+
+
+def _list_reminders(cron_service, tenant_id: str, status_filter: str) -> str:
+    """List all user's reminders/automations from CronService."""
+    include_disabled = status_filter in ("all", "paused")
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=include_disabled)
+
+    # Apply status filter
+    if status_filter == "active":
+        jobs = [j for j in jobs if j.enabled]
+    elif status_filter == "paused":
+        jobs = [j for j in jobs if not j.enabled]
+
+    if not jobs:
         if status_filter != "all":
             return f"You don't have any {status_filter} reminders or automations."
         return "You don't have any scheduled reminders or automations yet."
 
     lines = []
-    for i, task in enumerate(tasks, 1):
-        name = task.get("name", "Unnamed")
-        status = task.get("status", "unknown")
-        trigger_config = task.get("trigger_config", {})
-        schedule = _format_schedule(trigger_config)
-        status_icon = "" if status == "active" else " (paused)" if status == "paused" else " (disabled)"
-        lines.append(f"{i}. {name} - {schedule}{status_icon}")
+    for i, job in enumerate(jobs, 1):
+        name = job.name or "Unnamed"
+        schedule_str = _format_job_schedule(job)
+        status_icon = "" if job.enabled else " (paused)"
+        lines.append(f"{i}. {name} - {schedule_str}{status_icon}")
 
-    return f"Your {len(tasks)} reminder(s)/automation(s):\n" + "\n".join(lines)
+    return f"Your {len(jobs)} reminder(s)/automation(s):\n" + "\n".join(lines)
 
 
-async def _show_reminder(repo, tenant_id: str, task_hint: str) -> str:
-    """Show details of a specific reminder."""
+def _show_reminder(cron_service, tenant_id: str, task_hint: str) -> str:
+    """Show details of a specific reminder from CronService."""
     if not task_hint:
         return "Which reminder or automation would you like to see?"
-    tasks = await repo.get_user_tasks(tenant_id)
-    matched = _match_tasks(tasks, task_hint)
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    matched = _match_jobs(jobs, task_hint)
     if not matched:
         return f"I couldn't find anything matching '{task_hint}'."
     if len(matched) > 1:
-        return _format_disambiguation(matched, "Which one do you mean?")
-    task = matched[0]
-    name = task.get("name", "Unnamed")
-    status = task.get("status", "unknown")
-    action_type = task.get("action_type", "")
-    run_count = task.get("run_count", 0)
-    type_label = "Reminder" if action_type == "notify" else "Automation"
-    trigger_config = task.get("trigger_config", {})
-    schedule = _format_schedule(trigger_config)
-    action_config = task.get("action_config", {})
-    message = action_config.get("message", "")
-    lines = [f"{type_label}: {name}", f"Schedule: {schedule}", f"Status: {status}", f"Runs: {run_count}"]
+        return _format_job_disambiguation(matched, "Which one do you mean?")
+    job = matched[0]
+    schedule_str = _format_job_schedule(job)
+    message = _get_job_message(job)
+    status = "active" if job.enabled else "paused"
+    last_status = job.state.last_run_status or "never run"
+    lines = [
+        f"Reminder: {job.name}",
+        f"Schedule: {schedule_str}",
+        f"Status: {status}",
+        f"Last run: {last_status}",
+    ]
+    if job.state.consecutive_errors:
+        lines.append(f"Consecutive errors: {job.state.consecutive_errors}")
     if message:
         lines.append(f"Message: {message}")
+    if job.description:
+        lines.append(f"Description: {job.description}")
     return "\n".join(lines)
 
 
-async def _pause_reminder(repo, tenant_id: str, task_hint: str, trigger_engine) -> str:
-    """Pause a reminder/automation."""
+async def _pause_reminder(cron_service, tenant_id: str, task_hint: str) -> str:
+    """Pause a reminder/automation via CronService."""
+    from onevalet.triggers.cron.models import CronJobPatch
+
     if not task_hint:
         return "Which reminder or automation would you like to pause?"
-    tasks = await repo.get_user_tasks(tenant_id, status="active")
-    matched = _match_tasks(tasks, task_hint)
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=False)
+    matched = _match_jobs(jobs, task_hint)
     if not matched:
         return f"I couldn't find an active item matching '{task_hint}'."
     if len(matched) > 1:
-        return _format_disambiguation(matched, "Which one should I pause?")
-    task = matched[0]
-    task_id = task.get("id")
-    task_name = task.get("name", "item")
+        return _format_job_disambiguation(matched, "Which one should I pause?")
+    job = matched[0]
     try:
-        await repo.update_task(task_id, {"status": "paused"})
-        if trigger_engine:
-            await trigger_engine._teardown_task_trigger_by_id(task_id)
-        return f"Paused '{task_name}'. Say 'resume' when you want it back."
+        await cron_service.update(job.id, CronJobPatch(enabled=False))
+        return f"Paused '{job.name}'. Say 'resume' when you want it back."
     except Exception as e:
-        logger.error(f"Failed to pause task: {e}")
+        logger.error(f"Failed to pause cron job: {e}")
         return "Sorry, I couldn't pause that."
 
 
-async def _resume_reminder(repo, tenant_id: str, task_hint: str, trigger_engine) -> str:
-    """Resume a paused reminder/automation."""
+async def _resume_reminder(cron_service, tenant_id: str, task_hint: str) -> str:
+    """Resume a paused reminder/automation via CronService."""
+    from onevalet.triggers.cron.models import CronJobPatch
+
     if not task_hint:
         return "Which reminder or automation would you like to resume?"
-    tasks = await repo.get_user_tasks(tenant_id, status="paused")
-    matched = _match_tasks(tasks, task_hint)
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    paused = [j for j in jobs if not j.enabled]
+    matched = _match_jobs(paused, task_hint)
     if not matched:
         return f"I couldn't find a paused item matching '{task_hint}'."
     if len(matched) > 1:
-        return _format_disambiguation(matched, "Which one should I resume?")
-    task = matched[0]
-    task_id = task.get("id")
-    task_name = task.get("name", "item")
+        return _format_job_disambiguation(matched, "Which one should I resume?")
+    job = matched[0]
     try:
-        updated_task = await repo.update_task(task_id, {"status": "active"})
-        if trigger_engine and updated_task:
-            from onevalet.triggers.models import Task
-            task_obj = Task.from_dict(updated_task)
-            await trigger_engine._setup_task_trigger(task_obj)
-        return f"Resumed '{task_name}'."
+        await cron_service.update(job.id, CronJobPatch(enabled=True))
+        return f"Resumed '{job.name}'."
     except Exception as e:
-        logger.error(f"Failed to resume task: {e}")
+        logger.error(f"Failed to resume cron job: {e}")
         return "Sorry, I couldn't resume that."
 
 
-async def _delete_reminder(repo, tenant_id: str, task_hint: str, trigger_engine) -> str:
-    """Delete a reminder/automation."""
+async def _delete_reminder(cron_service, tenant_id: str, task_hint: str) -> str:
+    """Delete a reminder/automation via CronService."""
     if not task_hint:
         return "Which reminder or automation would you like to delete?"
-    tasks = await repo.get_user_tasks(tenant_id)
-    matched = _match_tasks(tasks, task_hint)
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    matched = _match_jobs(jobs, task_hint)
     if not matched:
         return f"I couldn't find anything matching '{task_hint}'."
     if len(matched) > 1:
-        return _format_disambiguation(matched, "Which one should I delete?")
-    task = matched[0]
-    task_id = task.get("id")
-    task_name = task.get("name", "item")
+        return _format_job_disambiguation(matched, "Which one should I delete?")
+    job = matched[0]
     try:
-        if trigger_engine:
-            try:
-                await trigger_engine.delete_task(task_id)
-            except Exception as e:
-                logger.warning(f"Failed to delete from trigger engine: {e}")
-        await repo.delete_task(task_id)
-        return f"Deleted '{task_name}'."
+        await cron_service.remove(job.id)
+        return f"Deleted '{job.name}'."
     except Exception as e:
-        logger.error(f"Failed to delete task: {e}")
+        logger.error(f"Failed to delete cron job: {e}")
         return "Sorry, I couldn't delete that."
 
 
 async def _update_reminder(
-    repo, tenant_id: str, task_hint: str, trigger_engine,
+    cron_service, tenant_id: str, task_hint: str,
     new_schedule_datetime, new_cron_expression, new_message,
     human_readable_time, update_type,
 ) -> str:
-    """Update a reminder's schedule or message."""
+    """Update a reminder's schedule or message via CronService."""
+    from onevalet.triggers.cron.models import (
+        AtSchedule, CronScheduleSpec, AgentTurnPayload,
+        SystemEventPayload, CronJobPatch,
+    )
+
     if not task_hint:
         return "Which reminder or automation would you like to update?"
-    tasks = await repo.get_user_tasks(tenant_id)
-    matched = _match_tasks(tasks, task_hint)
+    jobs = cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+    matched = _match_jobs(jobs, task_hint)
     if not matched:
         return f"I couldn't find anything matching '{task_hint}'."
     if len(matched) > 1:
-        return _format_disambiguation(matched, "Which one should I update?")
-    task = matched[0]
-    task_id = task.get("id")
-    task_name = task.get("name", "item")
+        return _format_job_disambiguation(matched, "Which one should I update?")
+    job = matched[0]
     try:
-        update_data = {}
+        patch = CronJobPatch()
         response_parts = []
+
         if update_type in ("time", "both"):
-            trigger_config = None
             if new_cron_expression:
-                trigger_config = {"cron": new_cron_expression}
+                patch.schedule = CronScheduleSpec(expr=new_cron_expression)
+                patch.delete_after_run = False
+                time_desc = human_readable_time or _format_cron_expr(new_cron_expression)
+                response_parts.append(f"changed to {time_desc}")
             elif new_schedule_datetime:
                 try:
                     if 'T' in new_schedule_datetime:
                         local_dt = datetime.fromisoformat(new_schedule_datetime.replace('Z', '+00:00'))
                     else:
                         local_dt = datetime.fromisoformat(new_schedule_datetime)
-                    trigger_config = {"at": local_dt.isoformat()}
+                    patch.schedule = AtSchedule(at=local_dt.isoformat())
+                    patch.delete_after_run = True
+                    time_desc = human_readable_time or _format_datetime_display(local_dt.isoformat())
+                    response_parts.append(f"changed to {time_desc}")
                 except Exception:
                     pass
-            if trigger_config:
-                update_data["trigger_config"] = trigger_config
-                if new_cron_expression:
-                    update_data["trigger_type"] = "schedule"
-                time_desc = human_readable_time or "new time"
-                response_parts.append(f"changed to {time_desc}")
 
         if update_type in ("message", "both"):
             if new_message:
-                action_config = task.get("action_config", {})
-                action_config["message"] = new_message
-                update_data["action_config"] = action_config
-                update_data["name"] = new_message[:50]
-                update_data["description"] = f"Reminder: {new_message}"
+                # Build new payload matching existing kind
+                if isinstance(job.payload, SystemEventPayload):
+                    patch.payload = SystemEventPayload(text=f"Reminder: {new_message}")
+                else:
+                    patch.payload = AgentTurnPayload(message=f"Reminder: {new_message}")
+                patch.name = new_message[:50]
+                patch.description = f"Reminder: {new_message}"
                 response_parts.append("message updated")
 
-        if not update_data:
+        has_changes = any(
+            getattr(patch, f) is not None
+            for f in ("schedule", "payload", "name", "description", "delete_after_run")
+        )
+        if not has_changes:
             return "What would you like to change? (time, message, or both)"
 
-        updated_task = await repo.update_task(task_id, update_data)
+        await cron_service.update(job.id, patch)
 
-        if "trigger_config" in update_data and trigger_engine:
-            await trigger_engine._teardown_task_trigger_by_id(task_id)
-            if updated_task and updated_task.get("status") == "active":
-                from onevalet.triggers.models import Task
-                task_obj = Task.from_dict(updated_task)
-                await trigger_engine._setup_task_trigger(task_obj)
-
-        response = f"Updated '{task_name}'"
+        response = f"Updated '{job.name}'"
         if response_parts:
             response += f" - {', '.join(response_parts)}"
         return response + "."
     except Exception as e:
-        logger.error(f"Failed to update task: {e}", exc_info=True)
+        logger.error(f"Failed to update cron job: {e}", exc_info=True)
         return "Sorry, I couldn't update that. Please try again."
 
 
-def _format_disambiguation(tasks: List[Dict], prompt: str) -> str:
-    """Format task list for disambiguation."""
-    lines = [f"Found {len(tasks)} matches:"]
-    for i, task in enumerate(tasks, 1):
-        name = task.get("name", "Unnamed")
-        trigger_config = task.get("trigger_config", {})
-        schedule = _format_schedule(trigger_config)
-        lines.append(f"{i}. {name}" + (f" ({schedule})" if schedule else ""))
+def _format_job_disambiguation(jobs, prompt: str) -> str:
+    """Format CronJob list for disambiguation."""
+    lines = [f"Found {len(jobs)} matches:"]
+    for i, job in enumerate(jobs, 1):
+        schedule_str = _format_job_schedule(job)
+        lines.append(f"{i}. {job.name}" + (f" ({schedule_str})" if schedule_str else ""))
     lines.append(f"\n{prompt}")
     return "\n".join(lines)
 

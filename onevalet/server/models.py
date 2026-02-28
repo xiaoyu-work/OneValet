@@ -70,3 +70,30 @@ class TaskCreateRequest(BaseModel):
 
 class TaskUpdateRequest(BaseModel):
     status: Optional[str] = None  # "active", "paused", "disabled"
+
+
+# ── Cron Job Models ──
+
+class CronJobCreateRequest(BaseModel):
+    tenant_id: str = "default"
+    name: str
+    instruction: str = ""
+    schedule_type: str  # "at", "every", "cron"
+    schedule_value: str  # ISO datetime, seconds, or cron expression
+    timezone: str = ""
+    session_target: str = "isolated"  # "main" or "isolated"
+    wake_mode: str = "next-heartbeat"
+    delivery_mode: str = "none"  # "none", "announce", "webhook"
+    delivery_channel: Optional[str] = None
+    webhook_url: Optional[str] = None
+    delete_after_run: bool = False
+    metadata: Optional[dict] = None
+
+
+class CronJobUpdateRequest(BaseModel):
+    enabled: Optional[bool] = None
+    name: Optional[str] = None
+    instruction: Optional[str] = None
+    schedule_type: Optional[str] = None
+    schedule_value: Optional[str] = None
+    timezone: Optional[str] = None

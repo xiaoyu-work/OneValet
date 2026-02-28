@@ -8,6 +8,7 @@ from .credentials import router as credentials_router
 from .events import router as events_router
 from .oauth import router as oauth_router
 from .tasks import router as tasks_router
+from .cron import router as cron_router
 
 
 def register_routes(app: FastAPI):
@@ -17,3 +18,4 @@ def register_routes(app: FastAPI):
     app.include_router(events_router)
     app.include_router(oauth_router)
     app.include_router(tasks_router)
+    app.include_router(cron_router)
