@@ -367,8 +367,11 @@ def llm_client():
 @pytest.fixture(scope="session")
 def agent_registry():
     """Session-scoped agent registry with all builtin agents loaded."""
-    # Importing builtin_agents triggers @valet decorator registration
-    import onevalet.builtin_agents  # noqa: F401
+    from onevalet.agents.discovery import AgentDiscovery
+
+    discovery = AgentDiscovery()
+    discovery.scan_package("onevalet.builtin_agents")
+    discovery.sync_from_global_registry()
 
     llm_registry = LLMRegistry.get_instance()
     registry = AgentRegistry(llm_registry=llm_registry)
@@ -386,7 +389,7 @@ async def orchestrator_factory(llm_client, agent_registry):
     """
     # Register the LLM client as "default" so agents can use it
     llm_registry = agent_registry.llm_registry
-    llm_registry.register("default", llm_client, set_default=True)
+    llm_registry.register("default", llm_client)
 
     async def _create(canned_results: Optional[Dict[str, str]] = None):
         recorder = ToolCallRecorder(

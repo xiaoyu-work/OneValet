@@ -48,6 +48,9 @@ async def test_routes_to_correct_agent(orchestrator_factory, user_input, expecte
     result = await orch.handle_message(tenant_id="test_user", message=user_input)
 
     routed_agents = [c["agent_type"] for c in recorder.agent_calls]
+    tool_names = [tc["tool_name"] for tc in recorder.tool_calls]
+    print(f"\n  routed={routed_agents} tools={tool_names}")
+    print(f"  response={result.raw_message[:200] if result.raw_message else '(empty)'}")
     assert any(agent in routed_agents for agent in expected_agents), (
         f"Expected one of {expected_agents}, got {routed_agents}"
     )
