@@ -391,7 +391,7 @@ class Orchestrator:
                 return await self.post_process(agent_result, context)
             # Agent completed -> return result directly.
             # The user's message was a response to the pending agent (e.g. an
-            # approval like "好"), NOT a new task.  Feeding it into the ReAct
+            # approval like "yes"/"ok"), NOT a new task.  Feeding it into the ReAct
             # loop would cause the orchestrator to misinterpret the approval
             # word as a brand-new request and spawn unnecessary follow-up agents.
             return await self.post_process(agent_result, context)
@@ -537,7 +537,7 @@ class Orchestrator:
             # Agent still waiting -> return prompt directly, don't enter ReAct
             # Return the agent's result directly — whether still waiting or
             # completed.  The user's message was a response to the pending
-            # agent (e.g. approval "好"), not a new task.  Entering the ReAct
+            # agent (e.g. approval "yes"/"ok"), not a new task.  Entering the ReAct
             # loop would misinterpret it as a fresh request.
             agent_result = await self.post_process(agent_result, context)
             yield AgentEvent(

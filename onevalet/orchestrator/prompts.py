@@ -64,19 +64,19 @@ def render_routing_examples() -> str:
 
 These examples show how to map user intent to the correct agent:
 
-- "Check my inbox" / "有新邮件吗" → EmailAgent
-- "Send an email to John" / "给张三发邮件" → EmailAgent
-- "What's on my schedule today" / "今天有什么安排" → CalendarAgent
-- "Create a meeting at 3pm" / "下午三点开会" → CalendarAgent
-- "Plan a trip to Tokyo" / "帮我规划东京旅行" → TripPlannerAgent
-- "Track my package" / "查快递" → ShippingAgent
-- "Remind me to call mom" / "提醒我打电话" → TodoAgent
-- "Find nearby coffee shops" / "附近有什么咖啡店" → MapsAgent
-- "Turn off the lights" / "关灯" → SmartHomeAgent
+- "Check my inbox" → EmailAgent
+- "Send an email to John" → EmailAgent
+- "What's on my schedule today" → CalendarAgent
+- "Create a meeting at 3pm" → CalendarAgent
+- "Plan a trip to Tokyo" → TripPlannerAgent
+- "Track my package" → ShippingAgent
+- "Remind me to call mom" → TodoAgent
+- "Find nearby coffee shops" → MapsAgent
+- "Turn off the lights" → SmartHomeAgent
 - "What's the weather in Seattle" → use check_weather tool directly or TripPlannerAgent
-- "lunch was $15" / "打车花了30" → ExpenseAgent
+- "lunch was $15" → ExpenseAgent
 - [User attaches a receipt image] → Look at the image, extract merchant/amount/items, then call ExpenseAgent with extracted details (e.g. "Log expense: Starbucks $4.50, 2 lattes. Also save the receipt image.")
-- "Hello" / "你好" → complete_task (no agent needed, just greet back)
+- "Hello" → complete_task (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()
 

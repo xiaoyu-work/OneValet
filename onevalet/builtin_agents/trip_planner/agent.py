@@ -23,7 +23,7 @@ class TripPlannerAgent(StandardAgent):
     """Plan a complete trip itinerary with day-by-day schedule. Use when the user asks to plan a trip, make an itinerary, or organize a multi-day travel plan. Coordinates flights, hotels, weather, places, directions, and optionally creates calendar events and tasks."""
 
     # Only destination is truly required. Everything else can be inferred
-    # by the ReAct LLM (dates from "三天", origin from user profile, etc.).
+    # by the ReAct LLM (dates from "3 days", origin from user profile, etc.).
     # Pattern: "Assume and proceed" — state assumptions, let user correct.
     destination = InputField(
         prompt="Which city or destination are you traveling to?",
@@ -39,7 +39,7 @@ Today's date: {today} ({weekday})
 
 ## Handling Missing Info
 Use what the user provides. For what's missing:
-- **Dates**: infer from duration (e.g. "三天" = 3 days starting {tomorrow}). This is the ONLY thing you may infer.
+- **Dates**: infer from duration (e.g. "3 days" = 3 days starting {tomorrow}). This is the ONLY thing you may infer.
 - **Origin city**: if not given, skip flight search entirely. Do NOT guess a city.
 - **Budget / preferences**: do not mention or guess. Just plan a balanced trip.
 - **Do NOT list assumptions.** Never fabricate information the user didn't provide.
