@@ -15,9 +15,11 @@ router = APIRouter()
 @router.post("/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(req: ChatRequest):
     app = require_app()
+    images = [img.model_dump() for img in req.images] if req.images else None
     result = await app.handle_message(
         tenant_id=req.tenant_id,
         message=req.message,
+        images=images,
         metadata=req.metadata,
     )
     return ChatResponse(
@@ -30,10 +32,13 @@ async def chat(req: ChatRequest):
 async def stream(req: ChatRequest):
     app = require_app()
 
+    images = [img.model_dump() for img in req.images] if req.images else None
+
     async def event_generator():
         async for event in app.stream_message(
             tenant_id=req.tenant_id,
             message=req.message,
+            images=images,
             metadata=req.metadata,
         ):
             def _default(obj):

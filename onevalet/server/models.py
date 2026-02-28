@@ -5,9 +5,15 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+class ImageInput(BaseModel):
+    data: str  # URL (https://...) or base64-encoded image data
+    media_type: str = "image/jpeg"  # MIME type: image/jpeg, image/png, image/webp, image/gif
+
+
 class ChatRequest(BaseModel):
     message: str
     tenant_id: str = "default"
+    images: Optional[list[ImageInput]] = None
     metadata: Optional[dict] = None
 
 

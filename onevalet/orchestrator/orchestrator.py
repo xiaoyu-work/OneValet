@@ -339,6 +339,7 @@ class Orchestrator:
         self,
         tenant_id: str,
         message: str,
+        images: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> AgentResult:
         """
@@ -356,6 +357,7 @@ class Orchestrator:
         Args:
             tenant_id: Tenant/user identifier
             message: User message text
+            images: Optional list of image dicts (type, data, media_type)
             metadata: Optional message metadata
 
         Returns:
@@ -399,6 +401,14 @@ class Orchestrator:
         # Step 5: Build LLM messages
         messages = await self._build_llm_messages(context, message)
 
+        # Convert images to media format for LLM
+        media = None
+        if images:
+            media = [
+                {"type": "image", "data": img["data"], "media_type": img.get("media_type", "image/jpeg")}
+                for img in images
+            ]
+
         # Step 6: Run ReAct loop (consume events silently)
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
@@ -407,6 +417,7 @@ class Orchestrator:
             tenant_id,
             context=context,
             user_message=message,
+            media=media,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
@@ -468,6 +479,7 @@ class Orchestrator:
         self,
         tenant_id: str,
         message: str,
+        images: Optional[List[Dict[str, Any]]] = None,
         mode: StreamMode = StreamMode.EVENTS,
         metadata: Optional[Dict[str, Any]] = None
     ) -> AsyncIterator[AgentEvent]:
@@ -479,6 +491,7 @@ class Orchestrator:
         Args:
             tenant_id: Tenant identifier
             message: User message text
+            images: Optional list of image dicts (type, data, media_type)
             mode: Stream mode
             metadata: Optional message metadata
 
@@ -528,12 +541,20 @@ class Orchestrator:
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
         messages = await self._build_llm_messages(context, message)
 
+        # Convert images to media format for LLM
+        media = None
+        if images:
+            media = [
+                {"type": "image", "data": img["data"], "media_type": img.get("media_type", "image/jpeg")}
+                for img in images
+            ]
+
         # Delegate to shared ReAct loop
         final_response = ""
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
             messages, tool_schemas, tenant_id,
-            context=context, user_message=message,
+            context=context, user_message=message, media=media,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
@@ -569,6 +590,7 @@ class Orchestrator:
         retry_with_required_on_empty: bool = False,
         context: Optional[Dict[str, Any]] = None,
         user_message: str = "",
+        media: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Unified ReAct loop implementation yielding streaming events.
 
@@ -710,15 +732,16 @@ class Orchestrator:
             try:
                 tool_choice = first_turn_tool_choice if turn == 1 else "auto"
                 # Enable reasoning only on the first turn for complex requests
-                reasoning_kwargs = {}
+                extra_kwargs = {}
                 if enable_reasoning and turn == 1:
-                    reasoning_kwargs = {
-                        "reasoning_effort": self._react_config.reasoning_effort,
-                    }
+                    extra_kwargs["reasoning_effort"] = self._react_config.reasoning_effort
+                # Pass images only on the first turn
+                if media and turn == 1:
+                    extra_kwargs["media"] = media
                 response = await self._llm_call_with_retry(
                     messages, tool_schemas, tool_choice=tool_choice,
                     llm_client_override=routed_llm_client,
-                    **reasoning_kwargs,
+                    **extra_kwargs,
                 )
             except Exception as e:
                 yield AgentEvent(

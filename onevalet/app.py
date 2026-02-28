@@ -442,18 +442,30 @@ class OneValet:
         await self._ensure_initialized()
         self._momex.clear_history(tenant_id=tenant_id, session_id=tenant_id)
 
-    async def handle_message(self, tenant_id: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> "AgentResult":
+    async def handle_message(
+        self,
+        tenant_id: str,
+        message: str,
+        images: Optional[list] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "AgentResult":
         """Send a message and get a response via the orchestrator."""
         await self._ensure_initialized()
         return await self._orchestrator.handle_message(
-            tenant_id=tenant_id, message=message, metadata=metadata,
+            tenant_id=tenant_id, message=message, images=images, metadata=metadata,
         )
 
-    async def stream_message(self, tenant_id: str, message: str, metadata: Optional[Dict[str, Any]] = None) -> AsyncIterator["AgentEvent"]:
+    async def stream_message(
+        self,
+        tenant_id: str,
+        message: str,
+        images: Optional[list] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator["AgentEvent"]:
         """Stream a message response via the orchestrator."""
         await self._ensure_initialized()
         async for event in self._orchestrator.stream_message(
-            tenant_id=tenant_id, message=message, metadata=metadata,
+            tenant_id=tenant_id, message=message, images=images, metadata=metadata,
         ):
             yield event
 
