@@ -196,6 +196,20 @@ class CronExecutor:
         else:
             return await self._execute_isolated(job)
 
+    def _build_metadata(self, job: CronJob, **extra) -> dict:
+        """Build metadata dict for orchestrator calls."""
+        meta = {
+            "source": "cron",
+            "cron_job_id": job.id,
+            "cron_job_name": job.name,
+            "wake_mode": job.wake_mode.value,
+            **extra,
+        }
+        # Signal the orchestrator to inject notify_user tool
+        if job.delivery and job.delivery.conditional:
+            meta["cron_conditional_delivery"] = True
+        return meta
+
     async def _execute_main(self, job: CronJob) -> Tuple[Optional[str], Optional[str]]:
         """Main mode: inject system event into main session."""
         if not isinstance(job.payload, SystemEventPayload):
@@ -208,14 +222,9 @@ class CronExecutor:
             result = await self._orchestrator.handle_message(
                 tenant_id=job.user_id,
                 message=message,
-                metadata={
-                    "source": "cron",
-                    "cron_job_id": job.id,
-                    "cron_job_name": job.name,
-                    "wake_mode": job.wake_mode.value,
-                },
+                metadata=self._build_metadata(job),
             )
-            return result.raw_message or text, None
+            return self._extract_summary(job, result, text), None
         except Exception as e:
             return None, str(e)
 
@@ -230,17 +239,27 @@ class CronExecutor:
             result = await self._orchestrator.handle_message(
                 tenant_id=job.user_id,
                 message=message,
-                metadata={
-                    "source": "cron",
-                    "cron_job_id": job.id,
-                    "cron_job_name": job.name,
-                    "isolated": True,
-                    "wake_mode": job.wake_mode.value,
-                },
+                metadata=self._build_metadata(job, isolated=True),
             )
-            return result.raw_message or "", None
+            return self._extract_summary(job, result, ""), None
         except Exception as e:
             return None, str(e)
+
+    def _extract_summary(self, job: CronJob, result, fallback: str) -> Optional[str]:
+        """Extract summary from orchestrator result, respecting conditional delivery.
+
+        For conditional delivery jobs, only return a summary if the agent
+        explicitly called notify_user. This prevents delivery of results
+        when the monitored condition was not met.
+        """
+        if job.delivery and job.delivery.conditional:
+            # Only deliver the explicit notification message
+            notification = result.metadata.get("cron_notification") if result.metadata else None
+            if notification:
+                return notification
+            # Condition not met — return None to suppress delivery
+            return None
+        return result.raw_message or fallback
 
     def _apply_result(
         self,

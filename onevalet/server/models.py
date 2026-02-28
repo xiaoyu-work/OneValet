@@ -86,6 +86,7 @@ class CronJobCreateRequest(BaseModel):
     delivery_mode: str = "none"  # "none", "announce", "webhook"
     delivery_channel: Optional[str] = None
     webhook_url: Optional[str] = None
+    conditional: bool = False  # only notify when agent calls notify_user
     delete_after_run: bool = False
     metadata: Optional[dict] = None
 

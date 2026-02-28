@@ -74,11 +74,13 @@ async def create_cron_job(req: CronJobCreateRequest):
 
     # Build delivery
     delivery = None
-    if req.delivery_mode != "none":
+    if req.delivery_mode != "none" or req.conditional:
+        mode = DeliveryMode(req.delivery_mode) if req.delivery_mode != "none" else DeliveryMode.ANNOUNCE
         delivery = DeliveryConfig(
-            mode=DeliveryMode(req.delivery_mode),
+            mode=mode,
             channel=req.delivery_channel,
             webhook_url=req.webhook_url,
+            conditional=req.conditional,
         )
 
     input_data = CronJobCreate(

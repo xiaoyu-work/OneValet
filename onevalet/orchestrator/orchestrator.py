@@ -386,6 +386,14 @@ class Orchestrator:
 
         # Step 4: Build tool schemas (all lightweight — ReAct picks directly)
         tool_schemas = await self._build_tool_schemas(tenant_id)
+
+        # Step 4b: Inject notify_user tool for conditional cron delivery
+        meta = metadata or {}
+        if meta.get("cron_conditional_delivery"):
+            notify_tool, notify_schema = self._build_notify_user_tool(context)
+            self.builtin_tools.append(notify_tool)
+            tool_schemas.append(notify_schema)
+
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
 
         # Step 5: Build LLM messages
@@ -415,17 +423,27 @@ class Orchestrator:
         else:
             status = AgentStatus.COMPLETED
 
+        result_metadata = {
+            "react_turns": exec_data.get("turns", 0),
+            "token_usage": exec_data.get("token_usage", {}),
+            "duration_ms": exec_data.get("duration_ms", 0),
+            "tool_calls_count": exec_data.get("tool_calls_count", 0),
+            "total_tool_count": len(tool_schemas),
+        }
+
+        # Carry conditional notification from notify_user tool
+        if context.get("cron_notification"):
+            result_metadata["cron_notification"] = context["cron_notification"]
+
+        # Clean up injected notify_user tool
+        if meta.get("cron_conditional_delivery"):
+            self.builtin_tools = [t for t in self.builtin_tools if t.name != "notify_user"]
+
         result = AgentResult(
             agent_type=self.__class__.__name__,
             status=status,
             raw_message=final_response,
-            metadata={
-                "react_turns": exec_data.get("turns", 0),
-                "token_usage": exec_data.get("token_usage", {}),
-                "duration_ms": exec_data.get("duration_ms", 0),
-                "tool_calls_count": exec_data.get("tool_calls_count", 0),
-                "total_tool_count": len(tool_schemas),
-            },
+            metadata=result_metadata,
         )
 
         if pending_approvals:
@@ -2062,6 +2080,49 @@ class Orchestrator:
             ))
 
         return tools
+
+    def _build_notify_user_tool(self, context: Dict[str, Any]):
+        """Build a notify_user tool for conditional cron delivery.
+
+        When a cron job has conditional delivery, this tool is injected into
+        the ReAct loop. The agent calls it ONLY when the monitored condition
+        is met. If the agent never calls it, no notification is sent.
+
+        Returns:
+            (AgentTool, schema_dict) tuple
+        """
+        def make_executor(ctx):
+            async def notify_user_executor(args: dict, tool_context=None) -> str:
+                message = args.get("message", "")
+                if not message:
+                    return "Error: message is required."
+                ctx["cron_notification"] = message
+                return f"Notification queued: {message}"
+            return notify_user_executor
+
+        tool = AgentTool(
+            name="notify_user",
+            description=(
+                "Send a notification to the user. ONLY call this when a monitored "
+                "condition is actually met (e.g. price dropped below threshold, "
+                "weather changed, etc.). If the condition is NOT met, do NOT call "
+                "this tool — just respond normally without notifying."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The notification message to send to the user",
+                    }
+                },
+                "required": ["message"],
+            },
+            executor=make_executor(context),
+            category="cron",
+        )
+
+        return tool, tool.to_openai_schema()
 
     # ==========================================================================
     # EXTENSION POINTS - Override these in subclasses

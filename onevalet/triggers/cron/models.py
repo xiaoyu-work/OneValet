@@ -197,6 +197,7 @@ class DeliveryConfig:
     best_effort: bool = False  # don't fail job if delivery fails
     webhook_url: Optional[str] = None  # URL for webhook mode
     webhook_token: Optional[str] = None  # Bearer token for webhook
+    conditional: bool = False  # only deliver when agent explicitly calls notify_user
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {"mode": self.mode.value}
@@ -212,6 +213,8 @@ class DeliveryConfig:
             d["webhookUrl"] = self.webhook_url
         if self.webhook_token:
             d["webhookToken"] = self.webhook_token
+        if self.conditional:
+            d["conditional"] = self.conditional
         return d
 
     @classmethod
@@ -224,6 +227,7 @@ class DeliveryConfig:
             best_effort=d.get("bestEffort", d.get("best_effort", False)),
             webhook_url=d.get("webhookUrl", d.get("webhook_url")),
             webhook_token=d.get("webhookToken", d.get("webhook_token")),
+            conditional=d.get("conditional", False),
         )
 
 

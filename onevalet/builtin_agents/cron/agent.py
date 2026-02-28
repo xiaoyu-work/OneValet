@@ -49,6 +49,13 @@ Session targets:
 - "isolated": Fresh context each run (default, best for recurring tasks)
 - "main": Runs with conversation history (for context-aware tasks)
 
+Conditional delivery:
+- Use conditional=True when the user wants to be notified ONLY when a condition is met.
+- Example: "alert me if Bitcoin drops below 50k" → conditional=True, delivery_mode="announce"
+- The instruction should tell the agent to check the condition and call notify_user only when met.
+- Example instruction: "Check Bitcoin price. If below $50,000, call notify_user with the current price."
+- Do NOT use conditional for simple recurring reminders — only for "if X happens, tell me" requests.
+
 Instructions:
 1. For creating schedules, determine the right schedule_type and schedule_value from the user's request.
 2. Convert natural language times to cron expressions or ISO datetimes.
@@ -56,7 +63,8 @@ Instructions:
 4. For managing jobs (list, update, remove), use the job name or ID.
 5. When the user says "every morning at 8am", use cron "0 8 * * *".
 6. When the user says "in 30 minutes", calculate the ISO datetime and use "at".
-7. When the user says "every 5 minutes", use "every" with value "300"."""
+7. When the user says "every 5 minutes", use "every" with value "300".
+8. When the user says "alert me if/when X happens", use conditional=True with delivery_mode="announce"."""
 
     def get_system_prompt(self) -> str:
         now = datetime.now()

@@ -145,6 +145,7 @@ async def cron_add(
     delivery_mode: Annotated[str, "How to deliver results: 'none', 'announce' (notify user), or 'webhook'"] = "none",
     delivery_channel: Annotated[Optional[str], "Channel for announce delivery"] = None,
     webhook_url: Annotated[Optional[str], "URL for webhook delivery"] = None,
+    conditional: Annotated[bool, "If true, only notify when a condition is met. The agent will have a notify_user tool to decide when to send notifications. Use for 'alert me when X happens' type requests."] = False,
     delete_after_run: Annotated[bool, "Auto-delete after successful execution (default true for one-shot)"] = False,
     *, context: AgentToolContext,
 ) -> str:
@@ -188,11 +189,13 @@ async def cron_add(
 
     # Build delivery
     delivery = None
-    if delivery_mode != "none":
+    if delivery_mode != "none" or conditional:
+        mode = DeliveryMode(delivery_mode) if delivery_mode != "none" else DeliveryMode.ANNOUNCE
         delivery = DeliveryConfig(
-            mode=DeliveryMode(delivery_mode),
+            mode=mode,
             channel=delivery_channel,
             webhook_url=webhook_url,
+            conditional=conditional,
         )
 
     input_data = CronJobCreate(
