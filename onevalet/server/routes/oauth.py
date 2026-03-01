@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Composio-powered apps (OAuth proxied through Composio platform).
+# Keys match the provider id used by the frontend / koiai backend.
+COMPOSIO_APPS = {
+    "slack": "Slack",
+    "github": "GitHub",
+    "twitter": "Twitter/X",
+    "spotify": "Spotify",
+    "youtube": "YouTube",
+    "linkedin": "LinkedIn",
+    "discord": "Discord",
+}
+
 
 # --- Google OAuth ---
 
@@ -489,4 +501,98 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("dropbox", email, "Dropbox")
     except Exception as e:
         logger.error(f"Dropbox OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+
+
+# --- Composio OAuth (generic for all Composio-powered apps) ---
+
+
+@router.get("/api/oauth/{composio_app}/authorize")
+async def composio_oauth_authorize(
+    request: Request,
+    composio_app: str,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
+    """Initiate Composio OAuth flow. Returns authorization URL."""
+    if composio_app not in COMPOSIO_APPS:
+        raise HTTPException(404, f"Unknown OAuth provider: {composio_app}")
+
+    from ...builtin_agents.composio.client import ComposioClient
+
+    app = require_app()
+
+    state = await app.save_oauth_state(
+        tenant_id=tenant_id, service=composio_app,
+        redirect_after=redirect_after, account_name=account_name,
+    )
+    base_url = get_base_url(request)
+    callback_url = f"{base_url}/api/oauth/{composio_app}/callback?onevalet_state={state}"
+
+    try:
+        client = ComposioClient()
+        data = await client.initiate_connection(
+            app_name=composio_app, entity_id=tenant_id,
+            redirect_url=callback_url,
+        )
+        redirect = data.get("redirectUrl", data.get("redirect_url", ""))
+        if not redirect:
+            # Connection may already be active — no redirect needed
+            return {"authorize_url": callback_url}
+        return {"authorize_url": redirect}
+    except Exception as e:
+        logger.error(f"Composio authorize failed for {composio_app}: {e}", exc_info=True)
+        raise HTTPException(502, f"Failed to initiate {composio_app} connection")
+
+
+@router.get("/api/oauth/{composio_app}/callback")
+async def composio_oauth_callback(
+    request: Request,
+    composio_app: str,
+    onevalet_state: Optional[str] = None,
+):
+    """Composio OAuth callback — Composio redirects here after user authorizes."""
+    if composio_app not in COMPOSIO_APPS:
+        return HTMLResponse("<h2>Error</h2><p>Unknown provider.</p>", status_code=404)
+
+    app = require_app()
+    label = COMPOSIO_APPS[composio_app]
+
+    if not onevalet_state:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Missing state parameter. Please try again.</p>",
+            status_code=400,
+        )
+
+    state_data = await app.consume_oauth_state(onevalet_state)
+    if not state_data:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
+
+    try:
+        # Save a tracking record so the account shows up in the connections list.
+        # Actual OAuth tokens are stored on Composio's servers.
+        credentials = {
+            "provider": composio_app,
+            "connected_via": "composio",
+            "entity_id": tenant_id,
+            "access_token": "__composio_managed__",
+        }
+        await app.save_credential_raw(
+            tenant_id=tenant_id, service=composio_app,
+            credentials=credentials, account_name=account_name,
+        )
+
+        if redirect_after:
+            return oauth_success_redirect(redirect_after, composio_app, "")
+        return oauth_success_html(composio_app, "", label)
+    except Exception as e:
+        logger.error(f"Composio callback failed for {composio_app}: {e}", exc_info=True)
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
