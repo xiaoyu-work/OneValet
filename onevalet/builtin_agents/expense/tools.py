@@ -727,6 +727,9 @@ async def search_receipts(
 
     lines = []
 
+    # Get storage provider for generating fresh signed URLs
+    storage_provider = context.context_hints.get("cloud_storage_provider") if context.context_hints else None
+
     if receipts:
         lines.append(f"Found {len(receipts)} receipt(s) matching \"{query}\":\n")
         for i, receipt in enumerate(receipts, 1):
@@ -734,7 +737,18 @@ async def search_receipts(
             if isinstance(d, (date, datetime)):
                 d = d.isoformat()
             desc = receipt.get("ocr_text", "")
-            url = receipt.get("storage_url", "")
+            file_id = receipt.get("storage_file_id", "")
+            # Generate a fresh signed URL if possible, fall back to stored URL
+            url = ""
+            if file_id and storage_provider:
+                try:
+                    link_result = await storage_provider.get_download_link(file_id)
+                    if link_result.get("success"):
+                        url = link_result["data"].get("url", "")
+                except Exception:
+                    pass
+            if not url:
+                url = receipt.get("storage_url", "")
             line = f"{i}. {d}"
             if desc:
                 line += f" - {desc}"
