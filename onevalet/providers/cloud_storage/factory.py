@@ -69,5 +69,11 @@ def _register_providers():
     except ImportError as e:
         logger.warning(f"Dropbox provider not available: {e}")
 
+    try:
+        from .supabase_storage import SupabaseStorageProvider
+        CloudStorageProviderFactory.register_provider("supabase", SupabaseStorageProvider)
+    except ImportError as e:
+        logger.warning(f"Supabase storage provider not available: {e}")
+
 
 _register_providers()

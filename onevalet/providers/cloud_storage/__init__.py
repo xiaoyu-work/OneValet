@@ -1,7 +1,7 @@
 """
 Cloud Storage Providers for OneValet
 
-Provides a unified interface for Google Drive, OneDrive, and Dropbox.
+Provides a unified interface for Google Drive, OneDrive, Dropbox, and Supabase Storage.
 """
 
 from .base import BaseCloudStorageProvider

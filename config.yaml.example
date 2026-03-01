@@ -1,5 +1,11 @@
 database: ${DATABASE_URL}
 
+# Supabase Storage — file uploads (receipts, user documents, etc.)
+# supabase:
+#   url: ${SUPABASE_URL}
+#   service_role_key: ${SUPABASE_SERVICE_ROLE_KEY}
+#   storage_bucket: onevalet-files        # bucket name in Supabase Dashboard
+
 llm:
   provider: openai          # openai | anthropic | azure | dashscope | gemini | ollama
   model: gpt-4o

@@ -57,6 +57,7 @@ dependencies = [
     "alembic>=1.12",
     "sqlalchemy>=2.0",
     "psycopg2-binary>=2.9",
+    "supabase>=2.0",
 ]
 
 [project.optional-dependencies]

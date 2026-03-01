@@ -21,6 +21,7 @@ _SERVICE_TO_PROVIDER = {
     "google_drive": "google",
     "onedrive": "onedrive",
     "dropbox": "dropbox",
+    "supabase": "supabase",
 }
 
 

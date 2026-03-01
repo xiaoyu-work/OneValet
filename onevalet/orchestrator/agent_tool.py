@@ -103,6 +103,10 @@ async def execute_agent_tool(
     current_images = getattr(orchestrator, "_current_user_images", None)
     if current_images:
         enriched_hints["user_images"] = current_images
+    # Supabase storage as default cloud storage provider (if configured)
+    supabase_storage = getattr(orchestrator, "_supabase_storage", None)
+    if supabase_storage and "cloud_storage_provider" not in enriched_hints:
+        enriched_hints["cloud_storage_provider"] = supabase_storage.for_tenant(tenant_id)
 
     # Pass structured handoff via context_hints
     enriched_hints["handoff"] = {

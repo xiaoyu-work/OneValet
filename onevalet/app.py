@@ -321,6 +321,19 @@ class OneValet:
         # 9. Load API key credentials into env vars for agent access
         await self._load_api_keys_to_env()
 
+        # 10. Supabase Storage (optional — if supabase config is present)
+        supabase_cfg = cfg.get("supabase")
+        if isinstance(supabase_cfg, dict) and supabase_cfg.get("url"):
+            from .providers.cloud_storage.supabase_storage import SupabaseStorageProvider
+            self._supabase_storage = SupabaseStorageProvider(credentials={
+                "provider": "supabase",
+                "supabase_url": supabase_cfg["url"],
+                "supabase_key": supabase_cfg.get("service_role_key", ""),
+                "bucket": supabase_cfg.get("storage_bucket", "onevalet-files"),
+            })
+            self._orchestrator._supabase_storage = self._supabase_storage
+            logger.info("Supabase Storage configured")
+
         self._initialized = True
         logger.info("OneValet initialized")
 
