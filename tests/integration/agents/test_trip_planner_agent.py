@@ -11,7 +11,7 @@ parallel (and search_flights if an origin city is given).
 
 import pytest
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.travel]
 
 
 # ---------------------------------------------------------------------------

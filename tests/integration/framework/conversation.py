@@ -53,16 +53,33 @@ class Conversation:
         self.user_id = user_id
         self.turns: List[Any] = []
         self._tool_offsets: List[int] = []
+        self._history: List[Dict[str, str]] = []
 
     # ------------------------------------------------------------------
     # Core turn methods
     # ------------------------------------------------------------------
 
     async def send(self, message: str) -> Any:
-        """Send a single message and record the result as one turn."""
+        """Send a single message and record the result as one turn.
+
+        Passes accumulated conversation history via ``metadata`` so the
+        handler (orchestrator) sees prior turns.  After the handler
+        responds, both the user message and the assistant reply are
+        appended to the running history for the next turn.
+        """
         self._tool_offsets.append(len(self.recorder.tool_calls))
-        result = await self.handler.handle_message(self.user_id, message)
+        metadata = {"conversation_history": list(self._history)} if self._history else None
+        result = await self.handler.handle_message(
+            self.user_id, message, metadata=metadata,
+        )
         self.turns.append(result)
+
+        # Accumulate history for subsequent turns
+        self._history.append({"role": "user", "content": message})
+        assistant_text = getattr(result, "raw_message", "") or ""
+        if assistant_text:
+            self._history.append({"role": "assistant", "content": assistant_text})
+
         return result
 
     async def send_until_tool_called(

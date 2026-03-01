@@ -4,7 +4,7 @@ These protocols decouple the framework from concrete OneValet types,
 making it possible to extract this module as a standalone package later.
 """
 
-from typing import Any, Dict, List, Protocol, runtime_checkable
+from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -16,7 +16,13 @@ class MessageHandler(Protocol):
       - ``raw_message``: str
     """
 
-    async def handle_message(self, user_id: str, message: str) -> Any: ...
+    async def handle_message(
+        self,
+        user_id: str,
+        message: str,
+        images: Optional[Any] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Any: ...
 
 
 @runtime_checkable

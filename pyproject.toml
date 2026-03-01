@@ -108,4 +108,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: end-to-end tests using a real LLM (requires INTEGRATION_TEST_API_KEY)",
+    "communication: agents in the communication domain (email, slack, discord, twitter, linkedin)",
+    "productivity: agents in the productivity domain (calendar, todo, briefing, notion, google_workspace, cloud_storage, github, cron)",
+    "lifestyle: agents in the lifestyle domain (expense, smarthome, shipping, spotify, youtube, image)",
+    "travel: agents in the travel domain (trip_planner, maps)",
 ]

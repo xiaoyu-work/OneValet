@@ -15,7 +15,7 @@ import pytest
 
 from onevalet.result import AgentStatus
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.lifestyle]
 
 
 # ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ Tests tool selection, argument extraction, and response quality for:
 
 import pytest
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.productivity]
 
 
 # ---------------------------------------------------------------------------

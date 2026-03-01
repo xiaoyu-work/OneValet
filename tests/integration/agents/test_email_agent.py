@@ -13,7 +13,7 @@ import pytest
 
 from onevalet.result import AgentStatus
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.communication]
 
 
 # ---------------------------------------------------------------------------
@@ -25,8 +25,8 @@ TOOL_SELECTION_CASES = [
     ("Do I have any unread emails?", ["search_emails"]),
     ("Show emails from John", ["search_emails"]),
     ("Find the email about Q4 Report", ["search_emails"]),
-    ("Send an email to alice@example.com about the meeting", ["send_email"]),
-    ("Email bob@company.com saying I'll be late", ["send_email"]),
+    ("Send an email to alice@example.com with subject Meeting and body See you at 3pm", ["send_email"]),
+    ("Email bob@company.com with subject Running Late and body I'll be 10 minutes late", ["send_email"]),
     ("Reply to the email from my boss saying sounds good", ["reply_email", "search_emails"]),
     ("Delete the promotional emails", ["delete_emails", "search_emails"]),
     ("Archive all emails from Amazon", ["archive_emails", "search_emails"]),
@@ -111,7 +111,7 @@ async def test_response_quality_check_inbox(conversation, llm_judge):
 async def test_response_quality_send(conversation, llm_judge):
     """Sending an email should confirm the action with recipient details."""
     conv = await conversation()
-    msg = "Send an email to alice@example.com saying the meeting is confirmed"
+    msg = "Send an email to alice@example.com with subject Meeting Confirmed and body The meeting is confirmed for tomorrow"
     await conv.auto_complete(msg)
 
     passed = await llm_judge(
