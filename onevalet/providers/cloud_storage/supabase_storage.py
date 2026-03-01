@@ -97,14 +97,17 @@ class SupabaseStorageProvider(BaseCloudStorageProvider):
                 },
             )
 
-            # Get public URL for the uploaded file
-            url_response = self._storage.get_public_url(full_path)
+            # Generate a signed URL (private buckets don't support public URLs)
+            signed = self._storage.create_signed_url(
+                full_path, DEFAULT_SIGNED_URL_EXPIRY
+            )
+            url = signed.get("signedURL", "") if isinstance(signed, dict) else str(signed)
 
             return {
                 "success": True,
                 "data": {
                     "id": full_path,
-                    "url": url_response,
+                    "url": url,
                     "name": file_name,
                 },
             }
@@ -205,7 +208,7 @@ class SupabaseStorageProvider(BaseCloudStorageProvider):
                         "modified": item.get("updated_at", ""),
                         "size": item.get("metadata", {}).get("size", 0),
                         "path": file_id,
-                        "url": self._storage.get_public_url(file_id),
+                        "url": "",  # use get_download_link() for access
                         "shared": False,
                     },
                 }

@@ -118,7 +118,7 @@ def upgrade() -> None:
             tenant_id         TEXT NOT NULL,
             expense_id        UUID,
             file_name         TEXT NOT NULL,
-            storage_provider  TEXT DEFAULT 'google_drive',
+            storage_provider  TEXT DEFAULT '',
             storage_file_id   TEXT,
             storage_url       TEXT,
             thumbnail_base64  TEXT,

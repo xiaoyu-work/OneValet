@@ -657,10 +657,12 @@ async def upload_receipt(
             logger.warning(f"Failed to upload receipt to cloud storage: {e}")
 
     # Store in receipt repository
+    provider_name = getattr(storage_provider, "provider", "") if storage_provider else ""
     try:
         record = await receipt_repo.add(
             tenant_id=context.tenant_id,
             file_name=filename,
+            storage_provider=provider_name,
             storage_file_id=storage_file_id or None,
             storage_url=storage_url or None,
             ocr_text=description,

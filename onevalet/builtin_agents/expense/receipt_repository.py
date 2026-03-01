@@ -21,7 +21,7 @@ class ReceiptRepository(Repository):
         tenant_id: str,
         file_name: str,
         expense_id: Optional[str] = None,
-        storage_provider: str = "google_drive",
+        storage_provider: str = "",
         storage_file_id: Optional[str] = None,
         storage_url: Optional[str] = None,
         thumbnail_base64: Optional[str] = None,
