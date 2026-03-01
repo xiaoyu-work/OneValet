@@ -34,32 +34,23 @@ TOOL_SELECTION_CASES = [
     TOOL_SELECTION_CASES,
     ids=[c[0][:40] for c in TOOL_SELECTION_CASES],
 )
-async def test_tool_selection(orchestrator_factory, user_input, expected_tools):
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", user_input)
-    tools_called = [c["tool_name"] for c in recorder.tool_calls]
-    assert any(t in tools_called for t in expected_tools), (
-        f"Expected one of {expected_tools}, got {tools_called}"
-    )
+async def test_tool_selection(conversation, user_input, expected_tools):
+    conv = await conversation()
+    await conv.send_until_tool_called(user_input)
+    conv.assert_any_tool_called(expected_tools)
 
 
 # ---------------------------------------------------------------------------
 # Argument extraction
 # ---------------------------------------------------------------------------
 
-async def test_extracts_search_query_and_location(orchestrator_factory):
+async def test_extracts_search_query_and_location(conversation):
     """search_places should receive the query and location from the user message."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message(
-        "test_user", "Find sushi restaurants in downtown Portland"
-    )
+    conv = await conversation()
+    await conv.send("Find sushi restaurants in downtown Portland")
+    conv.assert_tool_called("search_places")
 
-    search_calls = [
-        c for c in recorder.tool_calls if c["tool_name"] == "search_places"
-    ]
-    assert search_calls, "search_places was never called"
-
-    args = search_calls[0]["arguments"]
+    args = conv.get_tool_args("search_places")[0]
     query = args.get("query", "").lower()
     location = args.get("location", "").lower()
 
@@ -71,20 +62,13 @@ async def test_extracts_search_query_and_location(orchestrator_factory):
     )
 
 
-async def test_extracts_directions_origin_and_destination(orchestrator_factory):
+async def test_extracts_directions_origin_and_destination(conversation):
     """get_directions should receive origin and destination from the user message."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message(
-        "test_user",
-        "Get me directions from Times Square to Central Park",
-    )
+    conv = await conversation()
+    await conv.send("Get me directions from Times Square to Central Park")
+    conv.assert_tool_called("get_directions")
 
-    dir_calls = [
-        c for c in recorder.tool_calls if c["tool_name"] == "get_directions"
-    ]
-    assert dir_calls, "get_directions was never called"
-
-    args = dir_calls[0]["arguments"]
+    args = conv.get_tool_args("get_directions")[0]
     origin = args.get("origin", "").lower()
     destination = args.get("destination", "").lower()
 
@@ -96,37 +80,21 @@ async def test_extracts_directions_origin_and_destination(orchestrator_factory):
     )
 
 
-async def test_extracts_air_quality_location(orchestrator_factory):
+async def test_extracts_air_quality_location(conversation):
     """check_air_quality should receive the correct location."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", "What's the air quality in Tokyo?")
-
-    aqi_calls = [
-        c for c in recorder.tool_calls if c["tool_name"] == "check_air_quality"
-    ]
-    assert aqi_calls, "check_air_quality was never called"
-
-    args = aqi_calls[0]["arguments"]
-    location = args.get("location", "").lower()
-    assert "tokyo" in location, (
-        f"Expected location containing 'tokyo', got '{location}'"
-    )
+    conv = await conversation()
+    await conv.send("What's the air quality in Tokyo?")
+    conv.assert_tool_called("check_air_quality")
+    conv.assert_tool_args("check_air_quality", location="tokyo")
 
 
-async def test_extracts_directions_travel_mode(orchestrator_factory):
+async def test_extracts_directions_travel_mode(conversation):
     """get_directions should receive a walking mode when specified by the user."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message(
-        "test_user",
-        "Walking directions from the hotel to the museum",
-    )
+    conv = await conversation()
+    await conv.send("Walking directions from the hotel to the museum")
+    conv.assert_tool_called("get_directions")
 
-    dir_calls = [
-        c for c in recorder.tool_calls if c["tool_name"] == "get_directions"
-    ]
-    assert dir_calls, "get_directions was never called"
-
-    args = dir_calls[0]["arguments"]
+    args = conv.get_tool_args("get_directions")[0]
     mode = args.get("mode", "").lower()
     assert "walk" in mode, (
         f"Expected mode containing 'walk', got '{mode}'"
@@ -137,51 +105,48 @@ async def test_extracts_directions_travel_mode(orchestrator_factory):
 # Response quality
 # ---------------------------------------------------------------------------
 
-async def test_response_quality_search_places(orchestrator_factory, llm_judge):
+async def test_response_quality_search_places(conversation, llm_judge):
     """Searching for places should return a readable listing with details."""
-    orch, recorder = await orchestrator_factory()
-    result = await orch.handle_message(
-        "test_user", "Find Italian restaurants near downtown Seattle"
-    )
+    conv = await conversation()
+    msg = "Find Italian restaurants near downtown Seattle"
+    await conv.auto_complete(msg)
 
     passed = await llm_judge(
-        "Find Italian restaurants near downtown Seattle",
-        result,
+        msg,
+        conv.last_message,
         "The response should list restaurant results with names and possibly "
         "addresses or ratings. It should be a helpful, readable list and not "
         "an error message.",
     )
-    assert passed, f"LLM judge failed. Response: {result}"
+    assert passed, f"LLM judge failed. Response: {conv.last_message}"
 
 
-async def test_response_quality_directions(orchestrator_factory, llm_judge):
+async def test_response_quality_directions(conversation, llm_judge):
     """Getting directions should return distance, duration, and steps."""
-    orch, recorder = await orchestrator_factory()
-    result = await orch.handle_message(
-        "test_user", "How do I get from Union Square to Golden Gate Bridge?"
-    )
+    conv = await conversation()
+    msg = "How do I get from Union Square to Golden Gate Bridge?"
+    await conv.auto_complete(msg)
 
     passed = await llm_judge(
-        "How do I get from Union Square to Golden Gate Bridge?",
-        result,
+        msg,
+        conv.last_message,
         "The response should provide directions with distance, travel time, "
         "and route steps or a summary. It should not be an error message.",
     )
-    assert passed, f"LLM judge failed. Response: {result}"
+    assert passed, f"LLM judge failed. Response: {conv.last_message}"
 
 
-async def test_response_quality_air_quality(orchestrator_factory, llm_judge):
+async def test_response_quality_air_quality(conversation, llm_judge):
     """Air quality check should return the AQI and a category/recommendation."""
-    orch, recorder = await orchestrator_factory()
-    result = await orch.handle_message(
-        "test_user", "What's the air quality like in San Francisco?"
-    )
+    conv = await conversation()
+    msg = "What's the air quality like in San Francisco?"
+    await conv.auto_complete(msg)
 
     passed = await llm_judge(
-        "What's the air quality like in San Francisco?",
-        result,
+        msg,
+        conv.last_message,
         "The response should mention the air quality index (AQI) value and/or "
         "a category (Good, Moderate, etc.) for San Francisco. It should be "
         "informative and not an error.",
     )
-    assert passed, f"LLM judge failed. Response: {result}"
+    assert passed, f"LLM judge failed. Response: {conv.last_message}"

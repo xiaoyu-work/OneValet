@@ -25,6 +25,9 @@ from onevalet.config.registry import AgentRegistry
 from onevalet.llm.registry import LLMRegistry
 from onevalet.models import AgentTool
 from onevalet.orchestrator.orchestrator import Orchestrator
+from onevalet.result import AgentStatus
+
+from tests.integration.framework import Conversation
 
 pytestmark = [
     pytest.mark.integration,
@@ -287,11 +290,17 @@ class ToolCallRecorder:
     canned_results: Dict[str, str] = field(default_factory=dict)
 
     def wrap_tool(self, tool: AgentTool) -> AgentTool:
-        """Create a copy of the tool with executor replaced by a recording wrapper."""
+        """Create a copy of the tool with executor replaced by a recording wrapper.
+
+        Preserves the original ``needs_approval``, ``risk_level``, and
+        ``get_preview`` so that the human-in-the-loop approval flow works
+        correctly in tests.  For approval tools the ``get_preview`` wrapper
+        also records the tool call (with args) because the recording executor
+        is only reached *after* the user approves.
+        """
         recorder = self
 
         async def recording_executor(args: Dict[str, Any], context: Any) -> str:
-            # Skip approval for tests
             result = recorder.canned_results.get(tool.name, CANNED_DATA.get(tool.name, "{}"))
             recorder.tool_calls.append({
                 "tool_name": tool.name,
@@ -300,14 +309,36 @@ class ToolCallRecorder:
             })
             return result
 
+        # For approval tools, wrap get_preview to record the call when
+        # the approval flow triggers (before the executor runs).
+        wrapped_preview = tool.get_preview
+        if tool.needs_approval:
+            original_preview = tool.get_preview
+
+            async def recording_preview(args: Dict[str, Any], context: Any) -> str:
+                recorder.tool_calls.append({
+                    "tool_name": tool.name,
+                    "arguments": copy.deepcopy(args),
+                    "result": "__PENDING_APPROVAL__",
+                })
+                if original_preview:
+                    try:
+                        return await original_preview(args, context)
+                    except Exception:
+                        pass
+                return f"About to execute: {tool.name}({json.dumps(args, ensure_ascii=False)})"
+
+            wrapped_preview = recording_preview
+
         return AgentTool(
             name=tool.name,
             description=tool.description,
             parameters=tool.parameters,
             executor=recording_executor,
-            needs_approval=False,  # disable approval in tests
-            risk_level="read",     # override to avoid approval pauses
+            needs_approval=tool.needs_approval,
+            risk_level=tool.risk_level,
             category=tool.category,
+            get_preview=wrapped_preview,
         )
 
     def reset(self) -> None:
@@ -415,6 +446,77 @@ async def orchestrator_factory(llm_client, agent_registry):
         return orch, recorder
 
     return _create
+
+
+@pytest.fixture
+def conversation(orchestrator_factory):
+    """Factory fixture that creates a Conversation for multi-turn testing.
+
+    Usage::
+
+        conv = await conversation()
+        await conv.send_until_tool_called("Find restaurants near me")
+        conv.assert_tool_called("search_places")
+    """
+
+    async def _create(
+        canned_results: Optional[Dict[str, str]] = None,
+        user_id: str = "test_user",
+    ) -> Conversation:
+        orch, recorder = await orchestrator_factory(canned_results=canned_results)
+        return Conversation(handler=orch, recorder=recorder, user_id=user_id)
+
+    return _create
+
+
+# ---------------------------------------------------------------------------
+# Legacy helpers (kept for backward compatibility)
+# ---------------------------------------------------------------------------
+
+
+async def _approve_and_get_result(orch, user_id: str, message: str, max_rounds: int = 5):
+    """Send a message and auto-approve until the flow completes.
+
+    Some agents (e.g. EmailAgent) first respond with text asking for
+    confirmation *before* calling the tool.  Others call the tool
+    immediately, which triggers the framework's ``WAITING_FOR_APPROVAL``.
+    This helper handles both patterns by replying "yes" to text
+    confirmations and "yes, approve it" to framework approval prompts,
+    up to *max_rounds* times.
+    """
+    result = await orch.handle_message(user_id, message)
+    for _ in range(max_rounds):
+        if result.status == AgentStatus.WAITING_FOR_APPROVAL:
+            result = await orch.handle_message(user_id, "yes, approve it")
+        elif result.status == AgentStatus.COMPLETED:
+            break
+        else:
+            # CANCELLED or other terminal — stop
+            break
+    return result
+
+
+async def _trigger_approval(orch, user_id: str, message: str, max_rounds: int = 3):
+    """Send a message and keep saying "yes" until WAITING_FOR_APPROVAL is reached.
+
+    This is for approval-flow tests that need to reach the framework's
+    approval gate.  The LLM may first ask for text confirmation (e.g.
+    "Would you like me to send this email?"); this helper automatically
+    replies "yes, go ahead" until the tool is actually called and the
+    framework pauses for approval.
+
+    Returns the result when WAITING_FOR_APPROVAL is reached, or the last
+    result if *max_rounds* is exhausted.
+    """
+    result = await orch.handle_message(user_id, message)
+    for _ in range(max_rounds):
+        if result.status == AgentStatus.WAITING_FOR_APPROVAL:
+            return result
+        if result.status in (AgentStatus.CANCELLED,):
+            return result
+        # LLM returned text (COMPLETED) without calling the tool — nudge it
+        result = await orch.handle_message(user_id, "yes, go ahead")
+    return result
 
 
 @pytest.fixture

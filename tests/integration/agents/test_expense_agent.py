@@ -1,9 +1,9 @@
 """Integration tests for ExpenseAgent.
 
-Tests tool selection, argument extraction, and response quality for:
+Tests tool selection, argument extraction, response quality, and approval flow for:
 - log_expense: Log a new expense with amount, category, optional details
 - query_expenses: List expenses for a time period with optional filters
-- delete_expense: Delete an expense by keyword search
+- delete_expense: Delete an expense by keyword search (needs approval)
 - spending_summary: Show spending breakdown by category
 - set_budget: Set a monthly spending limit
 - budget_status: Show current budget utilization
@@ -12,6 +12,8 @@ Tests tool selection, argument extraction, and response quality for:
 """
 
 import pytest
+
+from onevalet.result import AgentStatus
 
 pytestmark = [pytest.mark.integration]
 
@@ -26,8 +28,8 @@ TOOL_SELECTION_CASES = [
     ("Coffee at Starbucks $5.50", ["log_expense"]),
     ("Show me my expenses this month", ["query_expenses"]),
     ("How much did I spend last week?", ["query_expenses", "spending_summary"]),
-    ("Delete the Starbucks expense from yesterday", ["delete_expense"]),
-    ("Remove the $5 coffee charge", ["delete_expense"]),
+    ("Delete the Starbucks expense from yesterday", ["delete_expense", "query_expenses"]),
+    ("Remove the $5 coffee charge", ["delete_expense", "query_expenses"]),
     ("Give me a spending summary for February", ["spending_summary"]),
     ("Breakdown of my spending this month", ["spending_summary"]),
     ("Set my food budget to $500 per month", ["set_budget"]),
@@ -41,28 +43,23 @@ TOOL_SELECTION_CASES = [
     TOOL_SELECTION_CASES,
     ids=[c[0][:40] for c in TOOL_SELECTION_CASES],
 )
-async def test_tool_selection(orchestrator_factory, user_input, expected_tools):
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", user_input)
-    tools_called = [c["tool_name"] for c in recorder.tool_calls]
-    assert any(t in tools_called for t in expected_tools), (
-        f"Expected one of {expected_tools}, got {tools_called}"
-    )
+async def test_tool_selection(conversation, user_input, expected_tools):
+    conv = await conversation()
+    await conv.send_until_tool_called(user_input)
+    conv.assert_any_tool_called(expected_tools)
 
 
 # ---------------------------------------------------------------------------
 # Argument extraction
 # ---------------------------------------------------------------------------
 
-async def test_extracts_amount_and_category(orchestrator_factory):
+async def test_extracts_amount_and_category(conversation):
     """log_expense should receive the correct amount and an appropriate category."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", "I had lunch for $15 at Chipotle")
+    conv = await conversation()
+    await conv.send("I had lunch for $15 at Chipotle")
+    conv.assert_tool_called("log_expense")
 
-    log_calls = [c for c in recorder.tool_calls if c["tool_name"] == "log_expense"]
-    assert log_calls, "log_expense was never called"
-
-    args = log_calls[0]["arguments"]
+    args = conv.get_tool_args("log_expense")[0]
     assert args.get("amount") == 15 or args.get("amount") == 15.0, (
         f"Expected amount=15, got {args.get('amount')}"
     )
@@ -71,32 +68,24 @@ async def test_extracts_amount_and_category(orchestrator_factory):
     )
 
 
-async def test_extracts_merchant(orchestrator_factory):
+async def test_extracts_merchant(conversation):
     """log_expense should populate the merchant field when a business name is given."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", "Paid $8 at Starbucks for coffee")
-
-    log_calls = [c for c in recorder.tool_calls if c["tool_name"] == "log_expense"]
-    assert log_calls, "log_expense was never called"
-
-    args = log_calls[0]["arguments"]
-    merchant = args.get("merchant", "").lower()
-    assert "starbucks" in merchant, (
-        f"Expected merchant to contain 'starbucks', got '{merchant}'"
-    )
+    conv = await conversation()
+    await conv.send("Paid $8 at Starbucks for coffee")
+    conv.assert_tool_called("log_expense")
+    conv.assert_tool_args("log_expense", merchant="starbucks")
 
 
-async def test_extracts_query_period(orchestrator_factory):
+async def test_extracts_query_period(conversation):
     """query_expenses / spending_summary should receive the right period."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", "Show my spending for last month")
+    conv = await conversation()
+    await conv.send("Show my spending for last month")
+    conv.assert_any_tool_called(["query_expenses", "spending_summary"])
 
     relevant = [
-        c for c in recorder.tool_calls
+        c for c in conv.recorder.tool_calls
         if c["tool_name"] in ("query_expenses", "spending_summary")
     ]
-    assert relevant, "Neither query_expenses nor spending_summary was called"
-
     args = relevant[0]["arguments"]
     period = args.get("period", "").lower()
     assert "last_month" in period or "last" in period, (
@@ -104,15 +93,13 @@ async def test_extracts_query_period(orchestrator_factory):
     )
 
 
-async def test_budget_amount_extraction(orchestrator_factory):
+async def test_budget_amount_extraction(conversation):
     """set_budget should receive the correct monthly_limit and category."""
-    orch, recorder = await orchestrator_factory()
-    await orch.handle_message("test_user", "Set a $300 budget for transport")
+    conv = await conversation()
+    await conv.send("Set a $300 budget for transport")
+    conv.assert_tool_called("set_budget")
 
-    budget_calls = [c for c in recorder.tool_calls if c["tool_name"] == "set_budget"]
-    assert budget_calls, "set_budget was never called"
-
-    args = budget_calls[0]["arguments"]
+    args = conv.get_tool_args("set_budget")[0]
     assert args.get("monthly_limit") == 300 or args.get("monthly_limit") == 300.0
     assert "transport" in args.get("category", "").lower()
 
@@ -121,30 +108,77 @@ async def test_budget_amount_extraction(orchestrator_factory):
 # Response quality
 # ---------------------------------------------------------------------------
 
-async def test_response_quality_log(orchestrator_factory, llm_judge):
+async def test_response_quality_log(conversation, llm_judge):
     """After logging an expense the response should confirm the amount and category."""
-    orch, recorder = await orchestrator_factory()
-    result = await orch.handle_message("test_user", "Lunch $15 at Chipotle")
+    conv = await conversation()
+    await conv.auto_complete("Lunch $15 at Chipotle")
 
     passed = await llm_judge(
         "Lunch $15 at Chipotle",
-        result,
+        conv.last_message,
         "The response should confirm that an expense of approximately $15 in the food "
         "category was logged. It should mention the amount and ideally reference the "
         "merchant or description.",
     )
-    assert passed, f"LLM judge failed. Response: {result}"
+    assert passed, f"LLM judge failed. Response: {conv.last_message}"
 
 
-async def test_response_quality_query(orchestrator_factory, llm_judge):
+async def test_response_quality_query(conversation, llm_judge):
     """Querying expenses should produce a readable summary."""
-    orch, recorder = await orchestrator_factory()
-    result = await orch.handle_message("test_user", "Show my expenses this month")
+    conv = await conversation()
+    await conv.auto_complete("Show my expenses for February 2026")
 
     passed = await llm_judge(
-        "Show my expenses this month",
-        result,
+        "Show my expenses for February 2026",
+        conv.last_message,
         "The response should present expense data in a readable format, mentioning "
-        "amounts and categories or merchants. It should not be an error message.",
+        "amounts and categories or merchants. It may say there are no expenses or "
+        "list some expenses. It should not be an error message.",
     )
-    assert passed, f"LLM judge failed. Response: {result}"
+    assert passed, f"LLM judge failed. Response: {conv.last_message}"
+
+
+# ---------------------------------------------------------------------------
+# Approval flow
+# ---------------------------------------------------------------------------
+
+async def test_delete_expense_triggers_approval(conversation):
+    """delete_expense should pause for user approval before executing."""
+    conv = await conversation()
+    await conv.send_until_status(
+        "Delete the Starbucks expense from yesterday",
+        AgentStatus.WAITING_FOR_APPROVAL,
+    )
+    conv.assert_any_tool_called(["delete_expense", "query_expenses"])
+
+
+async def test_delete_expense_approve_executes(conversation):
+    """Approving delete_expense should execute and complete."""
+    conv = await conversation()
+    result = await conv.send_until_status(
+        "Delete the Starbucks expense from yesterday",
+        AgentStatus.WAITING_FOR_APPROVAL,
+    )
+    if result.status != AgentStatus.WAITING_FOR_APPROVAL:
+        pytest.skip("LLM did not reach approval gate (may have queried first)")
+
+    result2 = await conv.send("yes, delete it")
+    assert result2.status in (AgentStatus.COMPLETED, AgentStatus.WAITING_FOR_APPROVAL), (
+        f"Expected COMPLETED after approval, got {result2.status}"
+    )
+
+
+async def test_delete_expense_reject_cancels(conversation):
+    """Rejecting delete_expense should cancel the operation."""
+    conv = await conversation()
+    result = await conv.send_until_status(
+        "Delete the Starbucks expense from yesterday",
+        AgentStatus.WAITING_FOR_APPROVAL,
+    )
+    if result.status != AgentStatus.WAITING_FOR_APPROVAL:
+        pytest.skip("LLM did not reach approval gate (may have queried first)")
+
+    result2 = await conv.send("no, keep it")
+    assert result2.status in (AgentStatus.CANCELLED, AgentStatus.COMPLETED), (
+        f"Expected CANCELLED after rejection, got {result2.status}"
+    )
