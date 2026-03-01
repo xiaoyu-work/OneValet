@@ -15,26 +15,6 @@ from .storage import CheckpointStorage
 
 logger = logging.getLogger(__name__)
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS checkpoints (
-    id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
-    agent_type TEXT NOT NULL,
-    user_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    data JSONB NOT NULL,
-    parent_checkpoint_id TEXT,
-    timestamp TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-)
-"""
-
-SETUP_SQL = [
-    "CREATE INDEX IF NOT EXISTS idx_checkpoints_agent_id ON checkpoints(agent_id)",
-    "CREATE INDEX IF NOT EXISTS idx_checkpoints_user_id ON checkpoints(user_id)",
-    "CREATE INDEX IF NOT EXISTS idx_checkpoints_timestamp ON checkpoints(timestamp)",
-]
-
 
 class PostgreSQLStorage(CheckpointStorage):
     """
@@ -67,17 +47,13 @@ class PostgreSQLStorage(CheckpointStorage):
         self._initialized = False
 
     async def initialize(self) -> None:
-        """Create table and indexes. Must be called before use."""
+        """Initialize the storage backend. Must be called before use."""
         if self._initialized:
             return
 
         if self._db is None:
             self._db = Database(dsn=self._dsn)
             await self._db.initialize()
-
-        await self._db.execute(CREATE_TABLE_SQL)
-        for sql in SETUP_SQL:
-            await self._db.execute(sql)
 
         self._initialized = True
         logger.info("PostgreSQL checkpoint storage initialized")

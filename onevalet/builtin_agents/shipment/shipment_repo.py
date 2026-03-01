@@ -13,28 +13,6 @@ logger = logging.getLogger(__name__)
 
 class ShipmentRepository(Repository):
     TABLE_NAME = "shipments"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS shipments (
-        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id         TEXT NOT NULL,
-        tracking_number TEXT NOT NULL,
-        carrier         TEXT,
-        tracking_url    TEXT,
-        status          TEXT DEFAULT 'unknown',
-        description     TEXT,
-        last_update     TEXT,
-        estimated_delivery TEXT,
-        tracking_history JSONB DEFAULT '[]',
-        delivered_notified BOOLEAN,
-        is_active       BOOLEAN DEFAULT TRUE,
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE (tenant_id, tracking_number)
-    );
-    """
-    SETUP_SQL = [
-        "CREATE INDEX IF NOT EXISTS idx_shipments_tenant_id ON shipments (tenant_id)",
-    ]
 
     async def get_user_shipments(
         self, tenant_id: str, is_active: bool = True

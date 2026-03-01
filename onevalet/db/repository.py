@@ -3,17 +3,13 @@ OneValet Repository - Base class for domain-specific data access.
 
 Each agent/domain creates a subclass that defines:
 - TABLE_NAME: the table it owns
-- CREATE_TABLE_SQL: DDL for creating the table
-- SETUP_SQL: list of DDL strings (indexes, functions, etc.) run after table creation
 - Domain-specific query methods
+
+Schema creation is handled by Alembic migrations (see migrations/).
 
 Usage:
     class TripRepository(Repository):
         TABLE_NAME = "trips"
-        CREATE_TABLE_SQL = '''CREATE TABLE IF NOT EXISTS trips (...)'''
-        SETUP_SQL = [
-            "CREATE INDEX IF NOT EXISTS idx_trips_user ON trips (user_id)",
-        ]
 
         async def get_user_trips(self, user_id: str) -> list[dict]:
             rows = await self.db.fetch(
@@ -32,12 +28,11 @@ class Repository:
     """
     Base class for domain data access.
 
-    Subclasses define TABLE_NAME, CREATE_TABLE_SQL, SETUP_SQL, and domain methods.
+    Subclasses define TABLE_NAME and domain-specific query methods.
+    Schema creation is handled by Alembic migrations.
     """
 
     TABLE_NAME: str = ""
-    CREATE_TABLE_SQL: str = ""
-    SETUP_SQL: list[str] = []
 
     def __init__(self, db: "Database"):
         self._db = db
@@ -45,13 +40,6 @@ class Repository:
     @property
     def db(self) -> "Database":
         return self._db
-
-    async def ensure_table(self) -> None:
-        """Create the table and run setup SQL (indexes, functions, etc.)."""
-        if self.CREATE_TABLE_SQL:
-            await self._db.execute(self.CREATE_TABLE_SQL)
-        for sql in self.SETUP_SQL:
-            await self._db.execute(sql)
 
     # -- Generic CRUD helpers (subclasses can use or ignore) --
 

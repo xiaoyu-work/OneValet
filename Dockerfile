@@ -14,6 +14,10 @@ RUN pip install --no-cache-dir ".[all]"
 # Copy application code
 COPY onevalet/ onevalet/
 
+# Copy migration files
+COPY alembic.ini ./
+COPY migrations/ migrations/
+
 EXPOSE 8000
 
 CMD ["python", "-m", "onevalet", "--host", "0.0.0.0"]

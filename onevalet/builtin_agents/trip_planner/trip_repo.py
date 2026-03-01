@@ -15,48 +15,6 @@ logger = logging.getLogger(__name__)
 
 class TripRepository(Repository):
     TABLE_NAME = "trips"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS trips (
-        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id       TEXT NOT NULL,
-        title           TEXT,
-        trip_type       TEXT,
-        carrier         TEXT,
-        carrier_code    TEXT,
-        trip_number     TEXT,
-        booking_reference TEXT,
-        origin_city     TEXT,
-        origin_code     TEXT,
-        destination_city TEXT,
-        destination_code TEXT,
-        departure_time  TIMESTAMPTZ,
-        departure_local_time TEXT,
-        departure_terminal TEXT,
-        departure_gate  TEXT,
-        arrival_time    TIMESTAMPTZ,
-        arrival_local_time TEXT,
-        arrival_terminal TEXT,
-        arrival_gate    TEXT,
-        hotel_name      TEXT,
-        hotel_address   TEXT,
-        check_in_date   DATE,
-        check_out_date  DATE,
-        rental_company  TEXT,
-        pickup_time     TIMESTAMPTZ,
-        dropoff_time    TIMESTAMPTZ,
-        status          TEXT DEFAULT 'upcoming',
-        source          TEXT,
-        source_id       TEXT,
-        source_account  TEXT,
-        raw_data        JSONB,
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        updated_at      TIMESTAMPTZ DEFAULT NOW()
-    )
-    """
-    SETUP_SQL = [
-        "CREATE INDEX IF NOT EXISTS idx_trips_tenant_id ON trips (tenant_id)",
-        "CREATE INDEX IF NOT EXISTS idx_trips_status ON trips (status)",
-    ]
 
     async def get_tenant_trips(
         self, tenant_id: str, status: Optional[str] = None

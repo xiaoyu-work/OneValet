@@ -14,18 +14,6 @@ logger = logging.getLogger(__name__)
 
 class BudgetRepository(Repository):
     TABLE_NAME = "budgets"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS budgets (
-        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id       TEXT NOT NULL,
-        category        TEXT DEFAULT '_total',
-        monthly_limit   NUMERIC(12,2) NOT NULL,
-        currency        TEXT DEFAULT 'USD',
-        created_at      TIMESTAMPTZ DEFAULT NOW(),
-        UNIQUE(tenant_id, category)
-    )
-    """
-    SETUP_SQL = []
 
     async def set_budget(
         self,

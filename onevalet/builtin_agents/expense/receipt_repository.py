@@ -15,24 +15,6 @@ logger = logging.getLogger(__name__)
 
 class ReceiptRepository(Repository):
     TABLE_NAME = "receipts"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS receipts (
-        id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id         TEXT NOT NULL,
-        expense_id        UUID,
-        file_name         TEXT NOT NULL,
-        storage_provider  TEXT DEFAULT 'google_drive',
-        storage_file_id   TEXT,
-        storage_url       TEXT,
-        thumbnail_base64  TEXT,
-        ocr_text          TEXT DEFAULT '',
-        created_at        TIMESTAMPTZ DEFAULT NOW()
-    )
-    """
-    SETUP_SQL = [
-        "CREATE INDEX IF NOT EXISTS idx_receipts_tenant_id ON receipts (tenant_id)",
-        "CREATE INDEX IF NOT EXISTS idx_receipts_expense_id ON receipts (expense_id)",
-    ]
 
     async def add(
         self,

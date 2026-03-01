@@ -16,25 +16,6 @@ logger = logging.getLogger(__name__)
 
 class ExpenseRepository(Repository):
     TABLE_NAME = "expenses"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS expenses (
-        id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        tenant_id       TEXT NOT NULL,
-        amount          NUMERIC(12,2) NOT NULL,
-        currency        TEXT DEFAULT 'USD',
-        category        TEXT NOT NULL,
-        description     TEXT DEFAULT '',
-        merchant        TEXT DEFAULT '',
-        date            DATE NOT NULL DEFAULT CURRENT_DATE,
-        receipt_id      UUID,
-        created_at      TIMESTAMPTZ DEFAULT NOW()
-    )
-    """
-    SETUP_SQL = [
-        "CREATE INDEX IF NOT EXISTS idx_expenses_tenant_date ON expenses (tenant_id, date)",
-        "CREATE INDEX IF NOT EXISTS idx_expenses_tenant_category ON expenses (tenant_id, category)",
-        "CREATE INDEX IF NOT EXISTS idx_expenses_tenant_merchant ON expenses (tenant_id, merchant)",
-    ]
 
     async def add(
         self,

@@ -15,23 +15,6 @@ from .pool import PoolBackend
 
 logger = logging.getLogger(__name__)
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS agent_sessions (
-    tenant_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    data JSONB NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    PRIMARY KEY (tenant_id, agent_id)
-)
-"""
-
-SETUP_SQL = [
-    "CREATE INDEX IF NOT EXISTS idx_agent_sessions_tenant ON agent_sessions(tenant_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agent_sessions_expires ON agent_sessions(expires_at)",
-]
-
 
 class PostgresPoolBackend(PoolBackend):
     """
@@ -56,12 +39,8 @@ class PostgresPoolBackend(PoolBackend):
         self._initialized = False
 
     async def _ensure_initialized(self) -> None:
-        """Create table and indexes on first use."""
         if self._initialized:
             return
-        await self._db.execute(CREATE_TABLE_SQL)
-        for sql in SETUP_SQL:
-            await self._db.execute(sql)
         self._initialized = True
         logger.info("PostgreSQL pool backend initialized")
 

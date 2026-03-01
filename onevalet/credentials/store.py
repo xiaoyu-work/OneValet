@@ -41,34 +41,6 @@ class CredentialStore(Repository):
     """
 
     TABLE_NAME = "credentials"
-    CREATE_TABLE_SQL = """
-    CREATE TABLE IF NOT EXISTS credentials (
-        tenant_id TEXT NOT NULL,
-        service TEXT NOT NULL,
-        account_name TEXT NOT NULL DEFAULT 'primary',
-        credentials_json JSONB NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (tenant_id, service, account_name)
-    )
-    """
-    SETUP_SQL = [
-        # Email lookup index for webhook handlers
-        "CREATE INDEX IF NOT EXISTS idx_credentials_email ON credentials ((credentials_json->>'email'))",
-        # OAuth state tokens with automatic expiration
-        """
-        CREATE TABLE IF NOT EXISTS oauth_states (
-            state TEXT PRIMARY KEY,
-            tenant_id TEXT NOT NULL,
-            service TEXT NOT NULL,
-            redirect_after TEXT,
-            account_name TEXT NOT NULL DEFAULT 'primary',
-            extra_data JSONB,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
-        )
-        """,
-    ]
 
     def __init__(self, db: Database = None, dsn: str = None):
         """
@@ -88,10 +60,9 @@ class CredentialStore(Repository):
             raise ValueError("Either db or dsn must be provided")
 
     async def initialize(self) -> None:
-        """Initialize pool and ensure table. For standalone mode or first-time setup."""
+        """Initialize pool. For standalone mode or first-time setup."""
         if self._standalone:
             await self._db.initialize()
-        await self.ensure_table()
         logger.info("CredentialStore initialized")
 
     async def close(self) -> None:

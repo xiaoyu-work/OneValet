@@ -25,6 +25,8 @@ services:
       DATABASE_URL: postgresql://onevalet:onevalet@db:5432/onevalet
     volumes:
       - ./config.yaml:/app/config.yaml:ro
+    command: >
+      sh -c "alembic upgrade head && python -m onevalet --host 0.0.0.0"
     depends_on:
       db:
         condition: service_healthy
