@@ -217,6 +217,44 @@ class AgentRegistry:
             schemas.append(schema)
         return schemas
 
+    async def get_domain_agent_tool_schemas(
+        self,
+        domains: List[str],
+        domain_agent_map: Dict[str, List[str]],
+        tenant_id: Optional[str] = None,
+        credential_store: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return tool schemas filtered to specific domains.
+
+        If domains contains ``"all"``, delegates to
+        :meth:`get_all_agent_tool_schemas` (no filtering).
+        """
+        if "all" in domains:
+            return await self.get_all_agent_tool_schemas(tenant_id, credential_store)
+
+        from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
+
+        # Build allowed agent set from requested domains
+        allowed_agents: set = set()
+        for domain in domains:
+            allowed_agents.update(domain_agent_map.get(domain, []))
+
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
+
+        schemas = []
+        for name, metadata in self._get_agent_registry().items():
+            if not getattr(metadata, "expose_as_tool", True):
+                continue
+            if name not in allowed_agents:
+                continue
+            if not self._agent_available_for_tenant(metadata, tenant_services):
+                logger.debug(f"Skipping agent {name}: tenant {tenant_id} missing required service")
+                continue
+            schema = generate_tool_schema(metadata.agent_class)
+            schema = enhance_agent_tool_schema(metadata.agent_class, schema)
+            schemas.append(schema)
+        return schemas
+
     def get_schema_version(self, agent_type: str) -> Optional[int]:
         """Return schema version for a registered agent type."""
         from ..agents.decorator import get_schema_version
