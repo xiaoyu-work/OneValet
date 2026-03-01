@@ -377,6 +377,7 @@ class Orchestrator:
 
         # Step 1: Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
+        self._current_context = context
 
         # Store images in context so agent tools can access them (e.g. receipt scanning)
         if images:
@@ -399,10 +400,18 @@ class Orchestrator:
             # word as a brand-new request and spawn unnecessary follow-up agents.
             return await self.post_process(agent_result, context)
 
-        # Step 4: Build tool schemas (all lightweight — ReAct picks directly)
-        tool_schemas = await self._build_tool_schemas(tenant_id)
+        # Step 4: Intent Analysis — classify domains and detect multi-intent
+        intent = await self._analyze_intent(message, context)
 
-        # Step 4b: Inject notify_user tool for conditional cron delivery
+        # Step 4b: Multi-intent → DAG execution
+        if intent.intent_type == "multi" and intent.sub_tasks:
+            result = await self._execute_dag(intent, tenant_id, context, metadata)
+            return await self.post_process(result, context)
+
+        # Step 5: Build domain-filtered tool schemas
+        tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
+
+        # Step 5b: Inject notify_user tool for conditional cron delivery
         meta = metadata or {}
         if meta.get("cron_conditional_delivery"):
             notify_tool, notify_schema = self._build_notify_user_tool(context)
@@ -411,7 +420,7 @@ class Orchestrator:
 
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
 
-        # Step 5: Build LLM messages
+        # Step 6: Build LLM messages
         messages = await self._build_llm_messages(context, message)
 
         # Convert images to media format for LLM
@@ -520,6 +529,7 @@ class Orchestrator:
 
         # Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
+        self._current_context = context
 
         # Store images in context so agent tools can access them
         if images:
@@ -557,8 +567,27 @@ class Orchestrator:
             )
             return
 
-        # Build tool schemas (all lightweight — ReAct picks directly)
-        tool_schemas = await self._build_tool_schemas(tenant_id)
+        # Intent Analysis — classify domains and detect multi-intent
+        intent = await self._analyze_intent(message, context)
+
+        # Multi-intent → streaming DAG execution
+        if intent.intent_type == "multi" and intent.sub_tasks:
+            final_response = ""
+            async for event in self._stream_dag(intent, tenant_id, context, metadata):
+                if event.type == EventType.EXECUTION_END:
+                    final_response = event.data.get("final_response", "")
+                yield event
+            # Post-process: momex save, guardrails output, hooks
+            result = AgentResult(
+                agent_type=self.__class__.__name__,
+                status=AgentStatus.COMPLETED,
+                raw_message=final_response,
+            )
+            await self.post_process(result, context)
+            return
+
+        # Build domain-filtered tool schemas
+        tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
         messages = await self._build_llm_messages(context, message)
 
@@ -1375,22 +1404,6 @@ class Orchestrator:
                 "Please retry with valid JSON arguments."
             )
 
-        # delegate_to_agent meta-tool for Tier 2 agents
-        if tool_name == "delegate_to_agent":
-            agent_name = args.get("agent_name", "")
-            task_instruction = args.get("task_instruction", "")
-            if not agent_name:
-                return "Error: agent_name is required for delegate_to_agent"
-            if not self._agent_registry or not self._agent_registry.get_agent_class(agent_name):
-                return f"Error: Agent '{agent_name}' not found in registry"
-            return await execute_agent_tool(
-                self,
-                agent_type=agent_name,
-                tenant_id=tenant_id,
-                tool_call_args={},
-                task_instruction=task_instruction,
-            )
-
         if self._is_agent_tool(tool_name):
             # Agent-Tool execution
             task_instruction = args.pop("task_instruction", "")
@@ -1415,9 +1428,7 @@ class Orchestrator:
             return await tool.executor(args, context)
 
     def _is_agent_tool(self, tool_name: str) -> bool:
-        """Check if tool_name corresponds to a registered agent or delegate_to_agent."""
-        if tool_name == "delegate_to_agent":
-            return True
+        """Check if tool_name corresponds to a registered agent."""
         if not self._agent_registry:
             return False
         return self._agent_registry.get_agent_class(tool_name) is not None
@@ -1699,17 +1710,6 @@ class Orchestrator:
 
         system_parts.append("\n[Context]\n" + "\n".join(context_lines))
 
-        # Tier 2 agent catalog (for delegate_to_agent awareness)
-        tier2 = getattr(self, "_tier2_agent_schemas", [])
-        if tier2:
-            catalog_lines = ["## Tier 2 Agents (use delegate_to_agent to invoke):"]
-            for schema in tier2:
-                name = self._tool_name_from_schema(schema) or "unknown"
-                desc = (schema.get("function", {}).get("description", "") or "")
-                short_desc = desc.split(".")[0] if desc else name
-                catalog_lines.append(f"- {name}: {short_desc}")
-            system_parts.append("\n".join(catalog_lines))
-
         messages.append({
             "role": "system",
             "content": "\n\n".join(system_parts),
@@ -1731,67 +1731,63 @@ class Orchestrator:
 
         return messages
 
-    # Change F: max number of agent-tools included as full schemas (Tier 1)
-    TIER1_AGENT_TOOL_LIMIT = 8
+    # Domain-based agent grouping for intent-driven tool loading
+    DOMAIN_AGENT_MAP: Dict[str, List[str]] = {
+        "communication": [
+            "EmailAgent", "SlackComposioAgent", "DiscordComposioAgent",
+            "TwitterComposioAgent", "LinkedinComposioAgent",
+        ],
+        "productivity": [
+            "CalendarAgent", "TodoAgent", "BriefingAgent", "NotionAgent",
+            "GoogleWorkspaceAgent", "CloudStorageAgent",
+            "GitHubComposioAgent", "CronAgent",
+        ],
+        "lifestyle": [
+            "ExpenseAgent", "SmartHomeAgent", "ShippingAgent",
+            "SpotifyComposioAgent", "YouTubeComposioAgent",
+            "ImageAgent", "ImportantDatesAgent",
+        ],
+        "travel": [
+            "TripPlannerAgent", "MapsAgent",
+        ],
+    }
 
-    async def _build_tool_schemas(self, tenant_id: str) -> List[Dict[str, Any]]:
-        """Build combined tool schemas: regular tools + agent-tools.
+    async def _build_tool_schemas(
+        self,
+        tenant_id: str,
+        domains: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Build combined tool schemas: builtin tools + domain-filtered agent-tools.
 
-        All agent-tool schemas are lightweight (name + description +
-        task_instruction only).  They are split into two tiers:
-        - Tier 1: First N agents included directly as tool schemas
-        - Tier 2: Remaining agents accessible via delegate_to_agent meta-tool
-
-        Agents whose ``requires_service`` has no overlap with the tenant's
-        configured credentials are excluded automatically.
+        Args:
+            tenant_id: Tenant identifier for credential filtering.
+            domains: List of domains to load agent tools for.
+                If ``None`` or contains ``"all"``, loads all agent tools.
         """
         schemas: List[Dict[str, Any]] = []
 
         if not self._agent_registry:
             return schemas
 
-        # Builtin tools (orchestrator-level)
+        # Builtin tools (orchestrator-level, always included)
         for tool in getattr(self, 'builtin_tools', []):
             schemas.append(tool.to_openai_schema())
 
-        # Agent-tools: split into Tier 1 and Tier 2
-        agent_tool_schemas = await self._agent_registry.get_all_agent_tool_schemas(
-            tenant_id=tenant_id,
-            credential_store=self.credential_store,
-        )
-        tier1_schemas = agent_tool_schemas[:self.TIER1_AGENT_TOOL_LIMIT]
-        self._tier2_agent_schemas = agent_tool_schemas[self.TIER1_AGENT_TOOL_LIMIT:]
+        # Agent-tools: domain-filtered
+        if domains and "all" not in domains:
+            agent_tool_schemas = await self._agent_registry.get_domain_agent_tool_schemas(
+                domains=domains,
+                domain_agent_map=self.DOMAIN_AGENT_MAP,
+                tenant_id=tenant_id,
+                credential_store=self.credential_store,
+            )
+        else:
+            agent_tool_schemas = await self._agent_registry.get_all_agent_tool_schemas(
+                tenant_id=tenant_id,
+                credential_store=self.credential_store,
+            )
 
-        schemas.extend(tier1_schemas)
-
-        # Add delegate_to_agent meta-tool if there are Tier 2 agents
-        if self._tier2_agent_schemas:
-            delegate_schema = {
-                "type": "function",
-                "function": {
-                    "name": "delegate_to_agent",
-                    "description": (
-                        "Delegate a task to a specialized agent not listed in the "
-                        "direct tools above. See the agent catalog in the system "
-                        "prompt for all available agents."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "agent_name": {
-                                "type": "string",
-                                "description": "The agent class name from the catalog",
-                            },
-                            "task_instruction": {
-                                "type": "string",
-                                "description": "What the agent should do",
-                            },
-                        },
-                        "required": ["agent_name", "task_instruction"],
-                    },
-                },
-            }
-            schemas.append(delegate_schema)
+        schemas.extend(agent_tool_schemas)
 
         # Always inject complete_task as the last tool
         schemas.append(COMPLETE_TASK_SCHEMA)
@@ -1802,10 +1798,341 @@ class Orchestrator:
 
         logger.info(
             f"[Tools] {len(schemas)} total available "
-            f"(tier1_agents={len(tier1_schemas)}, tier2_agents={len(self._tier2_agent_schemas)})"
+            f"(agents={len(agent_tool_schemas)}, domains={domains or ['all']})"
         )
 
         return schemas
+
+    # ==================================================================
+    # INTENT ANALYSIS & DAG EXECUTION
+    # ==================================================================
+
+    async def _analyze_intent(
+        self,
+        message: str,
+        context: Dict[str, Any],
+    ) -> "IntentAnalysis":
+        """Analyze user message to determine intent type and domain(s).
+
+        Single lightweight LLM call (~200 tokens).
+        Falls back to all-domains on failure.
+        """
+        from .intent_analyzer import IntentAnalyzer
+
+        analyzer = IntentAnalyzer(self.llm_client)
+        intent = await analyzer.analyze(message)
+
+        logger.info(
+            f"[IntentAnalyzer] type={intent.intent_type}, "
+            f"domains={intent.domains}, "
+            f"sub_tasks={len(intent.sub_tasks)}"
+        )
+        return intent
+
+    async def _execute_dag(
+        self,
+        intent: "IntentAnalysis",
+        tenant_id: str,
+        context: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AgentResult:
+        """Execute multi-intent sub-tasks in DAG order.
+
+        1. Topologically sort sub-tasks into execution levels
+        2. Execute each level (parallel within, sequential across)
+        3. Inject predecessor results into dependent tasks
+        4. Synthesize final response
+        """
+        from .dag_executor import topological_sort, SubTaskResult
+
+        start_time = time.monotonic()
+        levels = topological_sort(intent.sub_tasks)
+        all_results: Dict[int, SubTaskResult] = {}
+
+        logger.info(
+            f"[DAG] Starting execution: {len(intent.sub_tasks)} sub-tasks, "
+            f"{len(levels)} levels"
+        )
+
+        for level_idx, level in enumerate(levels):
+            logger.info(
+                f"[DAG] Level {level_idx}: executing {len(level)} sub-task(s) "
+                f"[{', '.join(st.description[:40] for st in level)}]"
+            )
+
+            async def _run_sub_task(sub_task):
+                augmented_message = self._build_dag_augmented_message(
+                    sub_task, all_results,
+                )
+                tool_schemas = await self._build_tool_schemas(
+                    tenant_id, domains=[sub_task.domain],
+                )
+                messages = await self._build_llm_messages(context, augmented_message)
+
+                exec_data: Dict[str, Any] = {}
+                async for event in self._react_loop_events(
+                    messages, tool_schemas, tenant_id,
+                    context=context, user_message=augmented_message,
+                ):
+                    if event.type == EventType.EXECUTION_END:
+                        exec_data = event.data
+
+                return SubTaskResult(
+                    sub_task_id=sub_task.id,
+                    description=sub_task.description,
+                    response=exec_data.get("final_response", ""),
+                    status="completed",
+                    duration_ms=exec_data.get("duration_ms", 0),
+                    token_usage=exec_data.get("token_usage", {}),
+                )
+
+            level_results = await asyncio.gather(
+                *[_run_sub_task(st) for st in level],
+                return_exceptions=True,
+            )
+
+            for st, result in zip(level, level_results):
+                if isinstance(result, BaseException):
+                    logger.warning(f"[DAG] Sub-task {st.id} failed: {result}")
+                    all_results[st.id] = SubTaskResult(
+                        sub_task_id=st.id,
+                        description=st.description,
+                        response=f"Error: {result}",
+                        status="error",
+                    )
+                else:
+                    all_results[st.id] = result
+
+        # Synthesize results into a unified response
+        final_response = await self._synthesize_dag_results(
+            intent.raw_message, all_results, context,
+        )
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+
+        logger.info(f"[DAG] Completed in {duration_ms}ms")
+
+        return AgentResult(
+            agent_type=self.__class__.__name__,
+            status=AgentStatus.COMPLETED,
+            raw_message=final_response,
+            metadata={
+                "dag_execution": True,
+                "sub_tasks": len(intent.sub_tasks),
+                "levels": len(levels),
+                "duration_ms": duration_ms,
+            },
+        )
+
+    async def _stream_dag(
+        self,
+        intent: "IntentAnalysis",
+        tenant_id: str,
+        context: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Stream events during DAG execution."""
+        from .dag_executor import topological_sort, SubTaskResult
+
+        start_time = time.monotonic()
+        levels = topological_sort(intent.sub_tasks)
+        all_results: Dict[int, SubTaskResult] = {}
+
+        yield AgentEvent(
+            type=EventType.WORKFLOW_START,
+            data={"sub_tasks": len(intent.sub_tasks), "levels": len(levels)},
+        )
+
+        for level_idx, level in enumerate(levels):
+            for st in level:
+                yield AgentEvent(
+                    type=EventType.STAGE_START,
+                    data={
+                        "sub_task_id": st.id,
+                        "description": st.description,
+                        "domain": st.domain,
+                    },
+                )
+
+            if len(level) == 1:
+                # Single task in level: stream events normally
+                st = level[0]
+                augmented_message = self._build_dag_augmented_message(
+                    st, all_results,
+                )
+                tool_schemas = await self._build_tool_schemas(
+                    tenant_id, domains=[st.domain],
+                )
+                messages = await self._build_llm_messages(context, augmented_message)
+
+                exec_data: Dict[str, Any] = {}
+                async for event in self._react_loop_events(
+                    messages, tool_schemas, tenant_id,
+                    context=context, user_message=augmented_message,
+                ):
+                    if event.type == EventType.EXECUTION_END:
+                        exec_data = event.data
+                    yield event
+
+                all_results[st.id] = SubTaskResult(
+                    sub_task_id=st.id,
+                    description=st.description,
+                    response=exec_data.get("final_response", ""),
+                    status="completed",
+                )
+                yield AgentEvent(
+                    type=EventType.STAGE_END,
+                    data={"sub_task_id": st.id},
+                )
+            else:
+                # Multiple parallel tasks: execute concurrently, collect results
+                async def _run_silent(sub_task):
+                    aug_msg = self._build_dag_augmented_message(
+                        sub_task, all_results,
+                    )
+                    t_schemas = await self._build_tool_schemas(
+                        tenant_id, domains=[sub_task.domain],
+                    )
+                    msgs = await self._build_llm_messages(context, aug_msg)
+                    exec_d: Dict[str, Any] = {}
+                    async for ev in self._react_loop_events(
+                        msgs, t_schemas, tenant_id,
+                        context=context, user_message=aug_msg,
+                    ):
+                        if ev.type == EventType.EXECUTION_END:
+                            exec_d = ev.data
+                    return SubTaskResult(
+                        sub_task_id=sub_task.id,
+                        description=sub_task.description,
+                        response=exec_d.get("final_response", ""),
+                        status="completed",
+                    )
+
+                level_results = await asyncio.gather(
+                    *[_run_silent(st) for st in level],
+                    return_exceptions=True,
+                )
+                for st, result in zip(level, level_results):
+                    if isinstance(result, BaseException):
+                        all_results[st.id] = SubTaskResult(
+                            sub_task_id=st.id,
+                            description=st.description,
+                            response=f"Error: {result}",
+                            status="error",
+                        )
+                    else:
+                        all_results[st.id] = result
+                    yield AgentEvent(
+                        type=EventType.STAGE_END,
+                        data={"sub_task_id": st.id},
+                    )
+
+        # Synthesis stage
+        yield AgentEvent(
+            type=EventType.STAGE_START,
+            data={"sub_task_id": -1, "description": "Synthesizing results"},
+        )
+        final_response = await self._synthesize_dag_results(
+            intent.raw_message, all_results, context,
+        )
+        yield AgentEvent(type=EventType.MESSAGE_START, data={})
+        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
+        yield AgentEvent(type=EventType.MESSAGE_END, data={})
+        yield AgentEvent(
+            type=EventType.STAGE_END,
+            data={"sub_task_id": -1},
+        )
+
+        yield AgentEvent(
+            type=EventType.WORKFLOW_END,
+            data={"sub_tasks_completed": len(all_results)},
+        )
+
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        yield AgentEvent(
+            type=EventType.EXECUTION_END,
+            data={
+                "final_response": final_response,
+                "dag_execution": True,
+                "sub_tasks": len(intent.sub_tasks),
+                "pending_approvals": [],
+                "result_status": None,
+                "turns": 0,
+                "token_usage": {"input_tokens": 0, "output_tokens": 0},
+                "duration_ms": duration_ms,
+                "tool_calls": [],
+            },
+        )
+
+    async def _synthesize_dag_results(
+        self,
+        original_message: str,
+        results: Dict[int, "SubTaskResult"],
+        context: Dict[str, Any],
+    ) -> str:
+        """Synthesize multiple sub-task results into a unified response."""
+        # If only one sub-task completed successfully, return its result directly
+        successful = [r for r in results.values() if r.status == "completed"]
+        if len(successful) == 1:
+            return successful[0].response
+
+        result_parts = []
+        for sub_id in sorted(results.keys()):
+            r = results[sub_id]
+            result_parts.append(
+                f"## Sub-task {sub_id}: {r.description}\n{r.response}"
+            )
+
+        synthesis_message = (
+            f'The user asked: "{original_message}"\n\n'
+            "Here are the results from each sub-task:\n\n"
+            + "\n\n".join(result_parts)
+            + "\n\nSynthesize these into a single, coherent response for the user. "
+            "Preserve all specific data points. Be concise."
+        )
+
+        messages = [
+            {
+                "role": "system",
+                "content": "You synthesize multiple task results into a unified response.",
+            },
+            {"role": "user", "content": synthesis_message},
+        ]
+
+        try:
+            response = await self.llm_client.chat_completion(messages=messages)
+            return response.content or ""
+        except Exception as e:
+            logger.warning(f"[DAG] Synthesis failed: {e}")
+            # Fallback: concatenate results
+            return "\n\n".join(
+                f"**{r.description}:**\n{r.response}"
+                for r in sorted(results.values(), key=lambda r: r.sub_task_id)
+            )
+
+    @staticmethod
+    def _build_dag_augmented_message(
+        sub_task: "SubTask",
+        prior_results: Dict[int, "SubTaskResult"],
+    ) -> str:
+        """Build an augmented user message with predecessor results injected."""
+        if not sub_task.depends_on:
+            return sub_task.description
+
+        predecessor_context = []
+        for dep_id in sub_task.depends_on:
+            if dep_id in prior_results:
+                pred = prior_results[dep_id]
+                predecessor_context.append(
+                    f"[Result from previous step: {pred.description}]\n{pred.response}"
+                )
+
+        if not predecessor_context:
+            return sub_task.description
+
+        return (
+            "\n\n".join(predecessor_context)
+            + f"\n\nBased on the above, please: {sub_task.description}"
+        )
 
     @staticmethod
     def _tool_name_from_schema(schema: Dict[str, Any]) -> Optional[str]:
@@ -1908,9 +2235,8 @@ class Orchestrator:
     ) -> Dict[str, Any]:
         """Plan tool policy dynamically with a router LLM call (no hardcoded intent map).
 
-        The router sees ALL agents (Tier 1 + Tier 2) for routing decisions.
-        If it picks a Tier 2 agent, the selected schema is automatically
-        mapped to delegate_to_agent so the ReAct loop can invoke it.
+        The router sees all domain-filtered agent tools and selects the most
+        relevant ones for the current user message.
         """
         tool_names = [
             self._tool_name_from_schema(schema)
@@ -1918,14 +2244,7 @@ class Orchestrator:
             if self._tool_name_from_schema(schema)
         ]
 
-        # Build mapping of Tier 2 agent names for routing
-        tier2_schemas = getattr(self, "_tier2_agent_schemas", [])
-        tier2_names = {
-            self._tool_name_from_schema(s)
-            for s in tier2_schemas
-            if self._tool_name_from_schema(s)
-        }
-        all_known_names = set(tool_names) | tier2_names
+        all_known_names = set(tool_names)
 
         if not all_known_names:
             return {
@@ -1944,15 +2263,9 @@ class Orchestrator:
             "retry_with_required_on_empty": False,
         }
 
-        # Show ALL tools/agents (including Tier 2) to the router
+        # Show all available tools to the router
         tool_lines = []
         for schema in tool_schemas:
-            name = self._tool_name_from_schema(schema)
-            if not name or name == "delegate_to_agent":
-                continue
-            desc = schema.get("function", {}).get("description", "")
-            tool_lines.append(f"- {name}: {desc}")
-        for schema in tier2_schemas:
             name = self._tool_name_from_schema(schema)
             if not name:
                 continue
@@ -2003,29 +2316,14 @@ class Orchestrator:
         first_turn_tool_choice: Any = "auto"
 
         if isinstance(force_first_tool, str) and force_first_tool in all_known_names:
-            # If router picked a Tier 2 agent, route via delegate_to_agent
-            if force_first_tool in tier2_names:
-                selected_schemas = self._filter_tool_schemas(tool_schemas, ["delegate_to_agent"])
-                first_turn_tool_choice = {
-                    "type": "function",
-                    "function": {"name": "delegate_to_agent"},
-                }
-            else:
-                selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
-                first_turn_tool_choice = {
-                    "type": "function",
-                    "function": {"name": force_first_tool},
-                }
+            selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
+            first_turn_tool_choice = {
+                "type": "function",
+                "function": {"name": force_first_tool},
+            }
             must_use_tools = True
         elif selected_names:
-            # Map any Tier 2 names to delegate_to_agent
-            mapped_names = []
-            for n in selected_names:
-                if n in tier2_names:
-                    mapped_names.append("delegate_to_agent")
-                else:
-                    mapped_names.append(n)
-            selected_schemas = self._filter_tool_schemas(tool_schemas, mapped_names)
+            selected_schemas = self._filter_tool_schemas(tool_schemas, selected_names)
             if must_use_tools:
                 first_turn_tool_choice = "required"
         elif must_use_tools:
@@ -2224,8 +2522,8 @@ class Orchestrator:
         """
         Prepare context for processing.
 
-        Automatically loads conversation history and recalls relevant
-        long-term memories from Momex.
+        Conversation history is provided by the app layer via
+        metadata["conversation_history"].
 
         Override to add:
         - User preferences/tier info
@@ -2258,13 +2556,10 @@ class Orchestrator:
             "active_agents": active_agents,
         }
 
-        # Load conversation history (short-term memory, in-memory cache)
-        history = self.momex.get_history(
-            tenant_id=tenant_id,
-            session_id=session_id,
-        )
-        if history:
-            context["conversation_history"] = history
+        # Conversation history is provided by the app layer via metadata
+        external_history = meta.get("conversation_history")
+        if external_history:
+            context["conversation_history"] = external_history
 
         return context
 
@@ -2414,9 +2709,8 @@ class Orchestrator:
         """
         Post-process result before returning to user.
 
-        Automatically saves conversation history and extracts long-term
-        knowledge via Momex.  Then runs guardrails output check and
-        any registered post_process_hooks.
+        Extracts long-term knowledge via Momex, then runs guardrails
+        output check and any registered post_process_hooks.
 
         Override to add:
         - Send notifications (SMS, push, email)
@@ -2448,15 +2742,6 @@ class Orchestrator:
             messages.append({"role": "assistant", "content": result.raw_message})
 
         if messages:
-            # Save conversation history (short-term, sync)
-            for msg in messages:
-                self.momex.save_message(
-                    tenant_id=tenant_id,
-                    session_id=session_id,
-                    content=msg["content"],
-                    role=msg["role"],
-                )
-
             # Long-term knowledge extraction (async)
             await self.momex.add(
                 tenant_id=tenant_id,

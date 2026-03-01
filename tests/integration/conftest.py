@@ -427,11 +427,10 @@ async def orchestrator_factory(llm_client, agent_registry):
             canned_results=canned_results or {},
         )
 
-        # Mock momex — returns empty history, no-ops on save
+        # Mock momex — LTM only (RAG search + knowledge extraction)
         mock_momex = MagicMock()
-        mock_momex.get_history.return_value = []
-        mock_momex.save_message = MagicMock()
-        mock_momex.save_conversation = AsyncMock()
+        mock_momex.search = AsyncMock(return_value=[])
+        mock_momex.add = AsyncMock()
 
         orch = TestOrchestrator(
             recorder=recorder,

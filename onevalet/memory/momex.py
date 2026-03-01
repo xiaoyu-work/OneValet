@@ -1,8 +1,10 @@
 """
 OneValet Momex Integration - Wrapper around momex memory system.
 
-Provides long-term structured memory and short-term conversation history.
-Multi-tenant isolation via collection naming: "tenant:{tenant_id}".
+Provides long-term structured memory (RAG) with multi-tenant isolation
+via collection naming: "tenant:{tenant_id}".
+
+Conversation history is managed by the app layer.
 """
 
 import logging
@@ -13,10 +15,12 @@ logger = logging.getLogger(__name__)
 
 class MomexMemory:
     """
-    Wrapper around momex Memory + ShortTermMemory.
+    Wrapper around momex Memory for long-term knowledge (RAG).
 
     Multi-tenant isolation: each tenant_id gets its own collection,
     so memories are never shared across tenants.
+
+    Conversation history is managed by the app layer, not here.
 
     Args:
         llm_provider: LLM provider for knowledge extraction (openai/anthropic/azure/deepseek/qwen)
@@ -53,8 +57,6 @@ class MomexMemory:
 
         # Cache: tenant_id -> Memory instance
         self._memories: Dict[str, Any] = {}
-        # Cache: (tenant_id, session_id) -> ShortTermMemory instance
-        self._short_terms: Dict[tuple, Any] = {}
 
     def _get_config(self):
         """Build MomexConfig from OneValet's LLM config (lazy, once)."""
@@ -110,71 +112,6 @@ class MomexMemory:
                 config=self._get_config(),
             )
         return self._memories[tenant_id]
-
-    def _get_short_term(self, tenant_id: str, session_id: str):
-        """Get or create a ShortTermMemory instance for a tenant+session."""
-        key = (tenant_id, session_id)
-        if key not in self._short_terms:
-            from momex import ShortTermMemory
-            collection = f"tenant:{tenant_id}"
-            self._short_terms[key] = ShortTermMemory(
-                collection=collection,
-                config=self._get_config(),
-                session_id=session_id,
-            )
-        return self._short_terms[key]
-
-    def get_history(
-        self,
-        tenant_id: str,
-        session_id: str,
-        limit: int = 50,
-    ) -> List[Dict[str, Any]]:
-        """Load conversation history from short-term memory.
-
-        Returns:
-            List of message dicts with 'role' and 'content' keys.
-        """
-        try:
-            stm = self._get_short_term(tenant_id, session_id)
-            messages = stm.get(limit=limit)
-            return [{"role": m.role, "content": m.content} for m in messages]
-        except Exception as e:
-            logger.warning(f"Failed to load history for {tenant_id}/{session_id}: {e}")
-            return []
-
-    def clear_history(self, tenant_id: str, session_id: str) -> None:
-        """Clear conversation history for a tenant/session (cache + database).
-
-        Works even after server restart when _short_terms cache is empty,
-        by creating the STM instance first to connect to the SQLite database.
-        """
-        key = (tenant_id, session_id)
-        try:
-            # Always get/create the STM instance to ensure database is cleared
-            stm = self._get_short_term(tenant_id, session_id)
-            stm.clear()
-            logger.info(f"Cleared STM database for {tenant_id}/{session_id}")
-        except Exception as e:
-            logger.warning(f"Failed to clear STM database: {e}")
-        # Remove from cache
-        if key in self._short_terms:
-            del self._short_terms[key]
-        logger.info(f"Cleared history for {tenant_id}/{session_id}")
-
-    def save_message(
-        self,
-        tenant_id: str,
-        session_id: str,
-        content: str,
-        role: str = "user",
-    ) -> None:
-        """Save a single message to short-term memory."""
-        try:
-            stm = self._get_short_term(tenant_id, session_id)
-            stm.add(content=content, role=role)
-        except Exception as e:
-            logger.warning(f"Failed to save message for {tenant_id}/{session_id}: {e}")
 
     async def search(
         self,

@@ -16,11 +16,14 @@ router = APIRouter()
 async def chat(req: ChatRequest):
     app = require_app()
     images = [img.model_dump() for img in req.images] if req.images else None
+    metadata = dict(req.metadata or {})
+    if req.conversation_history is not None:
+        metadata["conversation_history"] = req.conversation_history
     result = await app.handle_message(
         tenant_id=req.tenant_id,
         message=req.message,
         images=images,
-        metadata=req.metadata,
+        metadata=metadata,
     )
     return ChatResponse(
         response=result.raw_message or "",
@@ -33,13 +36,16 @@ async def stream(req: ChatRequest):
     app = require_app()
 
     images = [img.model_dump() for img in req.images] if req.images else None
+    metadata = dict(req.metadata or {})
+    if req.conversation_history is not None:
+        metadata["conversation_history"] = req.conversation_history
 
     async def event_generator():
         async for event in app.stream_message(
             tenant_id=req.tenant_id,
             message=req.message,
             images=images,
-            metadata=req.metadata,
+            metadata=metadata,
         ):
             def _default(obj):
                 if dataclasses.is_dataclass(obj) and not isinstance(obj, type):

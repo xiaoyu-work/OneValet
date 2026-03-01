@@ -40,25 +40,23 @@ class AgentToolResult:
 
 
 def _extract_recent_context(orchestrator, tenant_id: str) -> str:
-    """Extract a brief summary of recent conversation from Momex history.
+    """Extract a brief summary of recent conversation from context.
 
     Returns a string summarizing the last 3 conversation turns (max 500 chars).
     If no history is available, returns an empty string.
     """
     try:
-        history = orchestrator.momex.get_history(
-            tenant_id=tenant_id,
-            session_id=tenant_id,
-            limit=6,  # up to 3 turns (user + assistant each)
-        )
+        context = getattr(orchestrator, "_current_context", None)
+        history = context.get("conversation_history", []) if context else []
         if not history:
             return ""
 
+        # Take last 6 messages (up to 3 turns of user + assistant)
+        recent = history[-6:]
         parts = []
-        for msg in history:
+        for msg in recent:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
-            # Truncate individual messages to keep summary compact
             if len(content) > 120:
                 content = content[:117] + "..."
             parts.append(f"{role}: {content}")

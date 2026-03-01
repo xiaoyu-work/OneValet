@@ -457,9 +457,12 @@ class OneValet:
         return await self._credential_store.consume_oauth_state(state)
 
     async def clear_session(self, tenant_id: str = "default") -> None:
-        """Clear conversation history for a tenant."""
-        await self._ensure_initialized()
-        self._momex.clear_history(tenant_id=tenant_id, session_id=tenant_id)
+        """Clear conversation history for a tenant.
+
+        Conversation history is managed by the app layer (KoiAI).
+        This method is retained for API compatibility.
+        """
+        logger.info(f"clear_session called for {tenant_id} (history managed by app layer)")
 
     async def handle_message(
         self,

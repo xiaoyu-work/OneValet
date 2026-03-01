@@ -15,6 +15,7 @@ class ChatRequest(BaseModel):
     tenant_id: str = "default"
     images: Optional[list[ImageInput]] = None
     metadata: Optional[dict] = None
+    conversation_history: Optional[list[dict]] = None  # [{role, content}, ...]
 
 
 class ChatResponse(BaseModel):
