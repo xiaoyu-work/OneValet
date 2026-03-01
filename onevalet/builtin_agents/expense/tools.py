@@ -738,7 +738,7 @@ async def search_receipts(
                 d = d.isoformat()
             desc = receipt.get("ocr_text", "")
             file_id = receipt.get("storage_file_id", "")
-            # Generate a fresh signed URL if possible, fall back to stored URL
+            # Generate a fresh signed URL
             url = ""
             if file_id and storage_provider:
                 try:
@@ -747,8 +747,6 @@ async def search_receipts(
                         url = link_result["data"].get("url", "")
                 except Exception:
                     pass
-            if not url:
-                url = receipt.get("storage_url", "")
             line = f"{i}. {d}"
             if desc:
                 line += f" - {desc}"
