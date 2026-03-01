@@ -18,7 +18,7 @@ from onevalet.standard_agent import StandardAgent
 from .tools import control_lights, control_speaker
 
 
-@valet(capabilities=["smarthome"], requires_service=list(SMARTHOME_SERVICES))
+@valet(domain="lifestyle", requires_service=list(SMARTHOME_SERVICES))
 class SmartHomeAgent(StandardAgent):
     """Control smart lights and speakers. Use when the user wants to turn on/off lights, change brightness or color, play/pause music, or adjust volume."""
 

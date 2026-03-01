@@ -151,7 +151,7 @@ async def connect_linkedin(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["linkedin", "professional", "career", "networking"])
+@valet(domain="communication")
 class LinkedInComposioAgent(StandardAgent):
     """Create posts and view profile on LinkedIn. Use when the user mentions
     LinkedIn, professional networking, or wants to post on LinkedIn."""

@@ -17,7 +17,7 @@ from onevalet.standard_agent import StandardAgent
 from .tools import search_places, get_directions, check_air_quality
 
 
-@valet(capabilities=["maps"])
+@valet(domain="travel")
 class MapsAgent(StandardAgent):
     """Find places, restaurants, attractions, get directions, and check air quality. Use when the user asks about nearby places, how to get somewhere, navigation, or local recommendations."""
 

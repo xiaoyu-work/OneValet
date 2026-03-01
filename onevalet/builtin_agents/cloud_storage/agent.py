@@ -20,7 +20,7 @@ from onevalet.constants import STORAGE_SERVICES
 logger = logging.getLogger(__name__)
 
 
-@valet(requires_service=list(STORAGE_SERVICES))
+@valet(domain="productivity", requires_service=list(STORAGE_SERVICES))
 class CloudStorageAgent(StandardAgent):
     """Search and manage files in cloud storage (Dropbox, Google Drive, OneDrive). Use when the user asks about their files or wants to share/upload."""
 

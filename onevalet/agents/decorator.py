@@ -17,7 +17,7 @@ Usage:
             ...
 
     # With parameters
-    @valet(capabilities=["email"], enable_memory=True)
+    @valet(domain="communication", enable_memory=True)
     class HelloAgent(StandardAgent):
         '''Say hello'''
 
@@ -78,7 +78,11 @@ class AgentMetadata:
     # LLM provider name
     llm: Optional[str] = None
 
+    # Domain for intent-based routing (communication, productivity, lifestyle, travel)
+    domain: Optional[str] = None
+
     # Capabilities - what this agent can do (for routing decisions)
+    # Deprecated: use domain instead for routing. Kept for backward compatibility.
     capabilities: List[str] = field(default_factory=list)
 
     # Input fields (extracted from InputField class variables)
@@ -147,6 +151,7 @@ def valet(
     _cls: Optional[Type] = None,
     *,
     llm: Optional[str] = None,
+    domain: Optional[str] = None,
     capabilities: Optional[List[str]] = None,
     enable_memory: bool = False,
     expose_as_tool: bool = True,
@@ -160,12 +165,14 @@ def valet(
         @valet
         class MyAgent(StandardAgent): ...
 
-        @valet(capabilities=["email"], enable_memory=True)
+        @valet(domain="communication", enable_memory=True)
         class MyAgent(StandardAgent): ...
 
     Args:
         llm: LLM provider name (optional, uses default if not specified)
-        capabilities: What this agent can do (for routing decisions)
+        domain: Routing domain (communication, productivity, lifestyle, travel).
+            Used by IntentAnalyzer to filter which agents see a request.
+        capabilities: Deprecated — use domain instead.
         enable_memory: If True, orchestrator will auto recall/store memories
         expose_as_tool: If True, agent is exposed as a tool in the ReAct loop (default: True)
         requires_service: Credential service names this agent depends on.
@@ -200,6 +207,7 @@ def valet(
             agent_class=cls,
             description=description,
             llm=llm,
+            domain=domain,
             capabilities=capabilities or [],
             inputs=inputs,
             outputs=outputs,

@@ -18,7 +18,7 @@ from onevalet.builtin_agents.calendar.tools import query_events, create_event
 from onevalet.builtin_agents.todo.tools import create_task
 
 
-@valet(capabilities=["travel_planning", "travel", "maps", "itinerary"])
+@valet(domain="travel")
 class TripPlannerAgent(StandardAgent):
     """Plan a complete trip itinerary with day-by-day schedule. Use when the user asks to plan a trip, make an itinerary, or organize a multi-day travel plan. Coordinates flights, hotels, weather, places, directions, and optionally creates calendar events and tasks."""
 

@@ -21,7 +21,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["email"], requires_service=list(EMAIL_SERVICES))
+@valet(domain="communication", requires_service=list(EMAIL_SERVICES))
 class EmailAgent(StandardAgent):
     """Read, send, reply, delete, and archive emails. Use when the user mentions email, inbox, messages, or wants to send/check/reply to any email."""
 

@@ -291,7 +291,7 @@ async def connect_spotify(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["spotify", "music", "playlist", "song", "play"])
+@valet(domain="lifestyle")
 class SpotifyComposioAgent(StandardAgent):
     """Control Spotify playback, search music, manage playlists, and check
     what's currently playing. Use when the user mentions Spotify, music,

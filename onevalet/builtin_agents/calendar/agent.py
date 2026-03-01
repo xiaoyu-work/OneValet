@@ -23,7 +23,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["calendar"], requires_service=list(CALENDAR_SERVICES))
+@valet(domain="productivity", requires_service=list(CALENDAR_SERVICES))
 class CalendarAgent(StandardAgent):
     """Check schedule, create, update, or delete calendar events. Use when the user asks about their schedule, meetings, appointments, or wants to create/change/cancel an event."""
 

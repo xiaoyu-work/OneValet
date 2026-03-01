@@ -73,9 +73,17 @@ These examples show how to map user intent to the correct agent:
 - "Remind me to call mom" → TodoAgent
 - "Find nearby coffee shops" → MapsAgent
 - "Turn off the lights" → SmartHomeAgent
+- "Skip to the next song on the speaker" → SmartHomeAgent
 - "What's the weather in Seattle" → use check_weather tool directly or TripPlannerAgent
 - "lunch was $15" → ExpenseAgent
 - [User attaches a receipt image] → Look at the image, extract merchant/amount/items, then call ExpenseAgent with extracted details (e.g. "Log expense: Starbucks $4.50, 2 lattes. Also save the receipt image.")
+- "Post on LinkedIn" → LinkedInComposioAgent
+- "Connect my LinkedIn account" → LinkedInComposioAgent
+- "Connect my Discord account" → DiscordComposioAgent
+- "Schedule a cron job" → CronAgent
+- "Track my package" → ShippingAgent
+- "Search my cloud storage" / "files in Dropbox" → CloudStorageAgent
+- "Create a Google Doc" / "Search Google Drive" → GoogleWorkspaceAgent
 - "Hello" → complete_task (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()

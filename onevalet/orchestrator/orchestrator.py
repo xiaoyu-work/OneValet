@@ -1731,26 +1731,8 @@ class Orchestrator:
 
         return messages
 
-    # Domain-based agent grouping for intent-driven tool loading
-    DOMAIN_AGENT_MAP: Dict[str, List[str]] = {
-        "communication": [
-            "EmailAgent", "SlackComposioAgent", "DiscordComposioAgent",
-            "TwitterComposioAgent", "LinkedinComposioAgent",
-        ],
-        "productivity": [
-            "CalendarAgent", "TodoAgent", "BriefingAgent", "NotionAgent",
-            "GoogleWorkspaceAgent", "CloudStorageAgent",
-            "GitHubComposioAgent", "CronAgent",
-        ],
-        "lifestyle": [
-            "ExpenseAgent", "SmartHomeAgent", "ShippingAgent",
-            "SpotifyComposioAgent", "YouTubeComposioAgent",
-            "ImageAgent", "ImportantDatesAgent",
-        ],
-        "travel": [
-            "TripPlannerAgent", "MapsAgent",
-        ],
-    }
+    # Domain-based routing is now driven by @valet(domain=...) on each agent.
+    # See AgentRegistry.get_domain_agent_tool_schemas() for the filtering logic.
 
     async def _build_tool_schemas(
         self,
@@ -1777,7 +1759,6 @@ class Orchestrator:
         if domains and "all" not in domains:
             agent_tool_schemas = await self._agent_registry.get_domain_agent_tool_schemas(
                 domains=domains,
-                domain_agent_map=self.DOMAIN_AGENT_MAP,
                 tenant_id=tenant_id,
                 credential_store=self.credential_store,
             )

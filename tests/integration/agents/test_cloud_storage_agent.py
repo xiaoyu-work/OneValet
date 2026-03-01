@@ -20,11 +20,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.productivity]
 # ---------------------------------------------------------------------------
 
 ROUTING_CASES = [
-    "Find my Q4 report in Google Drive",
-    "Show my recent files",
-    "How much storage space do I have?",
+    "Find my Q4 report in cloud storage",
+    "Show my recent files in cloud storage",
+    "How much cloud storage space do I have left?",
     "Search for budget.xlsx in Dropbox",
-    "Download the project proposal PDF",
+    "Download the project proposal PDF from cloud storage",
 ]
 
 

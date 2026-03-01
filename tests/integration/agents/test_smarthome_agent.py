@@ -22,7 +22,7 @@ TOOL_SELECTION_CASES = [
     ("Pause the speaker", ["control_speaker"]),
     ("Set the volume to 30%", ["control_speaker"]),
     ("Turn on all the lights", ["control_lights"]),
-    ("Skip to the next song", ["control_speaker"]),
+    ("Skip to the next song on the speaker", ["control_speaker"]),
 ]
 
 

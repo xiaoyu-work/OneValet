@@ -31,7 +31,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["expense", "spending", "budget", "money", "cost", "payment", "receipt"])
+@valet(domain="lifestyle")
 class ExpenseAgent(StandardAgent):
     """Track expenses, scan receipts, analyze spending, and manage budgets. Use when
     the user mentions expenses, spending, costs, payments, budgets, or receipts."""

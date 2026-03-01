@@ -335,7 +335,7 @@ async def notion_update_page(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["notion"])
+@valet(domain="productivity")
 class NotionAgent(StandardAgent):
     """Search, read, create, and update Notion pages and databases. Use when the user mentions Notion, their notes, wiki, or knowledge base in Notion."""
 

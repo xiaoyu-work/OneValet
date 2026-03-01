@@ -25,7 +25,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["todo", "reminder", "task"], requires_service=list(TODO_SERVICES))
+@valet(domain="productivity", requires_service=list(TODO_SERVICES))
 class TodoAgent(StandardAgent):
     """List, create, complete, and delete todo tasks; set and manage reminders. Use when the user mentions tasks, todos, to-do lists, reminders, or wants to be reminded about something."""
 

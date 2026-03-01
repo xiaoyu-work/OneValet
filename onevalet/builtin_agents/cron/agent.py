@@ -20,7 +20,7 @@ from .tools import (
 )
 
 
-@valet(capabilities=["cron", "schedule", "timer", "automation", "recurring"])
+@valet(domain="productivity")
 class CronAgent(StandardAgent):
     """Create, list, update, and manage scheduled cron jobs and recurring automations. Use when the user wants to schedule recurring tasks, set up timed automations, create reminders, or manage existing scheduled jobs."""
 

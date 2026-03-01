@@ -13,7 +13,7 @@ from .important_dates_repo import ImportantDatesRepository
 logger = logging.getLogger(__name__)
 
 
-@valet
+@valet(domain="lifestyle")
 class ImportantDateDigestAgent(StandardAgent):
     """Check for upcoming birthdays, anniversaries, and important dates. Use for daily reminders or when the user asks about special dates."""
 

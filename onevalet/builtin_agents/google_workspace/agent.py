@@ -256,7 +256,7 @@ async def google_sheets_write(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["google_workspace", "google_docs", "google_sheets", "google_drive"], requires_service=[SERVICE_GMAIL])
+@valet(domain="productivity", requires_service=[SERVICE_GMAIL])
 class GoogleWorkspaceAgent(StandardAgent):
     """Search, read, create, and write Google Drive files, Docs, and Sheets. Use when the user mentions Google Docs, Sheets, Drive, or their documents and spreadsheets."""
 

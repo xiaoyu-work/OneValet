@@ -220,12 +220,12 @@ class AgentRegistry:
     async def get_domain_agent_tool_schemas(
         self,
         domains: List[str],
-        domain_agent_map: Dict[str, List[str]],
         tenant_id: Optional[str] = None,
         credential_store: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
         """Return tool schemas filtered to specific domains.
 
+        Uses ``metadata.domain`` declared on each agent via ``@valet(domain=...)``.
         If domains contains ``"all"``, delegates to
         :meth:`get_all_agent_tool_schemas` (no filtering).
         """
@@ -234,18 +234,16 @@ class AgentRegistry:
 
         from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
 
-        # Build allowed agent set from requested domains
-        allowed_agents: set = set()
-        for domain in domains:
-            allowed_agents.update(domain_agent_map.get(domain, []))
-
+        domain_set = set(domains)
         tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         schemas = []
         for name, metadata in self._get_agent_registry().items():
             if not getattr(metadata, "expose_as_tool", True):
                 continue
-            if name not in allowed_agents:
+            # Filter by domain declared on the agent
+            agent_domain = getattr(metadata, "domain", None)
+            if agent_domain not in domain_set:
                 continue
             if not self._agent_available_for_tenant(metadata, tenant_services):
                 logger.debug(f"Skipping agent {name}: tenant {tenant_id} missing required service")
@@ -286,10 +284,9 @@ class AgentRegistry:
             description = metadata.description or metadata.agent_class.__doc__ or ""
             lines.append(f"- **{name}**: {description}")
 
-            # Capabilities (keywords for intent matching)
-            capabilities = metadata.capabilities
-            if capabilities:
-                lines.append(f"  Keywords: {', '.join(capabilities)}")
+            # Domain for routing
+            if metadata.domain:
+                lines.append(f"  Domain: {metadata.domain}")
 
             # Tools available to this agent
             agent_tools = getattr(metadata.agent_class, 'tools', ())

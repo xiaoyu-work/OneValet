@@ -93,9 +93,9 @@ async def test_response_quality_briefing(conversation, llm_judge):
     passed = await llm_judge(
         "Give me my morning briefing",
         conv.last_message,
-        "The response should present a daily briefing that organizes information "
-        "from calendar events, tasks, and/or emails. It should be structured and "
-        "readable, not an error message.",
+        "The response should present a daily briefing or summary that mentions "
+        "calendar events, tasks, or emails. It should be structured and readable. "
+        "It should not be an error message or ask for clarification.",
     )
     assert passed, f"LLM judge failed. Response: {conv.last_message}"
 

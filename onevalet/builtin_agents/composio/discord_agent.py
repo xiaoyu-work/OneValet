@@ -182,7 +182,7 @@ async def connect_discord(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["discord", "server", "guild"])
+@valet(domain="communication")
 class DiscordComposioAgent(StandardAgent):
     """Send messages, list channels, and manage Discord servers. Use when
     the user mentions Discord, guilds, servers, or wants to send/read

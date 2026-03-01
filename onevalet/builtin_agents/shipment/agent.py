@@ -17,7 +17,7 @@ from onevalet.standard_agent import StandardAgent
 from .tools import track_shipment
 
 
-@valet(capabilities=["shipping"])
+@valet(domain="lifestyle")
 class ShippingAgent(StandardAgent):
     """Track packages and check delivery status. Use when the user mentions a tracking number, package, shipment, delivery, or asks where their order is."""
 

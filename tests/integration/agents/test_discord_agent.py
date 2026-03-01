@@ -20,7 +20,7 @@ TOOL_SELECTION_CASES = [
     ("Send a message on Discord to channel 123456 saying 'Hello everyone'", ["send_message"]),
     ("Show me all channels in my Discord server 789012", ["list_channels"]),
     ("List all my Discord servers", ["list_servers"]),
-    ("Connect my Discord account", ["connect_discord"]),
+    ("Connect my Discord account via OAuth", ["connect_discord"]),
 ]
 
 

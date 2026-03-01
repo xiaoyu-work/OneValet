@@ -209,7 +209,7 @@ async def connect_twitter(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["twitter", "tweet", "x", "social media"])
+@valet(domain="communication")
 class TwitterComposioAgent(StandardAgent):
     """Post tweets, view timeline, search tweets, and look up users on Twitter/X.
     Use when the user mentions Twitter, X, tweets, or social media posting."""

@@ -290,7 +290,7 @@ async def connect_github(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["github", "code", "repository"])
+@valet(domain="productivity")
 class GitHubComposioAgent(StandardAgent):
     """Create and list issues, create and list pull requests, and search
     repositories on GitHub. Use when the user mentions GitHub, issues, PRs,

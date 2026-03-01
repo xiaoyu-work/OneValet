@@ -12,7 +12,7 @@ from onevalet.standard_agent import StandardAgent
 from .tools import get_briefing, setup_daily_briefing, manage_briefing
 
 
-@valet(capabilities=["briefing", "morning", "digest", "summary", "daily"])
+@valet(domain="productivity")
 class BriefingAgent(StandardAgent):
     """Generate daily briefings with calendar, tasks, dates, and emails. Use when
     the user asks for a briefing, summary of the day, or wants to set up daily digests."""

@@ -19,7 +19,7 @@ from onevalet.constants import IMAGE_SERVICES
 logger = logging.getLogger(__name__)
 
 
-@valet(requires_service=list(IMAGE_SERVICES))
+@valet(domain="lifestyle", requires_service=list(IMAGE_SERVICES))
 class ImageAgent(StandardAgent):
     """Generate or edit images from a text description. Use when the user wants to create, modify, or design an image."""
 

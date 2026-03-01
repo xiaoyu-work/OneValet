@@ -74,7 +74,8 @@ async def test_response_quality_search(orchestrator_factory, llm_judge):
     passed = await llm_judge(
         "Search YouTube for sunset timelapse videos",
         result.raw_message,
-        "The response should present YouTube video search results, mentioning "
-        "video titles, channels, or URLs. It should not be an error message.",
+        "The response should present YouTube video results with titles or channels. "
+        "It should acknowledge the search was performed. "
+        "It should not be an error message or unrelated topic.",
     )
     assert passed, f"LLM judge failed. Response: {result.raw_message}"

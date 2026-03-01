@@ -251,7 +251,7 @@ async def connect_slack(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["slack", "messaging"])
+@valet(domain="communication")
 class SlackComposioAgent(StandardAgent):
     """Send messages, fetch conversations, list channels, find users, and create
     reminders in Slack. Use when the user mentions Slack, channels, or wants to

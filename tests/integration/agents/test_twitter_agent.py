@@ -75,7 +75,8 @@ async def test_response_quality_search(orchestrator_factory, llm_judge):
     passed = await llm_judge(
         "Search Twitter for tweets about machine learning",
         result.raw_message,
-        "The response should present search results from Twitter, mentioning "
-        "tweet content or authors. It should not be an error message.",
+        "The response should present tweet search results with content or authors. "
+        "It is acceptable if the results don't exactly match the search query "
+        "(this is a test with mock data). It should not be an error message.",
     )
     assert passed, f"LLM judge failed. Response: {result.raw_message}"

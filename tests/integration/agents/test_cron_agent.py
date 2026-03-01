@@ -16,11 +16,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.productivity]
 TOOL_SELECTION_CASES = [
     ("Show me the cron status", ["cron_status"]),
     ("List all my scheduled jobs", ["cron_list"]),
-    ("Schedule a daily briefing every morning at 8am", ["cron_add"]),
-    ("Update the Daily Briefing job to run at 9am instead", ["cron_update"]),
+    ("Schedule a cron job for daily briefing every morning at 8am", ["cron_add"]),
+    ("Update the cron job Daily Briefing to run at 9am instead", ["cron_update"]),
     ("Delete the Weekly Report cron job", ["cron_remove"]),
-    ("Run the Daily Briefing job right now", ["cron_run"]),
-    ("Show me the run history for the Daily Briefing job", ["cron_runs"]),
+    ("Trigger the Daily Briefing cron job right now", ["cron_run"]),
+    ("Show me the run history for the Daily Briefing cron job", ["cron_runs"]),
     ("Alert me if Bitcoin drops below $50k, check every 5 minutes", ["cron_add"]),
 ]
 

@@ -170,7 +170,7 @@ async def connect_youtube(
 # Agent
 # =============================================================================
 
-@valet(capabilities=["youtube", "video", "watch"])
+@valet(domain="lifestyle")
 class YouTubeComposioAgent(StandardAgent):
     """Search YouTube videos, get video details, and list playlists.
     Use when the user mentions YouTube, videos, or wants to search/watch
