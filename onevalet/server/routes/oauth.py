@@ -504,6 +504,82 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
         return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
 
 
+# --- Notion OAuth ---
+
+
+@router.get("/api/oauth/notion/authorize")
+async def notion_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
+    """Initiate Notion OAuth flow. Returns authorization URL."""
+    from ...oauth.notion_oauth import NotionOAuth
+
+    app = require_app()
+
+    state = await app.save_oauth_state(
+        tenant_id=tenant_id, service="notion",
+        redirect_after=redirect_after, account_name=account_name,
+    )
+    base_url = get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/notion/callback"
+
+    try:
+        url = NotionOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/api/oauth/notion/callback")
+async def notion_oauth_callback(request: Request, code: str, state: str):
+    """Notion OAuth callback -- exchange code for token and store credentials."""
+    from ...oauth.notion_oauth import NotionOAuth
+
+    app = require_app()
+
+    state_data = await app.consume_oauth_state(state)
+    if not state_data:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
+
+    base_url = get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/notion/callback"
+
+    try:
+        tokens = await NotionOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+
+        workspace = tokens.get("workspace_name", "")
+
+        credentials = {
+            "provider": "notion",
+            "access_token": tokens["access_token"],
+            "workspace_name": workspace,
+            "workspace_id": tokens.get("workspace_id", ""),
+            "bot_id": tokens.get("bot_id", ""),
+        }
+
+        await app.save_credential_raw(
+            tenant_id=tenant_id, service="notion",
+            credentials=credentials, account_name=account_name,
+        )
+
+        if redirect_after:
+            return oauth_success_redirect(redirect_after, "notion", workspace)
+        return oauth_success_html("notion", workspace, "Notion")
+    except Exception as e:
+        logger.error(f"Notion OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+
+
 # --- Composio OAuth (generic for all Composio-powered apps) ---
 
 

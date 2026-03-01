@@ -21,6 +21,29 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Credential helper
+# =============================================================================
+
+async def _get_notion_token(context: AgentToolContext) -> Optional[str]:
+    """Retrieve Notion API token for the current tenant.
+
+    Checks the per-tenant credential store first (OAuth-connected workspace),
+    then falls back to the global NOTION_API_KEY environment variable.
+    """
+    if context.credentials and context.tenant_id:
+        try:
+            cred = await context.credentials.get(context.tenant_id, "notion", "primary")
+            if cred:
+                token = cred.get("credentials", cred).get("access_token", "")
+                if token:
+                    return token
+        except Exception as e:
+            logger.debug(f"Could not fetch per-tenant Notion credential: {e}")
+
+    return os.getenv("NOTION_API_KEY") or None
+
+
+# =============================================================================
 # Helper functions (reused from tools/notion.py)
 # =============================================================================
 
@@ -135,11 +158,12 @@ async def notion_search(
 ) -> str:
     """Search Notion workspace for pages and databases by keyword. Use short keywords (1-2 words)."""
 
-    if not os.getenv("NOTION_API_KEY"):
-        return "Error: Notion API key not configured. Please add it in Settings."
+    token = await _get_notion_token(context)
+    if not token:
+        return "Error: Notion not connected. Please connect your Notion workspace in Settings."
 
     try:
-        client = NotionClient()
+        client = NotionClient(token=token)
         data = await client.search(query=query, filter_type=filter_type, page_size=page_size)
         results = data.get("results", [])
 
@@ -174,11 +198,13 @@ async def notion_read_page(
     """Read the full content of a Notion page by its ID. Use notion_search first to find the page ID."""
     if not page_id:
         return "Error: page_id is required."
-    if not os.getenv("NOTION_API_KEY"):
-        return "Error: Notion API key not configured. Please add it in Settings."
+
+    token = await _get_notion_token(context)
+    if not token:
+        return "Error: Notion not connected. Please connect your Notion workspace in Settings."
 
     try:
-        client = NotionClient()
+        client = NotionClient(token=token)
         page = await client.get_page(page_id)
         title = _get_page_title(page)
         blocks = await client.get_page_content(page_id)
@@ -206,11 +232,13 @@ async def notion_query_database(
 
     if not database_id:
         return "Error: database_id is required."
-    if not os.getenv("NOTION_API_KEY"):
-        return "Error: Notion API key not configured. Please add it in Settings."
+
+    token = await _get_notion_token(context)
+    if not token:
+        return "Error: Notion not connected. Please connect your Notion workspace in Settings."
 
     try:
-        client = NotionClient()
+        client = NotionClient(token=token)
         data = await client.query_database(
             database_id=database_id, filter=filter_obj, sorts=sorts, page_size=page_size,
         )
@@ -265,11 +293,13 @@ async def notion_create_page(
     """Create a new Notion page with title and content."""
     if not title:
         return "Error: title is required."
-    if not os.getenv("NOTION_API_KEY"):
-        return "Error: Notion API key not configured. Please add it in Settings."
+
+    token = await _get_notion_token(context)
+    if not token:
+        return "Error: Notion not connected. Please connect your Notion workspace in Settings."
 
     try:
-        client = NotionClient()
+        client = NotionClient(token=token)
         parent_id = None
 
         # Resolve parent page if specified
@@ -310,11 +340,13 @@ async def notion_update_page(
         return "Error: page_title is required."
     if not content:
         return "Error: content is required."
-    if not os.getenv("NOTION_API_KEY"):
-        return "Error: Notion API key not configured. Please add it in Settings."
+
+    token = await _get_notion_token(context)
+    if not token:
+        return "Error: Notion not connected. Please connect your Notion workspace in Settings."
 
     try:
-        client = NotionClient()
+        client = NotionClient(token=token)
         data = await client.search(query=page_title, filter_type="page", page_size=3)
         results = data.get("results", [])
         if not results:
@@ -335,7 +367,7 @@ async def notion_update_page(
 # Agent
 # =============================================================================
 
-@valet(domain="productivity")
+@valet(domain="productivity", requires_service=["notion"])
 class NotionAgent(StandardAgent):
     """Search, read, create, and update Notion pages and databases. Use when the user mentions Notion, their notes, wiki, or knowledge base in Notion."""
 
