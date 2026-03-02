@@ -75,10 +75,11 @@ credentials:
   # composio:
   #   api_key: ${COMPOSIO_API_KEY}
 
-  # -- Notion ---------------------------------------------------------------
-  # Create an internal integration at https://www.notion.so/my-integrations
+  # -- Notion (OAuth — users connect their own workspace) -------------------
+  # Create an OAuth integration at https://www.notion.so/my-integrations
   # notion:
-  #   api_key: ${NOTION_API_KEY}
+  #   client_id: ${NOTION_CLIENT_ID}
+  #   client_secret: ${NOTION_CLIENT_SECRET}
 
   # -- Google API (Maps, Places, Directions, Web Search) --------------------
   # Create a key at https://console.cloud.google.com/apis/credentials

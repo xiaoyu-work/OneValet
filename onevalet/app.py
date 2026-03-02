@@ -350,7 +350,7 @@ class OneValet:
             "client_secret": "MICROSOFT_CLIENT_SECRET",
             "tenant_id": "MICROSOFT_TENANT_ID",
         },
-        "notion": {"api_key": "NOTION_API_KEY"},
+        "notion": {"client_id": "NOTION_CLIENT_ID", "client_secret": "NOTION_CLIENT_SECRET"},
         "composio": {"api_key": "COMPOSIO_API_KEY"},
     }
 
