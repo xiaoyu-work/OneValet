@@ -2723,12 +2723,19 @@ class Orchestrator:
             messages.append({"role": "assistant", "content": result.raw_message})
 
         if messages:
-            # Long-term knowledge extraction (async)
-            await self.momex.add(
-                tenant_id=tenant_id,
-                messages=messages,
-                infer=True,
-            )
+            # Long-term knowledge extraction — fire-and-forget so the
+            # response is not blocked by embedding / LLM extraction.
+            async def _bg_momex_add():
+                try:
+                    await self.momex.add(
+                        tenant_id=tenant_id,
+                        messages=messages,
+                        infer=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Background momex.add failed: {e}")
+
+            asyncio.create_task(_bg_momex_add())
 
         # Guardrails output check
         if self.guardrails_checker and result.raw_message:
