@@ -63,48 +63,24 @@ embedding:
 #   notify_url: http://localhost:8001/webhook/onevalet/callback
 
 # ---------------------------------------------------------------------------
-# Credentials — static API keys for built-in agents
+# Credentials — flat key-value pairs loaded into environment variables.
 #
+# Keys are environment variable names. Values support ${VAR} syntax.
 # All fields are optional. Only configure the services you need.
-# Environment variables (${VAR}) are supported for all values.
+# Adding a new credential requires only a new line here — no code changes.
 # ---------------------------------------------------------------------------
-credentials:
-
-  # -- Composio (Slack, GitHub, and 1000+ third-party app integrations) -----
-  # Get your API key at https://app.composio.dev/settings
-  # composio:
-  #   api_key: ${COMPOSIO_API_KEY}
-
-  # -- Notion (OAuth — users connect their own workspace) -------------------
-  # Create an OAuth integration at https://www.notion.so/my-integrations
-  # notion:
-  #   client_id: ${NOTION_CLIENT_ID}
-  #   client_secret: ${NOTION_CLIENT_SECRET}
-
-  # -- Google API (Maps, Places, Directions, Web Search) --------------------
-  # Create a key at https://console.cloud.google.com/apis/credentials
-  # google_api:
-  #   api_key: ${GOOGLE_API_KEY}
-  #   search_engine_id: ${GOOGLE_SEARCH_ENGINE_ID}  # for web search only
-
-  # -- Travel ---------------------------------------------------------------
-  # Amadeus: https://developers.amadeus.com
-  # Weather: https://www.weatherapi.com
-  # amadeus:
-  #   api_key: ${AMADEUS_API_KEY}
-  #   api_secret: ${AMADEUS_API_SECRET}
-  # weather_api:
-  #   api_key: ${WEATHER_API_KEY}
-
-  # -- OAuth Apps (required for Google & Microsoft sign-in) -----------------
-  # These are YOUR app credentials, not end-user tokens.
-  # Google: https://console.cloud.google.com/apis/credentials
-  # Microsoft: https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps
-  #
-  # google_oauth_app:
-  #   client_id: ${GOOGLE_CLIENT_ID}
-  #   client_secret: ${GOOGLE_CLIENT_SECRET}
-  # microsoft_oauth_app:
-  #   client_id: ${MICROSOFT_CLIENT_ID}
-  #   client_secret: ${MICROSOFT_CLIENT_SECRET}
-  #   tenant_id: common
+# credentials:
+#   COMPOSIO_API_KEY: ${COMPOSIO_API_KEY}
+#   NOTION_CLIENT_ID: ${NOTION_CLIENT_ID}
+#   NOTION_CLIENT_SECRET: ${NOTION_CLIENT_SECRET}
+#   GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY}
+#   GOOGLE_SEARCH_API_KEY: ${GOOGLE_SEARCH_API_KEY}
+#   GOOGLE_SEARCH_ENGINE_ID: ${GOOGLE_SEARCH_ENGINE_ID}
+#   AMADEUS_API_KEY: ${AMADEUS_API_KEY}
+#   AMADEUS_API_SECRET: ${AMADEUS_API_SECRET}
+#   WEATHER_API_KEY: ${WEATHER_API_KEY}
+#   GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+#   GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+#   MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID}
+#   MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET}
+#   MICROSOFT_TENANT_ID: ${MICROSOFT_TENANT_ID}

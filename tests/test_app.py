@@ -4,7 +4,7 @@ import os
 import pytest
 import tempfile
 
-from onevalet.app import _load_config
+from onevalet.app import OneValet, _load_config
 
 
 # =========================================================================
@@ -65,117 +65,58 @@ class TestLoadConfig:
 
 
 # =========================================================================
-# _API_KEY_ENV_MAP — env var loading logic
+# _load_credentials_to_env — flat credential loading
 # =========================================================================
 
 
-class TestApiKeyEnvMap:
-    """Test the mapping structure used by _load_api_keys_to_env."""
+class TestCredentialsLoading:
+    """Test the flat credentials → env var loading."""
 
-    def test_map_structure(self):
-        from onevalet.app import OneValet
-        mapping = OneValet._API_KEY_ENV_MAP
-
-        assert "composio" in mapping
-        assert mapping["composio"] == {"api_key": "COMPOSIO_API_KEY"}
-
-        assert "google_api" in mapping
-        # google_api.api_key maps to a list of env vars
-        assert isinstance(mapping["google_api"]["api_key"], list)
-        assert "GOOGLE_MAPS_API_KEY" in mapping["google_api"]["api_key"]
-        assert "GOOGLE_SEARCH_API_KEY" in mapping["google_api"]["api_key"]
-
-    def test_all_services_have_at_least_one_mapping(self):
-        from onevalet.app import OneValet
-        for service, mapping in OneValet._API_KEY_ENV_MAP.items():
-            assert len(mapping) > 0, f"Service {service} has empty mapping"
-
-    def test_load_api_keys_single_value(self, monkeypatch):
-        """Test _load_api_keys_to_env with a single-value mapping."""
-        from onevalet.app import OneValet
-
-        # Clean env
+    @pytest.mark.asyncio
+    async def test_load_credentials(self, monkeypatch):
         monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+        monkeypatch.delenv("WEATHER_API_KEY", raising=False)
 
-        # Simulate config credentials
-        config = {"credentials": {"composio": {"api_key": "test-composio-key"}}}
-
-        # Manually run the mapping logic
-        file_creds = config.get("credentials", {})
-        for service, mapping in OneValet._API_KEY_ENV_MAP.items():
-            svc_creds = file_creds.get(service, {})
-            if not svc_creds:
-                continue
-            for json_key, env_vars in mapping.items():
-                val = svc_creds.get(json_key, "")
-                if val:
-                    if isinstance(env_vars, list):
-                        for env_var in env_vars:
-                            os.environ[env_var] = val
-                    else:
-                        os.environ[env_vars] = val
+        app = OneValet.__new__(OneValet)
+        app._config = {"credentials": {
+            "COMPOSIO_API_KEY": "test-composio-key",
+            "WEATHER_API_KEY": "test-weather-key",
+        }}
+        await app._load_credentials_to_env()
 
         assert os.environ.get("COMPOSIO_API_KEY") == "test-composio-key"
-        # Cleanup
+        assert os.environ.get("WEATHER_API_KEY") == "test-weather-key"
+        monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
+        monkeypatch.delenv("WEATHER_API_KEY", raising=False)
+
+    @pytest.mark.asyncio
+    async def test_empty_credentials_no_side_effects(self, monkeypatch):
         monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
 
-    def test_load_api_keys_list_mapping(self, monkeypatch):
-        """Test _load_api_keys_to_env with list-type env var mapping (google_api)."""
-        monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
-        monkeypatch.delenv("GOOGLE_SEARCH_API_KEY", raising=False)
-
-        from onevalet.app import OneValet
-        config = {"credentials": {"google_api": {"api_key": "google-key-123"}}}
-
-        file_creds = config.get("credentials", {})
-        for service, mapping in OneValet._API_KEY_ENV_MAP.items():
-            svc_creds = file_creds.get(service, {})
-            if not svc_creds:
-                continue
-            for json_key, env_vars in mapping.items():
-                val = svc_creds.get(json_key, "")
-                if val:
-                    if isinstance(env_vars, list):
-                        for env_var in env_vars:
-                            os.environ[env_var] = val
-                    else:
-                        os.environ[env_vars] = val
-
-        assert os.environ.get("GOOGLE_MAPS_API_KEY") == "google-key-123"
-        assert os.environ.get("GOOGLE_SEARCH_API_KEY") == "google-key-123"
-        monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
-        monkeypatch.delenv("GOOGLE_SEARCH_API_KEY", raising=False)
-
-    def test_empty_credentials_no_side_effects(self, monkeypatch):
-        monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
-        config = {"credentials": {}}
-
-        from onevalet.app import OneValet
-        file_creds = config.get("credentials", {})
-        for service, mapping in OneValet._API_KEY_ENV_MAP.items():
-            svc_creds = file_creds.get(service, {})
-            if not svc_creds:
-                continue
+        app = OneValet.__new__(OneValet)
+        app._config = {"credentials": {}}
+        await app._load_credentials_to_env()
 
         assert os.environ.get("COMPOSIO_API_KEY") is None
 
-    def test_empty_value_skipped(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_empty_value_skipped(self, monkeypatch):
         monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)
-        config = {"credentials": {"composio": {"api_key": ""}}}
 
-        from onevalet.app import OneValet
-        file_creds = config.get("credentials", {})
-        for service, mapping in OneValet._API_KEY_ENV_MAP.items():
-            svc_creds = file_creds.get(service, {})
-            if not svc_creds:
-                continue
-            for json_key, env_vars in mapping.items():
-                val = svc_creds.get(json_key, "")
-                if val:
-                    if isinstance(env_vars, list):
-                        for env_var in env_vars:
-                            os.environ[env_var] = val
-                    else:
-                        os.environ[env_vars] = val
+        app = OneValet.__new__(OneValet)
+        app._config = {"credentials": {"COMPOSIO_API_KEY": ""}}
+        await app._load_credentials_to_env()
 
         assert os.environ.get("COMPOSIO_API_KEY") is None
+
+    @pytest.mark.asyncio
+    async def test_setdefault_does_not_overwrite(self, monkeypatch):
+        """Env vars already set take precedence over config values."""
+        monkeypatch.setenv("COMPOSIO_API_KEY", "from-env")
+
+        app = OneValet.__new__(OneValet)
+        app._config = {"credentials": {"COMPOSIO_API_KEY": "from-config"}}
+        await app._load_credentials_to_env()
+
+        assert os.environ.get("COMPOSIO_API_KEY") == "from-env"
+        monkeypatch.delenv("COMPOSIO_API_KEY", raising=False)

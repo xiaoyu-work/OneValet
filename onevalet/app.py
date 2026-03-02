@@ -324,7 +324,7 @@ class OneValet:
             logger.info("EmailEventHandler started")
 
         # 9. Load API key credentials into env vars for agent access
-        await self._load_api_keys_to_env()
+        await self._load_credentials_to_env()
 
         # 10. Supabase Storage (optional — if supabase config is present)
         supabase_cfg = cfg.get("supabase")
@@ -342,44 +342,20 @@ class OneValet:
         self._initialized = True
         logger.info("OneValet initialized")
 
-    _API_KEY_ENV_MAP = {
-        "amadeus": {"api_key": "AMADEUS_API_KEY", "api_secret": "AMADEUS_API_SECRET"},
-        "weather_api": {"api_key": "WEATHER_API_KEY"},
-        "google_api": {
-            "api_key": ["GOOGLE_MAPS_API_KEY", "GOOGLE_SEARCH_API_KEY"],
-            "search_engine_id": "GOOGLE_SEARCH_ENGINE_ID",
-        },
-        "google_oauth_app": {"client_id": "GOOGLE_CLIENT_ID", "client_secret": "GOOGLE_CLIENT_SECRET"},
-        "microsoft_oauth_app": {
-            "client_id": "MICROSOFT_CLIENT_ID",
-            "client_secret": "MICROSOFT_CLIENT_SECRET",
-            "tenant_id": "MICROSOFT_TENANT_ID",
-        },
-        "notion": {"client_id": "NOTION_CLIENT_ID", "client_secret": "NOTION_CLIENT_SECRET"},
-        "composio": {"api_key": "COMPOSIO_API_KEY"},
-    }
+    async def _load_credentials_to_env(self) -> None:
+        """Load credentials from config.yaml into environment variables.
 
-    async def _load_api_keys_to_env(self) -> None:
-        """Load static API key credentials from config file into env vars.
-
-        Reads the ``credentials`` section of config.yaml. These are static
-        secrets (API keys, client IDs) that don't change at runtime.
-        Dynamic OAuth tokens are managed separately by the OAuth handlers.
+        The ``credentials`` section is a flat dict of env-var-name → value.
+        No hardcoded mapping — adding a new credential only requires a new
+        line in config.yaml.
         """
-        file_creds = self._config.get("credentials", {})
-        for service, mapping in self._API_KEY_ENV_MAP.items():
-            svc_creds = file_creds.get(service, {})
-            if not svc_creds:
-                continue
-            for json_key, env_vars in mapping.items():
-                val = svc_creds.get(json_key, "")
-                if val:
-                    if isinstance(env_vars, list):
-                        for env_var in env_vars:
-                            os.environ[env_var] = val
-                    else:
-                        os.environ[env_vars] = val
-            logger.debug(f"Loaded {service} credentials from config")
+        creds = self._config.get("credentials", {})
+        if not isinstance(creds, dict):
+            return
+        for env_var, val in creds.items():
+            if val and isinstance(val, str):
+                os.environ.setdefault(env_var, val)
+                logger.debug(f"Loaded credential {env_var} from config")
 
     @property
     def config(self) -> dict:
@@ -427,7 +403,7 @@ class OneValet:
         """Save a credential entry and reload API keys into env."""
         await self._ensure_initialized()
         await self._credential_store.save(tenant_id=tenant_id, service=service, credentials=credentials, account_name=account_name)
-        await self._load_api_keys_to_env()
+        await self._load_credentials_to_env()
 
     async def delete_credential(self, tenant_id: str, service: str, account_name: str) -> bool:
         """Delete a credential entry. Returns True if deleted."""
