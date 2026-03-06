@@ -496,6 +496,38 @@ Extract into this structure:
 Return ONLY valid JSON."""
 
 
+LLM_MERGE_PROMPT = """You are merging user profile data. The user has connected multiple email accounts.
+
+EXISTING PROFILE (previously extracted and merged):
+```json
+{existing}
+```
+
+NEW EXTRACTION (from email account: {email_account}):
+```json
+{new}
+```
+
+Merge these into a single unified profile. Rules:
+- If the new data contradicts existing data, prefer the new data (it is more recent).
+- For jobs: if new data shows a different current employer, set old employer's is_current to false.
+- Keep all unique addresses, loyalty programs, pets, vehicles, family members.
+- Deduplicate by key identifiers: zip for addresses, program name for loyalty, name for people.
+- For loyalty programs: keep the higher status tier.
+- Omit empty/null fields entirely.
+
+Return ONLY valid JSON matching this structure (no explanation):
+{{
+  "identity": {{"full_name": "", "first_name": "", "last_name": "", "birthday": "", "email": "", "phone": ""}},
+  "addresses": [{{"label": "", "street": "", "city": "", "state": "", "zip": ""}}],
+  "work": {{"jobs": [{{"employer": "", "title": "", "is_current": false}}]}},
+  "education": {{"schools": [{{"name": "", "degree": "", "major": ""}}]}},
+  "travel": {{"loyalty_programs": [{{"program": "", "type": "", "number": "", "status": ""}}]}},
+  "lifestyle": {{"pets": [{{"name": "", "type": ""}}], "vehicles": [{{"make": "", "model": "", "year": 0, "is_current": false}}]}},
+  "relationships": {{"family": [{{"name": "", "relationship": "", "birthday": ""}}], "significant_other": null, "anniversary": ""}}
+}}"""
+
+
 # =============================================================================
 # Profile Extraction Service
 # =============================================================================
@@ -535,6 +567,26 @@ class ProfileExtractionService:
             config={"temperature": 0.1, "max_tokens": max_tokens},
         )
         return response.content or ""
+
+    async def _llm_merge(
+        self, llm_client, existing_profile: Dict, new_profile: Dict, email_account: str,
+    ) -> Dict:
+        """Use LLM to intelligently merge existing profile with new extraction."""
+        prompt = LLM_MERGE_PROMPT.format(
+            existing=json.dumps(existing_profile, indent=2, ensure_ascii=False),
+            new=json.dumps(new_profile, indent=2, ensure_ascii=False),
+            email_account=email_account,
+        )
+        try:
+            text = await self._call_llm(llm_client, prompt, max_tokens=4096)
+            merged = self._parse_llm_json(text)
+            if isinstance(merged, dict):
+                return self._validate_and_clean(merged)
+            logger.warning("LLM merge returned non-dict, falling back to new profile")
+            return new_profile
+        except Exception as e:
+            logger.error(f"LLM merge failed: {e}", exc_info=True)
+            return new_profile
 
     # -----------------------------------------------------------------
     # LLM Title Filtering
@@ -991,17 +1043,41 @@ class ProfileExtractionService:
             extract_time = (datetime.now(timezone.utc) - extract_start).total_seconds()
             logger.info(f"Extracted {len(profiles)} profiles in {extract_time:.1f}s")
 
-            # Phase 7: Merge
-            logger.info("Phase 7: Merging...")
-            final_profile = self._merge_all(profiles)
+            # Phase 7: Merge batches from this extraction
+            logger.info("Phase 7: Merging batches...")
+            new_profile = self._merge_all(profiles)
 
-            # Persist to DB
-            if profile_repo and final_profile:
+            # Phase 8: Save raw extraction & LLM merge with existing profile
+            if profile_repo and new_profile:
                 try:
+                    # Save raw extraction
+                    await profile_repo.save_extraction(tenant_id, user_email, new_profile)
+                    logger.info(f"Raw extraction saved for {user_email}")
+
+                    # Load existing profile
+                    existing_profile = await profile_repo.get_profile(tenant_id)
+
+                    if existing_profile:
+                        # LLM merge existing + new
+                        logger.info("Phase 8: LLM merging with existing profile...")
+                        self._update_job(job_id, {
+                            "status": "merging",
+                            "progress": {"phase": "merging"},
+                        })
+                        final_profile = await self._llm_merge(
+                            llm_client, existing_profile, new_profile, user_email,
+                        )
+                    else:
+                        # First extraction — use directly
+                        final_profile = new_profile
+
                     await profile_repo.upsert_profile(tenant_id, final_profile)
                     logger.info(f"Profile saved to DB for tenant {tenant_id}")
                 except Exception as e:
                     logger.error(f"Failed to save profile to DB: {e}", exc_info=True)
+                    final_profile = new_profile
+            else:
+                final_profile = new_profile
 
             total_time = (datetime.now(timezone.utc) - start_time).total_seconds()
             self._update_job(job_id, {

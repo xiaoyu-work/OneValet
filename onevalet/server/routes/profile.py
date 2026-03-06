@@ -1,6 +1,7 @@
 """Profile extraction routes (internal, service-to-service)."""
 
 import logging
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -18,22 +19,30 @@ _service = ProfileExtractionService()
 
 
 @router.post("/api/internal/profile/extract")
-async def start_profile_extraction(request: Request, tenant_id: str):
+async def start_profile_extraction(
+    request: Request,
+    tenant_id: str,
+    email_account: Optional[str] = None,
+):
     """
-    Start profile extraction for a tenant by scanning all linked email accounts.
+    Start profile extraction for a tenant.
+
+    If email_account is provided, only scan that account and LLM-merge
+    with the existing profile. Otherwise scan all linked email accounts.
 
     Requires X-Service-Key header.
     Returns a job_id for polling status.
     """
     verify_service_key(request)
     app = require_app()
-
-    # Ensure app is fully initialized (sets up credential store + LLM client)
     await app._ensure_initialized()
 
-    # Resolve all email accounts for this tenant
+    # Resolve email accounts
     try:
-        accounts = await AccountResolver.resolve_accounts(tenant_id, ["all"])
+        if email_account:
+            accounts = await AccountResolver.resolve_accounts(tenant_id, [email_account])
+        else:
+            accounts = await AccountResolver.resolve_accounts(tenant_id, ["all"])
     except Exception as e:
         logger.error(f"Failed to resolve email accounts for {tenant_id}: {e}")
         raise HTTPException(500, f"Failed to resolve email accounts: {e}")
@@ -60,7 +69,8 @@ async def start_profile_extraction(request: Request, tenant_id: str):
         profile_repo=profile_repo,
     )
 
-    logger.info(f"Profile extraction started: job={job_id}, tenant={tenant_id}, providers={len(providers)}")
+    logger.info(f"Profile extraction started: job={job_id}, tenant={tenant_id}, "
+                f"email_account={email_account}, providers={len(providers)}")
     return {"job_id": job_id, "status": "started"}
 
 
