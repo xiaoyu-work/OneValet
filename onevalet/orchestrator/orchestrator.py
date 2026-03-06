@@ -2522,6 +2522,9 @@ class Orchestrator:
             get_user_location_executor, GET_USER_LOCATION_SCHEMA,
             set_location_reminder_executor, SET_LOCATION_REMINDER_SCHEMA,
         )
+        from ..builtin_agents.trip_planner.travel_tools import (
+            check_weather,
+        )
 
         tools: List[AgentTool] = []
 
@@ -2584,6 +2587,9 @@ class Orchestrator:
             executor=set_location_reminder_executor,
             category="location",
         ))
+
+        # Weather (reuses the @tool-decorated AgentTool from trip_planner)
+        tools.append(check_weather)
 
         return tools
 
