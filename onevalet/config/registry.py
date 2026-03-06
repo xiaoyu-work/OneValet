@@ -195,22 +195,12 @@ class AgentRegistry:
         tenant_id: Optional[str] = None,
         credential_store: Optional[Any] = None,
     ) -> List[Dict[str, Any]]:
-        """Return enhanced tool schemas for all agents with expose_as_tool=True.
-
-        When *tenant_id* and *credential_store* are provided, agents whose
-        ``requires_service`` has no overlap with the tenant's configured
-        services are excluded automatically.
-        """
+        """Return enhanced tool schemas for all agents with expose_as_tool=True."""
         from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
-
-        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         schemas = []
         for name, metadata in self._get_agent_registry().items():
             if not getattr(metadata, 'expose_as_tool', True):
-                continue
-            if not self._agent_available_for_tenant(metadata, tenant_services):
-                logger.debug(f"Skipping agent {name}: tenant {tenant_id} missing required service")
                 continue
             schema = generate_tool_schema(metadata.agent_class)
             schema = enhance_agent_tool_schema(metadata.agent_class, schema)
@@ -235,7 +225,6 @@ class AgentRegistry:
         from ..agents.decorator import generate_tool_schema, enhance_agent_tool_schema
 
         domain_set = set(domains)
-        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         schemas = []
         for name, metadata in self._get_agent_registry().items():
@@ -244,9 +233,6 @@ class AgentRegistry:
             # Filter by domain declared on the agent
             agent_domain = getattr(metadata, "domain", None)
             if agent_domain not in domain_set:
-                continue
-            if not self._agent_available_for_tenant(metadata, tenant_services):
-                logger.debug(f"Skipping agent {name}: tenant {tenant_id} missing required service")
                 continue
             schema = generate_tool_schema(metadata.agent_class)
             schema = enhance_agent_tool_schema(metadata.agent_class, schema)
@@ -271,16 +257,10 @@ class AgentRegistry:
         Get formatted agent descriptions for LLM routing prompt.
 
         Includes descriptions, capabilities, available tools, and inputs/outputs.
-        Applies the same tenant-aware filtering as get_all_agent_tool_schemas.
         """
-        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
-
         lines = []
 
         for name, metadata in self._get_agent_registry().items():
-            if not self._agent_available_for_tenant(metadata, tenant_services):
-                continue
-
             description = metadata.description or metadata.agent_class.__doc__ or ""
             lines.append(f"- **{name}**: {description}")
 

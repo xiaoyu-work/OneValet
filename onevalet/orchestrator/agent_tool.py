@@ -116,15 +116,51 @@ async def execute_agent_tool(
         "constraints": handoff.constraints,
     }
 
+    # Check if agent requires a service the tenant hasn't connected
+    registry = getattr(orchestrator, "_agent_registry", None)
+    if registry:
+        metadata = registry.get_agent_metadata(agent_type)
+        if metadata:
+            required_services = metadata.extra.get("requires_service", [])
+            if required_services:
+                credential_store = getattr(orchestrator, "credential_store", None)
+                if credential_store:
+                    try:
+                        accounts = await credential_store.list(tenant_id)
+                        tenant_services = {a["service"] for a in accounts}
+                        if not (set(required_services) & tenant_services):
+                            from ..errors import OneValetError, E
+                            err = OneValetError(
+                                E.SERVICE_NOT_CONNECTED,
+                                f"{agent_type} requires a connected service",
+                                details={
+                                    "agent_type": agent_type,
+                                    "required_services": required_services,
+                                },
+                            )
+                            return AgentToolResult(
+                                completed=True,
+                                result_text=f"[{err.code}] {err.message}",
+                                metadata={"error": err.to_dict()},
+                            )
+                    except Exception as e:
+                        logger.debug(f"Could not check tenant services: {e}")
+
     agent = await orchestrator.create_agent(
         tenant_id=tenant_id,
         agent_type=agent_type,
         context_hints=enriched_hints,
     )
     if agent is None:
+        logger.error(
+            f"[AgentTool] create_agent returned None for {agent_type}, tenant={tenant_id}"
+        )
+        from ..errors import E
         return AgentToolResult(
             completed=True,
-            result_text=f"Error: Agent type '{agent_type}' not found.",
+            result_text=f"[{E.AGENT_FAILED}] Failed to create agent {agent_type}",
+            metadata={"error": {"code": E.AGENT_FAILED, "message": f"Failed to create agent {agent_type}",
+                                "details": {"agent_type": agent_type}}},
         )
 
     # Build message for the agent — only pass the task instruction.

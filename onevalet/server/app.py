@@ -214,6 +214,9 @@ def _create_api() -> FastAPI:
             "Set ONEVALET_API_KEY environment variable to enable authentication."
         )
 
+    from ..errors import install_error_handler
+    install_error_handler(_api)
+
     from .routes import register_routes
     register_routes(_api)
     return _api

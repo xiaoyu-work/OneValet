@@ -3,9 +3,10 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from ...errors import OneValetError, E
 from ..app import require_app, verify_service_key
 from onevalet.builtin_agents.shipment.shipment_repo import ShipmentRepository
 
@@ -77,7 +78,8 @@ async def internal_get_shipment(
         *([carrier] if carrier else []),
     )
     if not rows:
-        raise HTTPException(404, "Shipment not found")
+        raise OneValetError(E.NOT_FOUND, "Shipment not found",
+                            details={"resource": "shipment"})
     return dict(rows[0])
 
 
@@ -94,7 +96,8 @@ async def internal_get_shipment_by_tracking(
         tracking_number.upper(),
     )
     if not rows:
-        raise HTTPException(404, "Shipment not found")
+        raise OneValetError(E.NOT_FOUND, "Shipment not found",
+                            details={"resource": "shipment"})
     return dict(rows[0])
 
 
@@ -122,7 +125,7 @@ async def internal_upsert_shipment(
         **kwargs,
     )
     if not result:
-        raise HTTPException(500, "Failed to upsert shipment")
+        raise OneValetError(E.INTERNAL_ERROR, "Failed to upsert shipment")
     return result
 
 
@@ -136,7 +139,8 @@ async def internal_archive_shipment(
     repo = _get_repo()
     result = await repo.archive_shipment(shipment_id)
     if not result:
-        raise HTTPException(404, "Shipment not found")
+        raise OneValetError(E.NOT_FOUND, "Shipment not found",
+                            details={"resource": "shipment"})
     return result
 
 
@@ -150,5 +154,6 @@ async def internal_archive_by_tracking(
     repo = _get_repo()
     result = await repo.archive_shipment_by_tracking(body.tenant_id, body.tracking_number)
     if not result:
-        raise HTTPException(404, "Shipment not found")
+        raise OneValetError(E.NOT_FOUND, "Shipment not found",
+                            details={"resource": "shipment"})
     return result

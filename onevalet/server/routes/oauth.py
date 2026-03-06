@@ -6,8 +6,10 @@ from typing import Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
+
+from ...errors import OneValetError, E
 
 from ..app import (
     get_base_url,
@@ -59,7 +61,7 @@ async def google_oauth_authorize(
         url = GoogleOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "google"})
 
 
 @router.get("/api/oauth/google/callback")
@@ -107,7 +109,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("google", email, "Gmail, Google Calendar, Tasks, Drive")
     except Exception as e:
         logger.error(f"Google OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Microsoft OAuth ---
@@ -136,7 +138,7 @@ async def microsoft_oauth_authorize(
         url = MicrosoftOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "microsoft"})
 
 
 @router.get("/api/oauth/microsoft/callback")
@@ -184,7 +186,7 @@ async def microsoft_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("microsoft", email, "Outlook, Calendar, To Do &amp; OneDrive")
     except Exception as e:
         logger.error(f"Microsoft OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Todoist OAuth ---
@@ -202,7 +204,8 @@ async def todoist_oauth_authorize(
 
     client_id = os.getenv("TODOIST_CLIENT_ID")
     if not client_id:
-        raise HTTPException(400, "Todoist OAuth not configured. Set TODOIST_CLIENT_ID in Settings > OAuth Apps.")
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, "Todoist OAuth client_id not configured",
+                            details={"provider": "todoist"})
 
     state = await app.save_oauth_state(
         tenant_id=tenant_id, service="todoist",
@@ -280,7 +283,7 @@ async def todoist_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("todoist", email, "Todoist")
     except Exception as e:
         logger.error(f"Todoist OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Hue OAuth ---
@@ -309,7 +312,7 @@ async def hue_oauth_authorize(
         url = HueOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "hue"})
 
 
 @router.get("/api/oauth/hue/callback")
@@ -353,7 +356,7 @@ async def hue_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("hue", "", "Philips Hue")
     except Exception as e:
         logger.error(f"Hue OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Sonos OAuth ---
@@ -382,7 +385,7 @@ async def sonos_oauth_authorize(
         url = SonosOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "sonos"})
 
 
 @router.get("/api/oauth/sonos/callback")
@@ -426,7 +429,7 @@ async def sonos_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("sonos", "", "Sonos")
     except Exception as e:
         logger.error(f"Sonos OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Dropbox OAuth ---
@@ -455,7 +458,7 @@ async def dropbox_oauth_authorize(
         url = DropboxOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "dropbox"})
 
 
 @router.get("/api/oauth/dropbox/callback")
@@ -501,7 +504,7 @@ async def dropbox_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("dropbox", email, "Dropbox")
     except Exception as e:
         logger.error(f"Dropbox OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Notion OAuth ---
@@ -530,7 +533,7 @@ async def notion_oauth_authorize(
         url = NotionOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
         return {"authorize_url": url}
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise OneValetError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "notion"})
 
 
 @router.get("/api/oauth/notion/callback")
@@ -577,7 +580,7 @@ async def notion_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("notion", workspace, "Notion")
     except Exception as e:
         logger.error(f"Notion OAuth callback failed: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)
 
 
 # --- Composio OAuth (generic for all Composio-powered apps) ---
@@ -593,7 +596,8 @@ async def composio_oauth_authorize(
 ):
     """Initiate Composio OAuth flow. Returns authorization URL."""
     if composio_app not in COMPOSIO_APPS:
-        raise HTTPException(404, f"Unknown OAuth provider: {composio_app}")
+        raise OneValetError(E.PROVIDER_NOT_SUPPORTED, f"Unknown OAuth provider: {composio_app}",
+                            details={"provider": composio_app})
 
     from ...builtin_agents.composio.client import ComposioClient
 
@@ -619,7 +623,8 @@ async def composio_oauth_authorize(
         return {"authorize_url": redirect}
     except Exception as e:
         logger.error(f"Composio authorize failed for {composio_app}: {e}", exc_info=True)
-        raise HTTPException(502, f"Failed to initiate {composio_app} connection")
+        raise OneValetError(E.OAUTH_FAILED, f"Failed to initiate {composio_app} connection",
+                            details={"provider": composio_app})
 
 
 @router.get("/api/oauth/{composio_app}/callback")
@@ -671,4 +676,4 @@ async def composio_oauth_callback(
         return oauth_success_html(composio_app, "", label)
     except Exception as e:
         logger.error(f"Composio callback failed for {composio_app}: {e}", exc_info=True)
-        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>", status_code=500)
+        return HTMLResponse("<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500)

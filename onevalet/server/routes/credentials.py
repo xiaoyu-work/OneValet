@@ -3,8 +3,9 @@
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
+from ...errors import OneValetError, E
 from ..app import require_app, sanitize_credential, verify_api_key, verify_service_key
 from ..models import CredentialSaveRequest
 
@@ -27,20 +28,20 @@ _ACCOUNT_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
 def _validate_service(service: str) -> None:
     """Validate that a service name is in the allowlist."""
     if service not in _KNOWN_SERVICES:
-        raise HTTPException(
-            400,
-            f"Unknown service: {service}. "
-            f"Allowed services: {', '.join(sorted(_KNOWN_SERVICES))}",
+        raise OneValetError(
+            E.PROVIDER_NOT_SUPPORTED,
+            f"Unknown service: {service}",
+            details={"service": service, "allowed": sorted(_KNOWN_SERVICES)},
         )
 
 
 def _validate_account_name(account_name: str) -> None:
     """Validate account_name format."""
     if not _ACCOUNT_NAME_RE.match(account_name):
-        raise HTTPException(
-            400,
-            "Invalid account_name. Must be 1-64 characters, "
-            "alphanumeric, underscores, or hyphens only.",
+        raise OneValetError(
+            E.VALIDATION_ERROR,
+            "Invalid account_name. Must be 1-64 characters, alphanumeric, underscores, or hyphens only.",
+            details={"field": "account_name"},
         )
 
 
@@ -90,7 +91,8 @@ async def internal_credentials_by_email(
     app = require_app()
     result = await app.find_credential_by_email(email, service)
     if not result:
-        raise HTTPException(404, "No credentials found for email")
+        raise OneValetError(E.NOT_FOUND, "No credentials found for email",
+                            details={"resource": "credential"})
     return result
 
 
@@ -103,7 +105,8 @@ async def internal_credentials_get(
     app = require_app()
     creds = await app.get_credential(tenant_id, service, account_name)
     if not creds:
-        raise HTTPException(404, "Credentials not found")
+        raise OneValetError(E.NOT_FOUND, "Credentials not found",
+                            details={"resource": "credential"})
     return {"tenant_id": tenant_id, "service": service, "account_name": account_name, "credentials": creds}
 
 

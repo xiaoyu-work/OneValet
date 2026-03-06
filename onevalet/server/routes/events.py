@@ -1,7 +1,8 @@
 """Email event ingestion routes."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
+from ...errors import OneValetError, E
 from ..app import require_app, verify_api_key
 from ..models import EmailEventRequest
 
@@ -15,7 +16,8 @@ async def ingest_email_event(req: EmailEventRequest):
 
     app = require_app()
     if app.event_bus is None:
-        raise HTTPException(503, "EventBus not available")
+        raise OneValetError(E.SERVICE_UNAVAILABLE, "EventBus not available",
+                            details={"service": "events"})
 
     request_data = req.model_dump()
     event = Event(

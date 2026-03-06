@@ -4,9 +4,10 @@ import logging
 import os
 
 import yaml
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from ...app import OneValet
+from ...errors import OneValetError, E
 from ..app import (
     _config_path,
     _SUPPORTED_PROVIDERS,
@@ -47,7 +48,11 @@ async def save_config(req: ConfigRequest):
     _app = get_app_instance()
 
     if req.llm.provider not in _SUPPORTED_PROVIDERS:
-        raise HTTPException(400, f"Unsupported provider: {req.llm.provider}")
+        raise OneValetError(
+            E.PROVIDER_NOT_SUPPORTED,
+            f"Unsupported LLM provider: {req.llm.provider}",
+            details={"provider": req.llm.provider, "supported": list(_SUPPORTED_PROVIDERS)},
+        )
 
     llm_config = {
         "provider": req.llm.provider,
@@ -96,8 +101,7 @@ async def save_config(req: ConfigRequest):
     except Exception as e:
         set_app(None)
         logger.error(f"Config saved but initialization failed: {e}")
-        raise HTTPException(
-            422,
-            f"Config saved but initialization failed: {e}. "
-            f"Check your database URL and API key.",
+        raise OneValetError(
+            E.CONFIG_ERROR,
+            f"Config saved but initialization failed: {e}",
         )

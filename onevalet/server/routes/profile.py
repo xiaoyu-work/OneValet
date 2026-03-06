@@ -3,8 +3,9 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 
+from ...errors import OneValetError, E
 from ..app import require_app, verify_service_key
 from ...services.profile_extraction import ProfileExtractionService
 from ...services.profile_repo import ProfileRepository
@@ -45,10 +46,11 @@ async def start_profile_extraction(
             accounts = await AccountResolver.resolve_accounts(tenant_id, ["all"])
     except Exception as e:
         logger.error(f"Failed to resolve email accounts for {tenant_id}: {e}")
-        raise HTTPException(500, f"Failed to resolve email accounts: {e}")
+        raise OneValetError(E.INTERNAL_ERROR, f"Failed to resolve email accounts: {e}")
 
     if not accounts:
-        raise HTTPException(404, "No email accounts found for this tenant")
+        raise OneValetError(E.NOT_FOUND, "No email accounts found for this tenant",
+                            details={"resource": "email_account"})
 
     # Create email providers
     providers = []
@@ -58,7 +60,7 @@ async def start_profile_extraction(
             providers.append(provider)
 
     if not providers:
-        raise HTTPException(500, "Failed to create email providers")
+        raise OneValetError(E.INTERNAL_ERROR, "Failed to create email providers")
 
     # Start background extraction (with DB persistence)
     profile_repo = ProfileRepository(app._database)
@@ -86,7 +88,8 @@ async def get_extraction_status(request: Request, job_id: str):
 
     job = _service.get_job_status(job_id)
     if not job:
-        raise HTTPException(404, "Job not found")
+        raise OneValetError(E.NOT_FOUND, "Extraction job not found",
+                            details={"resource": "extraction_job"})
 
     result = {
         "job_id": job["job_id"],
@@ -113,5 +116,6 @@ async def get_tenant_profile(request: Request, tenant_id: str):
     repo = ProfileRepository(app._database)
     profile = await repo.get_profile(tenant_id)
     if profile is None:
-        raise HTTPException(404, "No profile found for this tenant")
+        raise OneValetError(E.NOT_FOUND, "No profile found for this tenant",
+                            details={"resource": "profile"})
     return {"tenant_id": tenant_id, "profile": profile}

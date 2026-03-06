@@ -259,15 +259,22 @@ class ErrorEvent(AgentEvent):
         recoverable: bool = False,
         agent_id: Optional[str] = None,
         agent_type: Optional[str] = None,
+        code: Optional[str] = None,
+        details: Optional[dict] = None,
         **kwargs
     ):
+        data = {
+            "error": error,
+            "error_type": error_type,
+            "recoverable": recoverable,
+        }
+        if code:
+            data["code"] = code
+        if details:
+            data["details"] = details
         super().__init__(
             type=EventType.ERROR,
-            data={
-                "error": error,
-                "error_type": error_type,
-                "recoverable": recoverable,
-            },
+            data=data,
             agent_id=agent_id,
             agent_type=agent_type,
             **kwargs
@@ -348,16 +355,23 @@ def create_error_event(
     error_type: str = None,
     recoverable: bool = False,
     agent_id: str = None,
-    agent_type: str = None
+    agent_type: str = None,
+    code: str = None,
+    details: dict = None,
 ) -> AgentEvent:
     """Create an error event"""
+    data = {
+        "error": error,
+        "error_type": error_type,
+        "recoverable": recoverable,
+    }
+    if code:
+        data["code"] = code
+    if details:
+        data["details"] = details
     return AgentEvent(
         type=EventType.ERROR,
-        data={
-            "error": error,
-            "error_type": error_type,
-            "recoverable": recoverable,
-        },
+        data=data,
         agent_id=agent_id,
         agent_type=agent_type,
     )

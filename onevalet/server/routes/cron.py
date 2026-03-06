@@ -1,7 +1,8 @@
 """Cron job CRUD routes."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
+from ...errors import OneValetError, E
 from ..app import require_app, verify_api_key
 from ..models import CronJobCreateRequest, CronJobUpdateRequest
 
@@ -10,7 +11,8 @@ router = APIRouter()
 
 def _require_cron_service(app):
     if not app.cron_service:
-        raise HTTPException(503, "CronService not available")
+        raise OneValetError(E.SERVICE_UNAVAILABLE, "CronService not available",
+                            details={"service": "cron"})
     return app.cron_service
 
 
@@ -59,11 +61,13 @@ async def create_cron_job(req: CronJobCreateRequest):
         try:
             schedule = EverySchedule(every_ms=int(float(req.schedule_value) * 1000))
         except ValueError:
-            raise HTTPException(400, f"Invalid interval: {req.schedule_value}")
+            raise OneValetError(E.VALIDATION_ERROR, f"Invalid interval: {req.schedule_value}",
+                                details={"field": "schedule_value"})
     elif req.schedule_type == "cron":
         schedule = CronScheduleSpec(expr=req.schedule_value, tz=req.timezone or None)
     else:
-        raise HTTPException(400, f"Unknown schedule_type: {req.schedule_type}")
+        raise OneValetError(E.VALIDATION_ERROR, f"Unknown schedule_type: {req.schedule_type}",
+                            details={"field": "schedule_type"})
 
     # Build payload
     target = SessionTarget(req.session_target)
@@ -105,7 +109,8 @@ async def get_cron_job(job_id: str):
     service = _require_cron_service(app)
     job = service.get_job(job_id)
     if not job:
-        raise HTTPException(404, "Cron job not found")
+        raise OneValetError(E.NOT_FOUND, "Cron job not found",
+                            details={"resource": "cron_job"})
     return job.to_dict()
 
 
@@ -126,7 +131,8 @@ async def update_cron_job(job_id: str, req: CronJobUpdateRequest):
 
     job = service.get_job(job_id)
     if not job:
-        raise HTTPException(404, "Cron job not found")
+        raise OneValetError(E.NOT_FOUND, "Cron job not found",
+                            details={"resource": "cron_job"})
 
     patch = CronJobPatch()
 
@@ -153,7 +159,7 @@ async def update_cron_job(job_id: str, req: CronJobUpdateRequest):
         updated = await service.update(job_id, patch)
         return updated.to_dict()
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise OneValetError(E.NOT_FOUND, str(e), details={"resource": "cron_job"})
 
 
 @router.delete("/api/cron/jobs/{job_id}", dependencies=[Depends(verify_api_key)])
@@ -163,7 +169,8 @@ async def delete_cron_job(job_id: str):
     service = _require_cron_service(app)
     removed = await service.remove(job_id)
     if not removed:
-        raise HTTPException(404, "Cron job not found")
+        raise OneValetError(E.NOT_FOUND, "Cron job not found",
+                            details={"resource": "cron_job"})
     return {"deleted": True}
 
 
@@ -176,7 +183,7 @@ async def run_cron_job(job_id: str, mode: str = "force"):
         entry = await service.run(job_id, mode=mode)
         return entry.to_dict()
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise OneValetError(E.NOT_FOUND, str(e), details={"resource": "cron_job"})
 
 
 @router.get("/api/cron/jobs/{job_id}/runs", dependencies=[Depends(verify_api_key)])

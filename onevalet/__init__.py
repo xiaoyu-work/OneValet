@@ -117,6 +117,9 @@ from .streaming import (
     AgentEvent,
 )
 
+# Errors
+from .errors import OneValetError, E
+
 # LLM Clients (built-in, ready to use)
 from .llm import (
     LLMConfig,
@@ -144,4 +147,6 @@ __all__ = [
     "LiteLLMClient", "LLMConfig", "LLMResponse",
     # Streaming
     "StreamMode", "EventType", "AgentEvent",
+    # Errors
+    "OneValetError", "E",
 ]
