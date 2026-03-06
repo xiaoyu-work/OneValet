@@ -336,7 +336,7 @@ async def search_hotels(
 # =============================================================================
 
 @tool
-async def check_weather(
+async def get_weather(
     location: Annotated[str, "City name"],
     days: Annotated[int, "Offset days from today (0..14)"] = 0,
     *,

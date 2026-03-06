@@ -12,7 +12,7 @@ from datetime import datetime
 from onevalet import InputField, valet
 from onevalet.standard_agent import StandardAgent
 
-from .travel_tools import search_flights, search_hotels, check_weather
+from .travel_tools import search_flights, search_hotels, get_weather
 from onevalet.builtin_agents.maps.tools import search_places, get_directions
 from onevalet.builtin_agents.calendar.tools import query_events, create_event
 from onevalet.builtin_agents.todo.tools import create_task
@@ -50,7 +50,7 @@ You MUST call tools to gather real data before producing any plan.
 Never generate a plan from your training data alone.
 
 On your FIRST turn, call these tools in parallel:
-1. check_weather — destination weather forecast
+1. get_weather — destination weather forecast
 2. search_places — attractions, restaurants, points of interest
 3. search_hotels — accommodation options
 4. search_flights — ONLY if the user provided an origin city. Otherwise skip.
@@ -70,7 +70,7 @@ Your itinerary MUST reference the actual data returned by tools. Include:
 - **Flights**: airline, departure/arrival times, price
 
 Structure:
-- **Weather & Clothing** (from check_weather)
+- **Weather & Clothing** (from get_weather)
 - **Day 1..N** with morning / afternoon / evening blocks — each POI with address, rating, and hours
 - **Accommodation Options** (from search_hotels, if available)
 - **Flight Options** (from search_flights, only if origin was provided)
@@ -99,7 +99,7 @@ Only execute write actions (calendar/todo) after explicit user consent.
         return await super().on_running(msg)
 
     tools = (
-        check_weather,
+        get_weather,
         search_places,
         get_directions,
         search_flights,
