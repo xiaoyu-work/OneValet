@@ -243,14 +243,19 @@ class StandardAgent(BaseAgent):
         self._remaining_tool_calls: List[LLMToolCall] = []
         self._tool_trace: List[Dict[str, Any]] = []
 
-        # Pre-populate collected_fields with context_hints (validate each field)
+        # Pre-populate collected_fields with context_hints (only for declared fields)
         if context_hints:
             for field_name, value in context_hints.items():
                 if not value:
                     continue
-                # Check if field has a validator via RequiredField
+                # Only pre-populate fields that are declared as required/input fields.
+                # Infrastructure objects (db, trigger_engine, etc.) stay in
+                # self.context_hints and must NOT enter collected_fields, which
+                # gets JSON-serialized by the pool backend.
                 field_def = next((f for f in self.required_fields if f.name == field_name), None)
-                if field_def and field_def.validator:
+                if not field_def:
+                    continue
+                if field_def.validator:
                     if not field_def.validator(str(value)):
                         logger.debug(f"context_hints field '{field_name}' failed validation, skipping")
                         continue
