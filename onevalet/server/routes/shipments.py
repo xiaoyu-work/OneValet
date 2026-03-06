@@ -40,6 +40,24 @@ class ArchiveByTrackingRequest(BaseModel):
 # --- Internal Shipment APIs (service-to-service) ---
 
 
+@router.get("/api/internal/shipments/list")
+async def internal_list_shipments(
+    request: Request,
+    tenant_id: str,
+    active_only: bool = True,
+):
+    """List all shipments for a tenant. Internal use only."""
+    verify_service_key(request)
+    repo = _get_repo()
+    query = "SELECT * FROM shipments WHERE tenant_id = $1"
+    params = [tenant_id]
+    if active_only:
+        query += " AND is_active = TRUE"
+    query += " ORDER BY updated_at DESC"
+    rows = await repo.db.fetch(query, *params)
+    return [dict(r) for r in rows]
+
+
 @router.get("/api/internal/shipments")
 async def internal_get_shipment(
     request: Request,
