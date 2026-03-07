@@ -100,6 +100,7 @@ class OneValet:
         self._email_handler = None
         self._model_router = None
         self._cron_service = None
+        self._shipment_poller = None
 
     async def _ensure_initialized(self) -> None:
         """Lazy initialization — runs once on first chat()/stream() call."""
@@ -303,6 +304,14 @@ class OneValet:
         self._trigger_engine.set_cron_service(self._cron_service)
         logger.info("CronService initialized (store: PostgreSQL)")
 
+        # ShipmentPoller — hourly background refresh with change notifications
+        from .services.shipment_poller import ShipmentPoller
+        self._shipment_poller = ShipmentPoller(
+            db=self._database,
+            notification=callback_notification,
+        )
+        await self._shipment_poller.start()
+
         # Register executors with TriggerEngine
         orchestrator_executor = OrchestratorExecutor(self._orchestrator)
         self._trigger_engine.register_executor("orchestrator", orchestrator_executor)
@@ -368,6 +377,8 @@ class OneValet:
         if not self._initialized:
             return
         try:
+            if self._shipment_poller:
+                await self._shipment_poller.stop()
             if self._cron_service:
                 await self._cron_service.stop()
             if self._orchestrator:
@@ -391,6 +402,7 @@ class OneValet:
             self._email_handler = None
             self._model_router = None
             self._cron_service = None
+            self._shipment_poller = None
             logger.info("OneValet shut down")
 
     # ── Public API methods (issue #12) ──

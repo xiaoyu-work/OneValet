@@ -1,5 +1,6 @@
 """Internal shipment API routes (service-to-service)."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from ...errors import OneValetError, E
 from ..app import require_app, verify_service_key
 from onevalet.builtin_agents.shipment.shipment_repo import ShipmentRepository
+from onevalet.providers.shipment import TrackingProvider
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -157,3 +159,84 @@ async def internal_archive_by_tracking(
         raise OneValetError(E.NOT_FOUND, "Shipment not found",
                             details={"resource": "shipment"})
     return result
+
+
+@router.post("/api/internal/shipments/refresh")
+async def internal_refresh_shipments(
+    request: Request,
+    tenant_id: str,
+    timezone: Optional[str] = None,
+):
+    """Refresh all active non-delivered shipments from 17Track, then return updated list."""
+    verify_service_key(request)
+    repo = _get_repo()
+    provider = TrackingProvider()
+
+    # Persist timezone for background poller
+    if timezone:
+        try:
+            app = require_app()
+            await app._database.execute(
+                """
+                INSERT INTO tenant_profiles (tenant_id, profile, extracted_at, updated_at)
+                VALUES ($1, jsonb_build_object('timezone', $2), NOW(), NOW())
+                ON CONFLICT (tenant_id)
+                DO UPDATE SET profile = tenant_profiles.profile || jsonb_build_object('timezone', $2),
+                              updated_at = NOW()
+                """,
+                tenant_id, timezone,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to persist timezone for {tenant_id}: {e}")
+
+    if not provider.api_key:
+        # No API key — just return cached data
+        rows = await repo.db.fetch(
+            "SELECT * FROM shipments WHERE tenant_id = $1 AND is_active = TRUE "
+            "ORDER BY updated_at DESC",
+            tenant_id,
+        )
+        return [dict(r) for r in rows]
+
+    rows = await repo.db.fetch(
+        "SELECT * FROM shipments WHERE tenant_id = $1 AND is_active = TRUE "
+        "ORDER BY updated_at DESC",
+        tenant_id,
+    )
+    shipments = [dict(r) for r in rows]
+
+    if not shipments:
+        return []
+
+    async def refresh_one(shipment: dict) -> dict:
+        """Refresh a single shipment from 17Track if not already delivered."""
+        if (shipment.get("status") or "").lower() == "delivered":
+            return shipment
+        tn = shipment["tracking_number"]
+        carrier = shipment.get("carrier", "")
+        try:
+            result = await provider.track(tn, carrier)
+            if result.get("success"):
+                updated = await repo.upsert_shipment(
+                    tenant_id=tenant_id,
+                    tracking_number=tn,
+                    carrier=carrier or result.get("carrier", ""),
+                    tracking_url=result.get("tracking_url"),
+                    status=result.get("status", "unknown"),
+                    description=shipment.get("description"),
+                    last_update=result.get("last_update"),
+                    estimated_delivery=result.get("estimated_delivery"),
+                    tracking_history=result.get("events", []),
+                )
+                if result.get("status") == "delivered":
+                    await repo.archive_shipment_by_tracking(tenant_id, tn)
+                    if updated:
+                        updated["is_active"] = False
+                return updated or shipment
+        except Exception as e:
+            logger.warning(f"Failed to refresh {tn}: {e}")
+        return shipment
+
+    updated = await asyncio.gather(*[refresh_one(s) for s in shipments])
+    # Filter out archived (delivered) ones
+    return [s for s in updated if s.get("is_active", True)]

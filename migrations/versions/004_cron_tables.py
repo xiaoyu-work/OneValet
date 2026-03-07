@@ -3,12 +3,17 @@
 Replaces the file-based JSON store with PostgreSQL so data survives
 container restarts and supports multi-user isolation.
 """
+from typing import Sequence, Union
 
-revision = "004"
-down_revision = "003"
+from alembic import op
+
+revision: str = "004"
+down_revision: Union[str, None] = "003"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade(op):
+def upgrade() -> None:
     op.execute("""
         CREATE TABLE IF NOT EXISTS cron_jobs (
             id              TEXT PRIMARY KEY,
@@ -45,6 +50,6 @@ def upgrade(op):
     """)
 
 
-def downgrade(op):
+def downgrade() -> None:
     op.execute("DROP TABLE IF EXISTS cron_runs")
     op.execute("DROP TABLE IF EXISTS cron_jobs")
