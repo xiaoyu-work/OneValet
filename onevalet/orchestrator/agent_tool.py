@@ -138,14 +138,9 @@ async def execute_agent_tool(
                                     "required_services": required_services,
                                 },
                             )
-                            services_str = ", ".join(required_services)
                             return AgentToolResult(
                                 completed=True,
-                                result_text=(
-                                    f"The user has not connected any of the required services "
-                                    f"({services_str}) for {agent_type}. "
-                                    f"Tell the user they need to connect the service in Settings > Connections first."
-                                ),
+                                result_text=f"[{err.code}] {err.message}",
                                 metadata={"error": err.to_dict()},
                             )
                     except Exception as e:
@@ -163,10 +158,7 @@ async def execute_agent_tool(
         from ..errors import E
         return AgentToolResult(
             completed=True,
-            result_text=(
-                f"Failed to initialize {agent_type}. "
-                f"Tell the user something went wrong and to try again."
-            ),
+            result_text=f"[{E.AGENT_FAILED}] Failed to create agent {agent_type}",
             metadata={"error": {"code": E.AGENT_FAILED, "message": f"Failed to create agent {agent_type}",
                                 "details": {"agent_type": agent_type}}},
         )

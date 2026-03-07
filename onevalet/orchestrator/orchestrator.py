@@ -1151,19 +1151,11 @@ class Orchestrator:
                     break
 
                 # Agent passthrough: single completed agent-tool skips LLM re-summary
-                # (but NOT for error results — those need LLM reformulation)
-                _first_result = results[0] if results else None
-                _is_error_result = (
-                    isinstance(_first_result, AgentToolResult)
-                    and isinstance(_first_result.metadata, dict)
-                    and _first_result.metadata.get("error")
-                )
                 if (
                     len(tool_calls) == 1
                     and self._is_agent_tool(tool_calls[0].name)
-                    and isinstance(_first_result, AgentToolResult)
-                    and _first_result.completed
-                    and not _is_error_result
+                    and isinstance(results[0], AgentToolResult)
+                    and results[0].completed
                 ):
                     agent_text = results[0].result_text
                     logger.info(
