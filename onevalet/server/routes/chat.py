@@ -8,7 +8,7 @@ import os
 
 import httpx
 from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..app import require_app, verify_api_key
 from ..models import ChatRequest, ChatResponse
@@ -144,7 +144,43 @@ async def stream(req: ChatRequest):
 
 @router.get("/health")
 async def health():
+    """Basic health check."""
     return {"status": "ok"}
+
+
+@router.get("/health/ready")
+async def health_ready():
+    """Readiness check - verifies all components are available."""
+    checks = {}
+
+    try:
+        app = require_app()
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "checks": {"app": "not_configured"}},
+        )
+
+    # Database check
+    if app.database:
+        try:
+            await app.database.fetchval("SELECT 1")
+            checks["database"] = "ok"
+        except Exception as e:
+            checks["database"] = f"error: {e}"
+    else:
+        checks["database"] = "not_configured"
+
+    # LLM check (just verify client exists, don't make API call)
+    checks["llm"] = "ok" if app.orchestrator and app.orchestrator.llm_client else "not_configured"
+
+    all_ok = all(v == "ok" for v in checks.values())
+    status_code = 200 if all_ok else 503
+
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+    )
 
 
 @router.post("/api/clear-session", dependencies=[Depends(verify_api_key)])

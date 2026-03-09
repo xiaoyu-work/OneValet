@@ -12,11 +12,12 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .base import BaseCalendarProvider
+from ..http_mixin import OAuthHTTPMixin
 
 logger = logging.getLogger(__name__)
 
 
-class GoogleCalendarProvider(BaseCalendarProvider):
+class GoogleCalendarProvider(BaseCalendarProvider, OAuthHTTPMixin):
     """Google Calendar provider using Google Calendar API v3."""
 
     def __init__(
@@ -26,6 +27,9 @@ class GoogleCalendarProvider(BaseCalendarProvider):
     ):
         super().__init__(credentials, on_token_refreshed)
         self.api_base_url = "https://www.googleapis.com/calendar/v3"
+
+    def _get_headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
 
     async def list_events(
         self,
@@ -57,57 +61,43 @@ class GoogleCalendarProvider(BaseCalendarProvider):
             if query:
                 params["q"] = query
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.api_base_url}/calendars/{calendar_id}/events",
-                    headers={"Authorization": f"Bearer {self.access_token}"},
-                    params=params,
-                    timeout=30.0,
-                )
+            response = await self._oauth_request(
+                "GET",
+                f"{self.api_base_url}/calendars/{calendar_id}/events",
+                params=params,
+            )
 
-                if response.status_code == 401:
-                    logger.warning("Token expired, force refreshing...")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{self.api_base_url}/calendars/{calendar_id}/events",
-                            headers={"Authorization": f"Bearer {self.access_token}"},
-                            params=params,
-                            timeout=30.0,
-                        )
-                    else:
-                        return {"success": False, "error": "Failed to refresh token"}
+            response.raise_for_status()
+            data = response.json()
 
-                response.raise_for_status()
-                data = response.json()
+            events = []
+            for item in data.get("items", []):
+                start_data = item.get("start", {})
+                end_data = item.get("end", {})
+                start_str = start_data.get("dateTime") or start_data.get("date")
+                end_str = end_data.get("dateTime") or end_data.get("date")
 
-                events = []
-                for item in data.get("items", []):
-                    start_data = item.get("start", {})
-                    end_data = item.get("end", {})
-                    start_str = start_data.get("dateTime") or start_data.get("date")
-                    end_str = end_data.get("dateTime") or end_data.get("date")
+                from dateutil import parser as date_parser
+                start_dt = date_parser.parse(start_str) if start_str else None
+                end_dt = date_parser.parse(end_str) if end_str else None
 
-                    from dateutil import parser as date_parser
-                    start_dt = date_parser.parse(start_str) if start_str else None
-                    end_dt = date_parser.parse(end_str) if end_str else None
+                attendees = [a.get("email", "") for a in item.get("attendees", [])]
 
-                    attendees = [a.get("email", "") for a in item.get("attendees", [])]
+                events.append({
+                    "event_id": item.get("id"),
+                    "summary": item.get("summary", "No title"),
+                    "description": item.get("description", ""),
+                    "start": start_dt,
+                    "end": end_dt,
+                    "location": item.get("location", ""),
+                    "attendees": attendees,
+                    "organizer": item.get("organizer", {}).get("email", ""),
+                    "status": item.get("status", "confirmed"),
+                    "html_link": item.get("htmlLink", ""),
+                })
 
-                    events.append({
-                        "event_id": item.get("id"),
-                        "summary": item.get("summary", "No title"),
-                        "description": item.get("description", ""),
-                        "start": start_dt,
-                        "end": end_dt,
-                        "location": item.get("location", ""),
-                        "attendees": attendees,
-                        "organizer": item.get("organizer", {}).get("email", ""),
-                        "status": item.get("status", "confirmed"),
-                        "html_link": item.get("htmlLink", ""),
-                    })
-
-                logger.info(f"Retrieved {len(events)} events from Google Calendar")
-                return {"success": True, "data": events, "count": len(events)}
+            logger.info(f"Retrieved {len(events)} events from Google Calendar")
+            return {"success": True, "data": events, "count": len(events)}
 
         except httpx.HTTPStatusError as e:
             logger.error(f"Google Calendar API error: {e.response.status_code} - {e.response.text}")
@@ -146,34 +136,20 @@ class GoogleCalendarProvider(BaseCalendarProvider):
             if attendees:
                 event_body["attendees"] = [{"email": email} for email in attendees]
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.api_base_url}/calendars/{calendar_id}/events",
-                    headers={"Authorization": f"Bearer {self.access_token}"},
-                    json=event_body,
-                    timeout=30.0,
-                )
+            response = await self._oauth_request(
+                "POST",
+                f"{self.api_base_url}/calendars/{calendar_id}/events",
+                json=event_body,
+            )
 
-                if response.status_code == 401:
-                    logger.warning("Token expired, force refreshing...")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.post(
-                            f"{self.api_base_url}/calendars/{calendar_id}/events",
-                            headers={"Authorization": f"Bearer {self.access_token}"},
-                            json=event_body,
-                            timeout=30.0,
-                        )
-                    else:
-                        return {"success": False, "error": "Failed to refresh token"}
-
-                response.raise_for_status()
-                data = response.json()
-                logger.info(f"Created event: {summary}")
-                return {
-                    "success": True,
-                    "event_id": data.get("id"),
-                    "html_link": data.get("htmlLink", ""),
-                }
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Created event: {summary}")
+            return {
+                "success": True,
+                "event_id": data.get("id"),
+                "html_link": data.get("htmlLink", ""),
+            }
 
         except httpx.HTTPStatusError as e:
             logger.error(f"Google Calendar API error: {e.response.status_code} - {e.response.text}")
@@ -215,34 +191,20 @@ class GoogleCalendarProvider(BaseCalendarProvider):
             if attendees is not None:
                 update_body["attendees"] = [{"email": email} for email in attendees]
 
-            async with httpx.AsyncClient() as client:
-                response = await client.patch(
-                    f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
-                    headers={"Authorization": f"Bearer {self.access_token}"},
-                    json=update_body,
-                    timeout=30.0,
-                )
+            response = await self._oauth_request(
+                "PATCH",
+                f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
+                json=update_body,
+            )
 
-                if response.status_code == 401:
-                    logger.warning("Token expired, force refreshing...")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.patch(
-                            f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
-                            headers={"Authorization": f"Bearer {self.access_token}"},
-                            json=update_body,
-                            timeout=30.0,
-                        )
-                    else:
-                        return {"success": False, "error": "Failed to refresh token"}
-
-                response.raise_for_status()
-                data = response.json()
-                logger.info(f"Updated event: {event_id}")
-                return {
-                    "success": True,
-                    "event_id": data.get("id"),
-                    "html_link": data.get("htmlLink", ""),
-                }
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Updated event: {event_id}")
+            return {
+                "success": True,
+                "event_id": data.get("id"),
+                "html_link": data.get("htmlLink", ""),
+            }
 
         except httpx.HTTPStatusError as e:
             logger.error(f"Google Calendar API error: {e.response.status_code} - {e.response.text}")
@@ -264,30 +226,17 @@ class GoogleCalendarProvider(BaseCalendarProvider):
             calendar_id = "primary"
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.delete(
-                    f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
-                    headers={"Authorization": f"Bearer {self.access_token}"},
-                    timeout=30.0,
-                )
+            response = await self._oauth_request(
+                "DELETE",
+                f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
+            )
 
-                if response.status_code == 401:
-                    logger.warning("Token expired, force refreshing...")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.delete(
-                            f"{self.api_base_url}/calendars/{calendar_id}/events/{event_id}",
-                            headers={"Authorization": f"Bearer {self.access_token}"},
-                            timeout=30.0,
-                        )
-                    else:
-                        return {"success": False, "error": "Failed to refresh token"}
-
-                if response.status_code == 204:
-                    logger.info(f"Deleted event: {event_id}")
-                    return {"success": True}
-
-                response.raise_for_status()
+            if response.status_code == 204:
+                logger.info(f"Deleted event: {event_id}")
                 return {"success": True}
+
+            response.raise_for_status()
+            return {"success": True}
 
         except httpx.HTTPStatusError as e:
             logger.error(f"Google Calendar API error: {e.response.status_code} - {e.response.text}")

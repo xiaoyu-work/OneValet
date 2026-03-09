@@ -165,31 +165,41 @@ class CredentialStore(Repository):
         self,
         email: str,
         service: Optional[str] = None,
+        tenant_id: Optional[str] = None,
     ) -> Optional[dict]:
-        """Find credentials by email across all tenants.
+        """Find credentials by email, optionally scoped to a tenant.
 
-        Used by webhook handlers to map email → tenant_id + credentials.
+        Args:
+            email: Email address to search for.
+            service: Optional service filter.
+            tenant_id: Optional tenant scope. When provided, only searches
+                within the given tenant (recommended for API endpoints).
+                When None, searches all tenants (internal/webhook use).
         """
+        conditions = ["credentials_json->>'email' = $1"]
+        params: list = [email]
+        idx = 2
+
         if service:
-            row = await self.db.fetchrow(
-                """
-                SELECT tenant_id, service, account_name, credentials_json
-                FROM credentials
-                WHERE credentials_json->>'email' = $1 AND service = $2
-                LIMIT 1
-                """,
-                email, service,
-            )
-        else:
-            row = await self.db.fetchrow(
-                """
-                SELECT tenant_id, service, account_name, credentials_json
-                FROM credentials
-                WHERE credentials_json->>'email' = $1
-                LIMIT 1
-                """,
-                email,
-            )
+            conditions.append(f"service = ${idx}")
+            params.append(service)
+            idx += 1
+
+        if tenant_id:
+            conditions.append(f"tenant_id = ${idx}")
+            params.append(tenant_id)
+            idx += 1
+
+        where = " AND ".join(conditions)
+        row = await self.db.fetchrow(
+            f"""
+            SELECT tenant_id, service, account_name, credentials_json
+            FROM credentials
+            WHERE {where}
+            LIMIT 1
+            """,
+            *params,
+        )
         if not row:
             return None
         val = row["credentials_json"]

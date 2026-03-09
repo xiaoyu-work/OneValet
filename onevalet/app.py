@@ -428,10 +428,10 @@ class OneValet:
         await self._ensure_initialized()
         return await self._credential_store.delete(tenant_id=tenant_id, service=service, account_name=account_name)
 
-    async def find_credential_by_email(self, email: str, service: Optional[str] = None):
-        """Find credentials by email address."""
+    async def find_credential_by_email(self, email: str, service: Optional[str] = None, tenant_id: Optional[str] = None):
+        """Find credentials by email address, optionally scoped to a tenant."""
         await self._ensure_initialized()
-        return await self._credential_store.find_by_email(email, service)
+        return await self._credential_store.find_by_email(email, service, tenant_id=tenant_id)
 
     async def get_credential(self, tenant_id: str, service: str, account_name: str = "primary"):
         """Get full credentials for a specific service/account."""
@@ -582,6 +582,11 @@ class OneValet:
     def trigger_engine(self):
         """Access the trigger engine (may be None)."""
         return self._trigger_engine
+
+    @property
+    def orchestrator(self):
+        """Access the orchestrator (may be None before initialization)."""
+        return self._orchestrator
 
     @property
     def event_bus(self):

@@ -45,11 +45,10 @@ Example (hooks, no subclass):
     )
 """
 
+import copy
 import json
 import asyncio
-import dataclasses
 import logging
-import re
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, AsyncIterator, Callable, TYPE_CHECKING
@@ -66,18 +65,16 @@ from .models import (
     callback_handler,
 )
 from .pool import AgentPoolManager
-from .react_config import (
-    ReactLoopConfig, ToolCallRecord, TokenUsage,
-    COMPLETE_TASK_TOOL_NAME, COMPLETE_TASK_SCHEMA, CompleteTaskResult,
-)
-from ..constants import GENERATE_PLAN_TOOL_NAME, GENERATE_PLAN_SCHEMA
+from .react_config import ReactLoopConfig
+from ..constants import GENERATE_PLAN_TOOL_NAME
 from .context_manager import ContextManager
-from .agent_tool import execute_agent_tool, AgentToolResult
-from .approval import collect_batch_approvals
-from .prompts import build_system_prompt, DEFAULT_SYSTEM_PROMPT
+from .prompts import build_system_prompt
 from .audit_logger import AuditLogger
 from .tool_policy import ToolPolicyFilter
-from .transcript_repair import repair_transcript
+
+from .react_loop import ReactLoopMixin
+from .tool_manager import ToolManagerMixin
+from .llm_manager import LLMManagerMixin
 
 if TYPE_CHECKING:
     from ..checkpoint import CheckpointManager
@@ -86,14 +83,13 @@ if TYPE_CHECKING:
     from ..protocols import LLMClientProtocol
     from ..memory.momex import MomexMemory
 
-from ..models import AgentTool, AgentToolContext
 from ..standard_agent import StandardAgent
 from ..config import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
 
-class Orchestrator:
+class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
     """
     Central coordinator for all agents with ReAct loop architecture.
 
@@ -139,18 +135,6 @@ class Orchestrator:
 
     # Reserved callback names that cannot be overridden by subclasses
     _builtin_callback_names: set = {"list_agents", "get_agent_config"}
-    _ROUTER_POLICY_SYSTEM_PROMPT = (
-        "You are a tool routing policy engine for an orchestrator. "
-        "Return strict JSON only with this schema: "
-        "{\"intent\": string, \"must_use_tools\": boolean, "
-        "\"selected_tools\": string[], \"force_first_tool\": string|null, "
-        "\"reason_code\": string}. "
-        "Rules: choose from provided tool names only; use must_use_tools=true "
-        "for requests that require external, account, or real-time data/actions. "
-        "Prefer composite planner agents for multi-step tasks when available. "
-        "Use must_use_tools=false ONLY for clear non-tool scenarios: "
-        "casual_chat, creative_writing, language_translation, text_rewrite, pure_math."
-    )
 
     def __init_subclass__(cls, **kwargs):
         """Collect @callback_handler decorated methods when subclass is defined."""
@@ -274,9 +258,7 @@ class Orchestrator:
 
         # State
         self._initialized = False
-        self._pending_plan: Optional[Dict[str, Any]] = None
-        self._current_metadata: Dict[str, Any] = {}
-        self._current_user_images: Optional[List[Dict[str, Any]]] = None
+        self._tenant_plans: Dict[str, Any] = {}
 
     @property
     def agent_registry(self) -> Optional[AgentRegistry]:
@@ -378,137 +360,11 @@ class Orchestrator:
         Returns:
             AgentResult with response
         """
-        if not self._initialized:
-            await self.initialize()
-
-        # Store request metadata for tool execution context
-        self._current_metadata = metadata or {}
-        self._current_user_images = images
-
-        # Step 1: Prepare context
-        context = await self.prepare_context(tenant_id, message, metadata)
-        self._current_context = context
-
-        # Store images in context so agent tools can access them (e.g. receipt scanning)
-        if images:
-            context["user_images"] = images
-
-        # Step 2: Check if should process
-        if not await self.should_process(message, context):
-            return await self.reject_message(message, context)
-
-        # Step 3: Check pending agents (WAITING_FOR_INPUT / WAITING_FOR_APPROVAL)
-        agent_result = await self._check_pending_agents(tenant_id, message, context)
-        if agent_result is not None:
-            # Agent still waiting -> return prompt directly, don't enter ReAct
-            if agent_result.status in (AgentStatus.WAITING_FOR_INPUT, AgentStatus.WAITING_FOR_APPROVAL):
-                return await self.post_process(agent_result, context)
-            # Agent completed -> return result directly.
-            # The user's message was a response to the pending agent (e.g. an
-            # approval like "yes"/"ok"), NOT a new task.  Feeding it into the ReAct
-            # loop would cause the orchestrator to misinterpret the approval
-            # word as a brand-new request and spawn unnecessary follow-up agents.
-            return await self.post_process(agent_result, context)
-
-        # Step 4: Intent Analysis — classify domains and detect multi-intent
-        intent = await self._analyze_intent(message, context)
-
-        # Step 4b: Multi-intent → DAG execution
-        if intent.intent_type == "multi" and intent.sub_tasks:
-            result = await self._execute_dag(intent, tenant_id, context, metadata)
-            return await self.post_process(result, context)
-
-        # Step 5: Build domain-filtered tool schemas
-        tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
-
-        # Step 5b: Inject notify_user tool for conditional cron delivery
-        meta = metadata or {}
-        if meta.get("cron_conditional_delivery"):
-            notify_tool, notify_schema = self._build_notify_user_tool(context)
-            self.builtin_tools.append(notify_tool)
-            tool_schemas.append(notify_schema)
-
-        logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
-
-        # Step 6: Build LLM messages
-        messages = await self._build_llm_messages(context, message)
-
-        # Convert images to media format for LLM
-        media = None
-        if images:
-            media = [
-                {"type": "image", "data": img["data"], "media_type": img.get("media_type", "image/jpeg")}
-                for img in images
-            ]
-
-        # Step 6: Run ReAct loop (consume events silently)
-        exec_data: Dict[str, Any] = {}
-        async for event in self._react_loop_events(
-            messages,
-            tool_schemas,
-            tenant_id,
-            context=context,
-            user_message=message,
-            media=media,
-        ):
+        result = None
+        async for event in self._execute_message(tenant_id, message, images, metadata):
             if event.type == EventType.EXECUTION_END:
-                exec_data = event.data
-
-        # Step 7: Map loop results -> AgentResult
-        final_response = exec_data.get("final_response", "")
-        pending_approvals = exec_data.get("pending_approvals", [])
-        result_status = exec_data.get("result_status")
-
-        if pending_approvals:
-            status = AgentStatus.WAITING_FOR_APPROVAL
-        elif result_status == "WAITING_FOR_INPUT":
-            status = AgentStatus.WAITING_FOR_INPUT
-        else:
-            status = AgentStatus.COMPLETED
-
-        result_metadata = {
-            "react_turns": exec_data.get("turns", 0),
-            "token_usage": exec_data.get("token_usage", {}),
-            "duration_ms": exec_data.get("duration_ms", 0),
-            "tool_calls_count": exec_data.get("tool_calls_count", 0),
-            "total_tool_count": len(tool_schemas),
-        }
-
-        # Carry conditional notification from notify_user tool
-        if context.get("cron_notification"):
-            result_metadata["cron_notification"] = context["cron_notification"]
-
-        # Clean up injected notify_user tool
-        if meta.get("cron_conditional_delivery"):
-            self.builtin_tools = [t for t in self.builtin_tools if t.name != "notify_user"]
-
-        result = AgentResult(
-            agent_type=self.__class__.__name__,
-            status=status,
-            raw_message=final_response,
-            metadata=result_metadata,
-        )
-
-        if pending_approvals:
-            result.metadata["pending_approvals"] = [
-                {
-                    "agent_name": a.agent_name,
-                    "action_summary": a.action_summary,
-                    "details": a.details,
-                    "options": a.options,
-                }
-                for a in pending_approvals
-            ]
-
-        # Expose tool call records to post-process hooks
-        tool_calls = exec_data.get("tool_calls", [])
-        context["tool_calls"] = tool_calls
-
-        # Persist tool call history
-        await self._save_tool_call_history(tenant_id, tool_calls)
-
-        # Step 8: Post-process
-        return await self.post_process(result, context)
+                result = event.data
+        return result
 
     # ==========================================================================
     # STREAMING ENTRY POINT
@@ -537,38 +393,58 @@ class Orchestrator:
         Yields:
             AgentEvent objects
         """
+        async for event in self._execute_message(tenant_id, message, images, metadata):
+            yield event
+
+    # ==========================================================================
+    # UNIFIED EXECUTION PIPELINE
+    # ==========================================================================
+
+    async def _execute_message(
+        self,
+        tenant_id: str,
+        message: str,
+        images: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> AsyncIterator[AgentEvent]:
+        """Unified execution pipeline yielding streaming events.
+
+        Both ``handle_message`` (consumes silently) and ``stream_message``
+        (yields to caller) delegate to this single implementation.
+
+        The final event is always EXECUTION_END carrying an ``AgentResult``
+        in ``event.data`` so that ``handle_message`` can return it directly.
+        """
         if not self._initialized:
             await self.initialize()
 
-        # Store request metadata for tool execution context
-        self._current_metadata = metadata or {}
-        self._current_user_images = images
+        metadata = metadata or {}
 
-        # Prepare context
+        # Step 1: Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
-        self._current_context = context
 
-        # Store images in context so agent tools can access them
+        # Store images in context so agent tools can access them (e.g. receipt scanning)
         if images:
             context["user_images"] = images
 
-        # Check if should process
+        # Step 2: Check if should process
         if not await self.should_process(message, context):
             result = await self.reject_message(message, context)
             yield AgentEvent(
                 type=EventType.MESSAGE_CHUNK,
                 data={"chunk": result.raw_message or ""},
             )
+            yield AgentEvent(type=EventType.EXECUTION_END, data=result)
             return
 
-        # Check pending agents
+        # Step 3: Check pending agents (WAITING_FOR_INPUT / WAITING_FOR_APPROVAL)
         agent_result = await self._check_pending_agents(tenant_id, message, context)
         if agent_result is not None:
-            # Agent still waiting -> return prompt directly, don't enter ReAct
-            # Return the agent's result directly — whether still waiting or
-            # completed.  The user's message was a response to the pending
-            # agent (e.g. approval "yes"/"ok"), not a new task.  Entering the ReAct
-            # loop would misinterpret it as a fresh request.
+            # Agent still waiting or completed -> return result directly.
+            # The user's message was a response to the pending agent (e.g. an
+            # approval like "yes"/"ok"), NOT a new task.  Feeding it into the ReAct
+            # loop would cause the orchestrator to misinterpret the approval
+            # word as a brand-new request and spawn unnecessary follow-up agents.
             agent_result = await self.post_process(agent_result, context)
             yield AgentEvent(
                 type=EventType.MESSAGE_START,
@@ -578,16 +454,14 @@ class Orchestrator:
                 type=EventType.MESSAGE_CHUNK,
                 data={"chunk": agent_result.raw_message or ""},
             )
-            yield AgentEvent(
-                type=EventType.MESSAGE_END,
-                data={},
-            )
+            yield AgentEvent(type=EventType.MESSAGE_END, data={})
+            yield AgentEvent(type=EventType.EXECUTION_END, data=agent_result)
             return
 
-        # Intent Analysis — classify domains and detect multi-intent
+        # Step 4: Intent Analysis — classify domains and detect multi-intent
         intent = await self._analyze_intent(message, context)
 
-        # Multi-intent → streaming DAG execution
+        # Step 4b: Multi-intent → DAG execution
         if intent.intent_type == "multi" and intent.sub_tasks:
             final_response = ""
             dag_exec_data: Dict[str, Any] = {}
@@ -596,7 +470,7 @@ class Orchestrator:
                     dag_exec_data = event.data
                     final_response = dag_exec_data.get("final_response", "")
                 yield event
-            # Post-process: extract pending_approvals for correct status
+            # Post-process
             pending_approvals = dag_exec_data.get("pending_approvals", [])
             if pending_approvals:
                 status = AgentStatus.WAITING_FOR_APPROVAL
@@ -610,12 +484,24 @@ class Orchestrator:
             tool_calls = dag_exec_data.get("tool_calls", [])
             context["tool_calls"] = tool_calls
             await self._save_tool_call_history(tenant_id, tool_calls)
-            await self.post_process(result, context)
+            result = await self.post_process(result, context)
+            yield AgentEvent(type=EventType.EXECUTION_END, data=result)
             return
 
-        # Build domain-filtered tool schemas
+        # Step 5: Build domain-filtered tool schemas
         tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
+
+        # Step 5b: Inject notify_user tool for conditional cron delivery
+        # Use a local copy of builtin_tools to avoid mutating the instance list
+        request_tools = list(self.builtin_tools)
+        if metadata.get("cron_conditional_delivery"):
+            notify_tool, notify_schema = self._build_notify_user_tool(context)
+            request_tools.append(notify_tool)
+            tool_schemas.append(notify_schema)
+
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
+
+        # Step 6: Build LLM messages
         messages = await self._build_llm_messages(context, message)
 
         # Convert images to media format for LLM
@@ -626,745 +512,76 @@ class Orchestrator:
                 for img in images
             ]
 
-        # Delegate to shared ReAct loop
+        # Step 7: Run ReAct loop
         final_response = ""
         exec_data: Dict[str, Any] = {}
         async for event in self._react_loop_events(
             messages, tool_schemas, tenant_id,
             context=context, user_message=message, media=media,
+            metadata=metadata, request_tools=request_tools,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
                 final_response = exec_data.get("final_response", "")
             yield event
 
-        # Post-process: momex save, guardrails output, hooks
+        # Step 8: Map loop results -> AgentResult
         pending_approvals = exec_data.get("pending_approvals", [])
         result_status = exec_data.get("result_status")
+
         if pending_approvals:
             status = AgentStatus.WAITING_FOR_APPROVAL
         elif result_status == "WAITING_FOR_INPUT":
             status = AgentStatus.WAITING_FOR_INPUT
         else:
             status = AgentStatus.COMPLETED
+
+        result_metadata = {
+            "react_turns": exec_data.get("turns", 0),
+            "token_usage": exec_data.get("token_usage", {}),
+            "duration_ms": exec_data.get("duration_ms", 0),
+            "tool_calls_count": exec_data.get("tool_calls_count", 0),
+            "total_tool_count": len(tool_schemas),
+        }
+
+        # Carry conditional notification from notify_user tool
+        if context.get("cron_notification"):
+            result_metadata["cron_notification"] = context["cron_notification"]
+
         result = AgentResult(
             agent_type=self.__class__.__name__,
             status=status,
             raw_message=final_response,
+            metadata=result_metadata,
         )
+
+        if pending_approvals:
+            result.metadata["pending_approvals"] = [
+                {
+                    "agent_name": a.agent_name,
+                    "action_summary": a.action_summary,
+                    "details": a.details,
+                    "options": a.options,
+                }
+                for a in pending_approvals
+            ]
+
+        # Expose tool call records to post-process hooks
         tool_calls = exec_data.get("tool_calls", [])
         context["tool_calls"] = tool_calls
+
+        # Persist tool call history
         await self._save_tool_call_history(tenant_id, tool_calls)
-        await self.post_process(result, context)
+
+        # Step 9: Post-process
+        result = await self.post_process(result, context)
+        yield AgentEvent(type=EventType.EXECUTION_END, data=result)
 
     # ==========================================================================
-    # REACT LOOP
+    # REACT LOOP — see react_loop.py (ReactLoopMixin)
+    # LLM CALLS  — see llm_manager.py (LLMManagerMixin)
+    # TOOLS      — see tool_manager.py (ToolManagerMixin)
     # ==========================================================================
-
-    async def _react_loop_events(
-        self,
-        messages: List[Dict[str, Any]],
-        tool_schemas: List[Dict[str, Any]],
-        tenant_id: str,
-        first_turn_tool_choice: Any = "auto",
-        retry_with_required_on_empty: bool = False,
-        context: Optional[Dict[str, Any]] = None,
-        user_message: str = "",
-        media: Optional[List[Dict[str, Any]]] = None,
-    ) -> AsyncIterator[AgentEvent]:
-        """Unified ReAct loop implementation yielding streaming events.
-
-        Both stream_message() and handle_message() delegate to this single
-        implementation, eliminating the previous code duplication between
-        the inline stream_message loop and react_loop().
-
-        The final EXECUTION_END event carries all metadata (final_response,
-        pending_approvals, token_usage, tool_calls records, etc.) so callers
-        can build AgentResult or persist to memory as needed.
-        """
-        # --- Change A: Context window pre-flight guard ---
-        CONTEXT_HARD_MIN = 16_000
-        CONTEXT_WARN_BELOW = 32_000
-        context_tokens = getattr(self.llm_client, 'context_window', 128_000)
-        if context_tokens < CONTEXT_HARD_MIN:
-            yield AgentEvent(
-                type=EventType.ERROR,
-                data={"message": f"Model context window too small: {context_tokens} tokens (minimum: {CONTEXT_HARD_MIN})"},
-            )
-            return
-        if context_tokens < CONTEXT_WARN_BELOW:
-            logger.warning(f"Low context window: {context_tokens} tokens")
-
-        start_time = time.monotonic()
-        turn = 0
-        all_tool_records: List[ToolCallRecord] = []
-        total_usage = TokenUsage()
-        pending_approvals = []
-        final_response = ""
-        result_status = None
-        _recent_tool_names: List[str] = []  # Change E: watchdog loop detection
-
-        logger.info(f"[ReAct] tenant={tenant_id}")
-
-        yield AgentEvent(
-            type=EventType.EXECUTION_START,
-            data={"tenant_id": tenant_id},
-        )
-
-        # Model routing: classify once before the loop, reuse for all turns.
-        routed_llm_client = None
-        routing_score = -1
-        if self._model_router:
-            try:
-                from ..llm.router import RoutingDecision
-                decision = await self._model_router.route(messages)
-                routing_score = decision.score
-                routed_llm_client = self._model_router.registry.get(decision.provider)
-                if routed_llm_client:
-                    logger.info(
-                        f"[ReAct] ModelRouter selected provider='{decision.provider}' "
-                        f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
-                    )
-            except Exception as e:
-                logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
-
-        # Enable reasoning for complex requests on the first turn
-        enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
-        if enable_reasoning:
-            logger.info(f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})")
-
-        # ── Planning phase ──
-        enable_planning = routing_score >= self._react_config.planning_score_threshold
-
-        # Case 1: Pending plan from previous turn — user is responding to it
-        if self._pending_plan and context:
-            pending_plan_text = self._format_plan_text(self._pending_plan)
-            self._pending_plan = None  # consumed
-            logger.info("[ReAct] Pending plan found, injecting into prompt for LLM to handle")
-            messages = await self._build_llm_messages(
-                context, user_message, pending_plan=pending_plan_text,
-            )
-            enable_planning = False  # don't re-plan
-
-        # Case 2: New complex request — generate plan and present to user
-        elif enable_planning:
-            logger.info(f"[ReAct] Planning phase triggered (score={routing_score})")
-            try:
-                plan_messages = await self._build_llm_messages(
-                    context, user_message, include_planning=True,
-                )
-                plan_schemas = [GENERATE_PLAN_SCHEMA, COMPLETE_TASK_SCHEMA]
-                plan_response = await self._llm_call_with_retry(
-                    plan_messages, plan_schemas, tool_choice="auto",
-                    llm_client_override=routed_llm_client,
-                )
-                plan_data = self._extract_plan_from_response(plan_response)
-                if plan_data and self._react_config.planning_requires_approval:
-                    # Present plan to user, pause execution
-                    plan_text = self._format_plan_text(plan_data)
-                    friendly = self._format_plan_for_user(plan_data)
-                    self._pending_plan = plan_data
-                    logger.info(f"[ReAct] Plan generated, awaiting approval: {plan_data.get('goal', '')}")
-                    yield AgentEvent(
-                        type=EventType.PLAN_GENERATED,
-                        data={"plan": plan_data, "plan_text": plan_text},
-                    )
-                    # End this turn — return plan as the response
-                    duration_ms = int((time.monotonic() - start_time) * 1000)
-                    yield AgentEvent(
-                        type=EventType.EXECUTION_END,
-                        data={
-                            "final_response": friendly,
-                            "result_status": "WAITING_FOR_APPROVAL",
-                            "turns": 0,
-                            "tool_calls": [],
-                            "token_usage": {"input_tokens": 0, "output_tokens": 0},
-                            "duration_ms": duration_ms,
-                            "pending_approvals": [],
-                        },
-                    )
-                    return  # stop the generator — user needs to respond
-
-                elif plan_data:
-                    # Auto-execute without approval
-                    plan_text = self._format_plan_text(plan_data)
-                    yield AgentEvent(
-                        type=EventType.PLAN_GENERATED,
-                        data={"plan": plan_data, "plan_text": plan_text},
-                    )
-                    logger.info(f"[ReAct] Plan auto-approved: {plan_data.get('goal', '')}")
-                    messages = await self._build_llm_messages(
-                        context, user_message, approved_plan=plan_text,
-                    )
-                else:
-                    logger.info("[ReAct] LLM did not generate a plan, proceeding directly")
-            except Exception as e:
-                logger.warning(f"[ReAct] Planning phase failed, proceeding without plan: {e}")
-
-        for turn in range(1, self._react_config.max_turns + 1):
-            # Context guard with summarization
-            messages = await self._summarize_and_trim(messages)
-
-            # Change B: Transcript repair before LLM call
-            messages = repair_transcript(messages)
-
-            # LLM call
-            try:
-                tool_choice = first_turn_tool_choice if turn == 1 else "auto"
-                # Enable reasoning only on the first turn for complex requests
-                extra_kwargs = {}
-                if enable_reasoning and turn == 1:
-                    extra_kwargs["reasoning_effort"] = self._react_config.reasoning_effort
-                # Pass images only on the first turn
-                if media and turn == 1:
-                    extra_kwargs["media"] = media
-                response = await self._llm_call_with_retry(
-                    messages, tool_schemas, tool_choice=tool_choice,
-                    llm_client_override=routed_llm_client,
-                    **extra_kwargs,
-                )
-            except Exception as e:
-                yield AgentEvent(
-                    type=EventType.ERROR,
-                    data={"error": str(e), "error_type": type(e).__name__},
-                )
-                return
-
-            # Accumulate token usage
-            usage = getattr(response, "usage", None)
-            if usage:
-                total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
-                total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
-
-            tool_calls = response.tool_calls
-
-            # No tool calls → LLM forgot to call complete_task.
-            # Retry up to max_complete_task_retries times with tool_choice="required".
-            if not tool_calls:
-                max_retries = self._react_config.max_complete_task_retries
-                for retry in range(1, max_retries + 1):
-                    grace_msg = (
-                        "You must call the `complete_task` tool with your final "
-                        "response in the `result` parameter to finish. Do not "
-                        "respond with plain text. Call `complete_task` now."
-                    )
-                    logger.warning(
-                        f"[ReAct] turn={turn} no tool calls, "
-                        f"grace retry {retry}/{max_retries}"
-                    )
-                    messages.append(self._assistant_message_from_response(response))
-                    messages.append({"role": "user", "content": grace_msg})
-                    try:
-                        response = await self._llm_call_with_retry(
-                            messages, tool_schemas, tool_choice="required",
-                            llm_client_override=routed_llm_client,
-                        )
-                    except Exception as e:
-                        yield AgentEvent(
-                            type=EventType.ERROR,
-                            data={"error": str(e), "error_type": type(e).__name__},
-                        )
-                        return
-                    usage_retry = getattr(response, "usage", None)
-                    if usage_retry:
-                        total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
-                        total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
-                    tool_calls = response.tool_calls
-                    if tool_calls:
-                        break  # success — proceed to tool execution
-
-                # Exhausted all retries — ask LLM to produce a user-friendly
-                # error message (no tools, so it can only return text).
-                if not tool_calls:
-                    logger.error(
-                        f"[ReAct] turn={turn} exhausted {max_retries} "
-                        f"grace retries, LLM still did not call complete_task"
-                    )
-                    messages.append(self._assistant_message_from_response(response))
-                    messages.append({
-                        "role": "user",
-                        "content": (
-                            "There was an internal issue processing your request. "
-                            "Generate a short, friendly apology to the user in "
-                            "their language, and suggest they try again later."
-                        ),
-                    })
-                    try:
-                        fallback_resp = await self._llm_call_with_retry(
-                            messages, tool_schemas=[], tool_choice=None,
-                            llm_client_override=routed_llm_client,
-                        )
-                        final_response = (
-                            getattr(fallback_resp, "content", None)
-                            or fallback_resp.choices[0].message.content
-                            or "Sorry, something went wrong. Please try again later."
-                        )
-                    except Exception:
-                        final_response = "Sorry, something went wrong. Please try again later."
-                    self._audit.log_react_turn(
-                        turn=turn, tool_calls=[], final_answer=True,
-                        tenant_id=tenant_id,
-                    )
-                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
-                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    return
-
-            if tool_calls:
-                # Append assistant message with tool_calls
-                messages.append(self._assistant_message_from_response(response))
-
-                # ----------------------------------------------------------
-                # Intercept complete_task: handle synchronously, skip execution
-                # ----------------------------------------------------------
-                complete_task_result: Optional[CompleteTaskResult] = None
-                remaining_tool_calls = []
-                for tc in tool_calls:
-                    if tc.name == COMPLETE_TASK_TOOL_NAME:
-                        try:
-                            _ct_args = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
-                        except (json.JSONDecodeError, TypeError):
-                            _ct_args = {}
-                        _ct_text = _ct_args.get("result", "")
-                        if _ct_text:
-                            complete_task_result = CompleteTaskResult(result=_ct_text)
-                            messages.append(self._build_tool_result_message(tc.id, "Task completed."))
-                            all_tool_records.append(ToolCallRecord(
-                                name=COMPLETE_TASK_TOOL_NAME,
-                                args_summary={"result": _ct_text[:100]},
-                                duration_ms=0, success=True,
-                                result_status="COMPLETED",
-                                result_chars=len(_ct_text),
-                            ))
-                            logger.info(f"[ReAct] turn={turn} complete_task called ({len(_ct_text)} chars)")
-                        else:
-                            # Missing result — append error, let LLM retry
-                            messages.append(self._build_tool_result_message(
-                                tc.id,
-                                'Error: "result" argument is required for complete_task.',
-                                is_error=True,
-                            ))
-                            remaining_tool_calls.append(tc)
-                    else:
-                        remaining_tool_calls.append(tc)
-
-                # Pure complete_task with no other tools — break immediately
-                if complete_task_result and not remaining_tool_calls:
-                    final_response = complete_task_result.result
-                    self._audit.log_react_turn(
-                        turn=turn, tool_calls=[COMPLETE_TASK_TOOL_NAME],
-                        final_answer=True, tenant_id=tenant_id,
-                    )
-                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
-                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    break
-
-                # Use remaining tools for execution (or original list if complete_task had no result)
-                tool_calls = remaining_tool_calls if remaining_tool_calls else tool_calls
-
-                tool_names = [tc.name for tc in tool_calls]
-                logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
-
-                # Yield tool call start events
-                for tc in tool_calls:
-                    yield AgentEvent(
-                        type=EventType.TOOL_CALL_START,
-                        data={"tool_name": tc.name, "call_id": tc.id},
-                    )
-
-                # Execute all tool calls concurrently
-                tc_batch_start = time.monotonic()
-                results = await asyncio.gather(
-                    *[self._execute_with_timeout(tc, tenant_id) for tc in tool_calls],
-                    return_exceptions=True,
-                )
-                tc_batch_duration = int((time.monotonic() - tc_batch_start) * 1000)
-
-                # Token attribution for this turn
-                turn_tokens = None
-                if usage:
-                    turn_tokens = TokenUsage(
-                        input_tokens=getattr(usage, "prompt_tokens", 0),
-                        output_tokens=getattr(usage, "completion_tokens", 0),
-                    )
-
-                loop_broken = False
-                loop_broken_text = None
-
-                for tc, result in zip(tool_calls, results):
-                    tc_name = tc.name
-                    is_agent = self._is_agent_tool(tc_name)
-                    kind = "agent" if is_agent else "tool"
-
-                    try:
-                        args_summary = tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
-                    except (json.JSONDecodeError, TypeError):
-                        args_summary = {}
-                    args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
-
-                    if isinstance(result, BaseException):
-                        logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
-                        error_text = f"Error executing {tc_name}: {result}"
-                        messages.append(self._build_tool_result_message(tc.id, error_text, is_error=True))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary=args_summary,
-                            duration_ms=tc_batch_duration, success=False,
-                            result_chars=len(error_text), token_attribution=turn_tokens,
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name, "call_id": tc.id,
-                                "kind": kind, "success": False,
-                                "error": str(result),
-                                "result_preview": error_text[:240],
-                            },
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name, args_summary=args_summary,
-                            success=False, duration_ms=tc_batch_duration,
-                            error=str(result), tenant_id=tenant_id,
-                        )
-
-                    elif isinstance(result, AgentToolResult) and not result.completed:
-                        logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
-                        if result.agent:
-                            await self.agent_pool.add_agent(result.agent)
-                        if result.approval_request:
-                            pending_approvals.append(result.approval_request)
-                        waiting_text = result.result_text or "Agent is waiting for input."
-                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                        waiting_status = (
-                            "WAITING_FOR_APPROVAL" if result.approval_request
-                            else "WAITING_FOR_INPUT"
-                        )
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary=args_summary,
-                            duration_ms=tc_batch_duration, success=True,
-                            result_status=waiting_status,
-                            result_chars=len(waiting_text), token_attribution=turn_tokens,
-                        ))
-                        tool_trace = []
-                        if isinstance(result.metadata, dict):
-                            tool_trace = result.metadata.get("tool_trace") or []
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name, "call_id": tc.id,
-                                "kind": "agent", "success": True,
-                                "waiting": True, "status": waiting_status,
-                                "result_preview": waiting_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                        yield AgentEvent(
-                            type=EventType.STATE_CHANGE,
-                            data={"agent_type": tc_name, "status": waiting_status},
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name, args_summary=args_summary,
-                            success=True, duration_ms=tc_batch_duration,
-                            tenant_id=tenant_id,
-                        )
-                        loop_broken = True
-                        loop_broken_text = waiting_text
-
-                    else:
-                        if isinstance(result, AgentToolResult):
-                            result_text = result.result_text
-                            r_meta = result.metadata if isinstance(result.metadata, dict) else {}
-                            tool_trace = r_meta.get("tool_trace") or []
-                        else:
-                            result_text = str(result) if result is not None else ""
-                            tool_trace = []
-                        result_chars_original = len(result_text)
-                        # Change C: Hard cap on tool result size
-                        result_text = self._cap_tool_result(result_text)
-                        result_text = self._context_manager.truncate_tool_result(result_text)
-                        # Change D: Context isolation for agent-tools
-                        if is_agent and len(result_text) > 2000:
-                            result_text = result_text[:1500] + "\n...[full result available in agent context]"
-                        logger.info(f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars)")
-                        messages.append(self._build_tool_result_message(tc.id, result_text))
-                        all_tool_records.append(ToolCallRecord(
-                            name=tc_name, args_summary=args_summary,
-                            duration_ms=tc_batch_duration, success=True,
-                            result_status="COMPLETED" if isinstance(result, AgentToolResult) else None,
-                            result_chars=result_chars_original, token_attribution=turn_tokens,
-                        ))
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name, "call_id": tc.id,
-                                "kind": kind, "success": True,
-                                "result_preview": result_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name, args_summary=args_summary,
-                            success=True, duration_ms=tc_batch_duration,
-                            tenant_id=tenant_id,
-                        )
-
-                # complete_task was called alongside other tools — use its result
-                if complete_task_result:
-                    final_response = complete_task_result.result
-                    self._audit.log_react_turn(
-                        turn=turn, tool_calls=tool_names + [COMPLETE_TASK_TOOL_NAME],
-                        final_answer=True, tenant_id=tenant_id,
-                    )
-                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
-                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    break
-
-                # Change E: Watchdog loop detection
-                for tn in tool_names:
-                    _recent_tool_names.append(tn)
-                if len(_recent_tool_names) >= 3:
-                    last_3 = _recent_tool_names[-3:]
-                    if len(set(last_3)) == 1:
-                        logger.warning(
-                            f"[ReAct] Loop detected: {last_3[0]} called 3 times "
-                            f"consecutively, breaking ReAct loop"
-                        )
-                        final_response = (
-                            f"I noticed I was repeating the same action ({last_3[0]}) "
-                            f"without making progress. Let me provide what I have so far."
-                        )
-                        yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
-                        yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                        break
-
-                # Audit: log turn summary
-                self._audit.log_react_turn(
-                    turn=turn,
-                    tool_calls=tool_names,
-                    final_answer=False,
-                    tenant_id=tenant_id,
-                )
-
-                if loop_broken:
-                    final_response = loop_broken_text or ""
-                    result_status = "WAITING_FOR_APPROVAL" if pending_approvals else "WAITING_FOR_INPUT"
-                    if pending_approvals:
-                        pending_approvals = collect_batch_approvals(pending_approvals)
-                    if loop_broken_text:
-                        yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": loop_broken_text})
-                        yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    break
-
-                # Agent passthrough: single completed agent-tool skips LLM re-summary
-                if (
-                    len(tool_calls) == 1
-                    and self._is_agent_tool(tool_calls[0].name)
-                    and isinstance(results[0], AgentToolResult)
-                    and results[0].completed
-                ):
-                    agent_text = results[0].result_text
-                    logger.info(
-                        f"[ReAct] turn={turn} agent_passthrough "
-                        f"({len(agent_text)} chars from {tool_calls[0].name})"
-                    )
-                    final_response = agent_text
-                    yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-                    yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": agent_text})
-                    yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                    break
-
-        else:
-            # max_turns reached: ask LLM for summary without tools
-            messages.append({
-                "role": "user",
-                "content": (
-                    "You have used all available turns. Please provide your best "
-                    "final answer based on the information gathered so far."
-                ),
-            })
-            try:
-                response = await self._llm_call_with_retry(
-                    messages, tool_schemas=None,
-                    llm_client_override=routed_llm_client,
-                )
-                final_text = response.content or ""
-                usage = getattr(response, "usage", None)
-                if usage:
-                    total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
-                    total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
-            except Exception:
-                final_text = "I was unable to complete the request within the allowed turns."
-
-            final_response = final_text
-            yield AgentEvent(type=EventType.MESSAGE_START, data={"turn": turn})
-            yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_text})
-            yield AgentEvent(type=EventType.MESSAGE_END, data={})
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
-
-        yield AgentEvent(
-            type=EventType.EXECUTION_END,
-            data={
-                "duration_ms": duration_ms,
-                "turns": turn,
-                "tool_calls_count": len(all_tool_records),
-                "final_response": final_response,
-                "result_status": result_status,
-                "pending_approvals": pending_approvals,
-                "token_usage": {
-                    "input_tokens": total_usage.input_tokens,
-                    "output_tokens": total_usage.output_tokens,
-                },
-                "tool_calls": [dataclasses.asdict(r) for r in all_tool_records],
-            },
-        )
-
-    async def _save_tool_call_history(
-        self, tenant_id: str, tool_calls: list,
-    ) -> None:
-        """Persist tool call records to the database (fire-and-forget)."""
-        if not self.database or not tool_calls:
-            return
-        try:
-            from ..builtin_agents.tools.action_history import save_tool_call_history
-            await save_tool_call_history(self.database, tenant_id, tool_calls)
-        except Exception as e:
-            logger.warning(f"Failed to save tool call history: {e}")
-
-    # ==========================================================================
-    # REACT LOOP HELPERS
-    # ==========================================================================
-
-    async def _llm_call_with_retry(
-        self,
-        messages: List[Dict[str, Any]],
-        tool_schemas: Optional[List[Dict[str, Any]]],
-        tool_choice: Optional[Any] = None,
-        llm_client_override: Optional[Any] = None,
-        **extra_kwargs,
-    ) -> Any:
-        """LLM call with error recovery and model fallback chain.
-
-        Recovery strategy:
-        - RateLimitError -> exponential backoff
-        - ContextOverflowError -> three-step recovery (trim -> truncate_all -> force_trim)
-        - AuthError -> raise immediately
-        - TimeoutError -> retry once
-
-        If all retries on the primary client are exhausted, tries each
-        fallback provider from ``ReactLoopConfig.fallback_providers`` in order.
-
-        Args:
-            tool_choice: Override for tool_choice param ("auto", "required", "none").
-                         If None, the LLM client uses its default ("auto").
-            llm_client_override: Optional LLM client to use instead of
-                ``self.llm_client``.  Set by the model router when
-                complexity-based routing is active.
-        """
-        client = llm_client_override or self.llm_client
-        primary_error = await self._llm_call_single_client(
-            client, messages, tool_schemas, tool_choice, **extra_kwargs,
-        )
-        if not isinstance(primary_error, Exception):
-            return primary_error  # success — it's an LLMResponse
-
-        # Primary failed — try fallback providers
-        fallback_providers = self._react_config.fallback_providers
-        if fallback_providers and self._model_router:
-            registry = self._model_router.registry
-            for provider_name in fallback_providers:
-                fallback_client = registry.get(provider_name)
-                if fallback_client is None or fallback_client is client:
-                    continue
-                logger.warning(f"[LLM] Primary failed, trying fallback provider: {provider_name}")
-                result = await self._llm_call_single_client(
-                    fallback_client, messages, tool_schemas, tool_choice, **extra_kwargs,
-                )
-                if not isinstance(result, Exception):
-                    return result
-                logger.warning(f"[LLM] Fallback provider {provider_name} also failed: {result}")
-
-        raise primary_error
-
-    async def _llm_call_single_client(
-        self,
-        client: Any,
-        messages: List[Dict[str, Any]],
-        tool_schemas: Optional[List[Dict[str, Any]]],
-        tool_choice: Optional[Any] = None,
-        **extra_kwargs,
-    ) -> Any:
-        """Try a single LLM client with retries.
-
-        Returns the LLMResponse on success, or the last Exception on failure.
-        """
-        last_error: Optional[Exception] = None
-        for attempt in range(self._react_config.llm_max_retries + 1):
-            try:
-                kwargs: Dict[str, Any] = {"messages": messages, **extra_kwargs}
-                if tool_schemas:
-                    kwargs["tools"] = tool_schemas
-                    if tool_choice:
-                        kwargs["tool_choice"] = tool_choice
-                    logger.info(f"[LLM] Sending {len(tool_schemas)} tools, tool_choice={tool_choice or 'auto'}, sample: {json.dumps(tool_schemas[0], ensure_ascii=False)[:200]}")
-                else:
-                    logger.info("[LLM] Sending request with NO tools")
-                response = await client.chat_completion(**kwargs)
-                # Debug: log what came back
-                tc = getattr(response, 'tool_calls', None)
-                sr = getattr(response, 'stop_reason', None)
-                content_len = len(getattr(response, 'content', '') or '')
-                logger.info(f"[LLM] Response: stop_reason={sr}, tool_calls={len(tc) if tc else 0}, content_len={content_len}")
-                return response
-
-            except Exception as e:
-                last_error = e
-                error_name = type(e).__name__.lower()
-
-                # Auth errors: raise immediately (no fallback can help)
-                if "auth" in error_name or "authentication" in error_name or "permission" in error_name:
-                    raise
-
-                # Rate limit: exponential backoff
-                if "ratelimit" in error_name or "rate_limit" in error_name or "429" in str(e):
-                    delay = self._react_config.llm_retry_base_delay * (2 ** attempt)
-                    logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1})")
-                    await asyncio.sleep(delay)
-                    continue
-
-                # Context overflow: three-step recovery
-                if "context" in error_name or "overflow" in error_name or "token" in error_name or "length" in str(e).lower():
-                    if attempt == 0:
-                        logger.warning("Context overflow, trimming history")
-                        messages = self._context_manager.trim_if_needed(messages)
-                    elif attempt == 1:
-                        logger.warning("Context overflow persists, truncating all tool results")
-                        messages = self._context_manager.truncate_all_tool_results(messages)
-                    else:
-                        logger.warning("Context overflow persists, force trimming")
-                        messages = self._context_manager.force_trim(messages)
-                    continue
-
-                # Timeout: retry once
-                if "timeout" in error_name:
-                    if attempt == 0:
-                        logger.warning("LLM timeout, retrying once")
-                        continue
-                    break  # let fallback chain handle it
-
-                # Unknown error: retry with backoff
-                if attempt < self._react_config.llm_max_retries:
-                    delay = self._react_config.llm_retry_base_delay * (2 ** attempt)
-                    logger.warning(f"LLM call failed ({e}), retrying in {delay}s")
-                    await asyncio.sleep(delay)
-                    continue
-
-                break  # exhausted retries, let fallback chain handle it
-
-        return last_error  # type: ignore[return-value]
 
     # ── Planning helpers ──
 
@@ -1415,188 +632,6 @@ class Orchestrator:
         lines.append("")
         lines.append("Ready to execute. You can approve, modify, or cancel.")
         return "\n".join(lines)
-
-    async def _execute_with_timeout(self, tool_call: Any, tenant_id: str) -> Any:
-        """Execute a single tool/agent-tool with timeout."""
-        tool_name = tool_call.name
-        is_agent = self._is_agent_tool(tool_name)
-        timeout = (
-            self._react_config.agent_tool_execution_timeout
-            if is_agent
-            else self._react_config.tool_execution_timeout
-        )
-
-        try:
-            return await asyncio.wait_for(
-                self._execute_single(tool_call, tenant_id),
-                timeout=timeout,
-            )
-        except asyncio.TimeoutError:
-            kind = "Agent-Tool" if is_agent else "Tool"
-            raise TimeoutError(f"{kind} '{tool_name}' timed out after {timeout}s")
-
-    async def _execute_single(self, tool_call: Any, tenant_id: str) -> Any:
-        """Dispatch to agent-tool or regular tool execution."""
-        tool_name = tool_call.name
-        try:
-            args = tool_call.arguments if isinstance(tool_call.arguments, dict) else json.loads(tool_call.arguments)
-        except (json.JSONDecodeError, TypeError) as e:
-            return (
-                f"Error: Failed to parse arguments for tool '{tool_name}': {e}. "
-                "Please retry with valid JSON arguments."
-            )
-
-        if self._is_agent_tool(tool_name):
-            # Agent-Tool execution
-            task_instruction = args.pop("task_instruction", "")
-            return await execute_agent_tool(
-                self,
-                agent_type=tool_name,
-                tenant_id=tenant_id,
-                tool_call_args=args,
-                task_instruction=task_instruction,
-            )
-        else:
-            # Builtin tool execution
-            tool = next((t for t in getattr(self, 'builtin_tools', []) if t.name == tool_name), None)
-            if not tool:
-                return f"Error: Tool '{tool_name}' not found"
-
-            context = AgentToolContext(
-                tenant_id=tenant_id,
-                credentials=self.credential_store,
-                metadata=self._build_tool_metadata(),
-            )
-            return await tool.executor(args, context)
-
-    def _is_agent_tool(self, tool_name: str) -> bool:
-        """Check if tool_name corresponds to a registered agent."""
-        if not self._agent_registry:
-            return False
-        return self._agent_registry.get_agent_class(tool_name) is not None
-
-    def _build_tool_metadata(self) -> dict:
-        """Build metadata dict for regular tool execution context."""
-        # Start with request-level metadata (contains location, timezone, etc.)
-        meta = dict(self._current_metadata)
-        if self.database:
-            from onevalet.builtin_agents.digest.important_dates_repo import ImportantDatesRepository
-            meta["important_dates_store"] = ImportantDatesRepository(self.database)
-            meta["database"] = self.database
-        return meta
-
-    HARD_MAX_TOOL_RESULT_CHARS = 400_000
-
-    def _cap_tool_result(self, result_text: str) -> str:
-        """Hard cap on tool result size to prevent context window overflow."""
-        if len(result_text) <= self.HARD_MAX_TOOL_RESULT_CHARS:
-            return result_text
-        cut = self.HARD_MAX_TOOL_RESULT_CHARS
-        newline_pos = result_text.rfind("\n", int(cut * 0.8), cut)
-        if newline_pos > 0:
-            cut = newline_pos
-        logger.warning(
-            f"[ReAct] Tool result truncated: {len(result_text)} -> {cut} chars"
-        )
-        return result_text[:cut] + "\n\n[truncated - result exceeded size limit]"
-
-    async def _summarize_and_trim(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Summarize old messages via LLM before trimming, preserving context.
-
-        If context is within threshold, returns messages unchanged.
-        Otherwise, splits messages into old/recent, summarizes old via LLM,
-        and replaces them with a single summary message.
-        Falls back to simple trim if summarization fails.
-        """
-        split = self._context_manager.split_for_summarization(messages)
-        if split is None:
-            return messages
-
-        system_msgs, old_msgs, recent_msgs = split
-
-        # Build a compact representation of old messages for summarization
-        old_text_parts = []
-        for msg in old_msgs:
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            if isinstance(content, str) and content:
-                # Truncate very long individual messages for the summary request
-                if len(content) > 500:
-                    content = content[:497] + "..."
-                old_text_parts.append(f"{role}: {content}")
-
-        if not old_text_parts:
-            return self._context_manager.trim_if_needed(messages)
-
-        old_text = "\n".join(old_text_parts)
-        # Cap the input to the summarizer to avoid nested overflow
-        if len(old_text) > 8000:
-            old_text = old_text[:8000] + "\n...[truncated]"
-
-        try:
-            summary_response = await self.llm_client.chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Summarize the following conversation excerpt in 2-4 sentences. "
-                            "Preserve key facts, decisions, entities, and user preferences. "
-                            "Be concise but retain actionable context."
-                        ),
-                    },
-                    {"role": "user", "content": old_text},
-                ],
-            )
-            summary = (summary_response.content or "").strip()
-            if summary:
-                logger.info(
-                    f"[Context] Summarized {len(old_msgs)} old messages "
-                    f"({len(old_text)} chars -> {len(summary)} chars)"
-                )
-                return self._context_manager.build_summarized_messages(
-                    system_msgs, summary, recent_msgs,
-                )
-        except Exception as e:
-            logger.warning(f"[Context] Summarization failed, falling back to trim: {e}")
-
-        return self._context_manager.trim_if_needed(messages)
-
-    def _build_tool_result_message(
-        self,
-        tool_call_id: str,
-        content: str,
-        is_error: bool = False,
-    ) -> Dict[str, Any]:
-        """Build a tool result message for the LLM messages list."""
-        if is_error:
-            content = f"[ERROR] {content}"
-        return {
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": content,
-        }
-
-    @staticmethod
-    def _assistant_message_from_response(response: Any) -> Dict[str, Any]:
-        """Convert LLMResponse to dict for the messages list."""
-        msg: Dict[str, Any] = {
-            "role": "assistant",
-            "content": getattr(response, "content", None),
-        }
-        tool_calls = getattr(response, "tool_calls", None)
-        if tool_calls:
-            msg["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.name,
-                        "arguments": json.dumps(tc.arguments) if isinstance(tc.arguments, dict) else tc.arguments,
-                    },
-                }
-                for tc in tool_calls
-            ]
-        return msg
 
     # ==========================================================================
     # MESSAGE BUILDING
@@ -1876,59 +911,6 @@ class Orchestrator:
 
         return "\n".join(lines)
 
-    # Domain-based routing is now driven by @valet(domain=...) on each agent.
-    # See AgentRegistry.get_domain_agent_tool_schemas() for the filtering logic.
-
-    async def _build_tool_schemas(
-        self,
-        tenant_id: str,
-        domains: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Build combined tool schemas: builtin tools + domain-filtered agent-tools.
-
-        Args:
-            tenant_id: Tenant identifier for credential filtering.
-            domains: List of domains to load agent tools for.
-                If ``None`` or contains ``"all"``, loads all agent tools.
-        """
-        schemas: List[Dict[str, Any]] = []
-
-        if not self._agent_registry:
-            return schemas
-
-        # Builtin tools (orchestrator-level, always included)
-        for tool in getattr(self, 'builtin_tools', []):
-            schemas.append(tool.to_openai_schema())
-
-        # Agent-tools: domain-filtered
-        if domains and "all" not in domains:
-            agent_tool_schemas = await self._agent_registry.get_domain_agent_tool_schemas(
-                domains=domains,
-                tenant_id=tenant_id,
-                credential_store=self.credential_store,
-            )
-        else:
-            agent_tool_schemas = await self._agent_registry.get_all_agent_tool_schemas(
-                tenant_id=tenant_id,
-                credential_store=self.credential_store,
-            )
-
-        schemas.extend(agent_tool_schemas)
-
-        # Always inject complete_task as the last tool
-        schemas.append(COMPLETE_TASK_SCHEMA)
-
-        # Apply tool policy filter if configured
-        if self._tool_policy_filter:
-            schemas = self._tool_policy_filter.filter_tools(schemas, tenant_id=tenant_id)
-
-        logger.info(
-            f"[Tools] {len(schemas)} total available "
-            f"(agents={len(agent_tool_schemas)}, domains={domains or ['all']})"
-        )
-
-        return schemas
-
     # ==================================================================
     # INTENT ANALYSIS & DAG EXECUTION
     # ==================================================================
@@ -2107,12 +1089,13 @@ class Orchestrator:
                 tool_schemas = await self._build_tool_schemas(
                     tenant_id, domains=[st.domain],
                 )
-                messages = await self._build_llm_messages(context, augmented_message)
+                task_context = copy.deepcopy(context)
+                messages = await self._build_llm_messages(task_context, augmented_message)
 
                 exec_data: Dict[str, Any] = {}
                 async for event in self._react_loop_events(
                     messages, tool_schemas, tenant_id,
-                    context=context, user_message=augmented_message,
+                    context=task_context, user_message=augmented_message,
                 ):
                     if event.type == EventType.EXECUTION_END:
                         exec_data = event.data
@@ -2149,12 +1132,13 @@ class Orchestrator:
                     t_schemas = await self._build_tool_schemas(
                         tenant_id, domains=[sub_task.domain],
                     )
-                    msgs = await self._build_llm_messages(context, aug_msg)
+                    task_context = copy.deepcopy(context)
+                    msgs = await self._build_llm_messages(task_context, aug_msg)
                     exec_d: Dict[str, Any] = {}
                     events: list = []
                     async for ev in self._react_loop_events(
                         msgs, t_schemas, tenant_id,
-                        context=context, user_message=aug_msg,
+                        context=task_context, user_message=aug_msg,
                     ):
                         if ev.type == EventType.EXECUTION_END:
                             exec_d = ev.data
@@ -2314,360 +1298,6 @@ class Orchestrator:
             "\n\n".join(predecessor_context)
             + f"\n\nBased on the above, please: {sub_task.description}"
         )
-
-    @staticmethod
-    def _tool_name_from_schema(schema: Dict[str, Any]) -> Optional[str]:
-        """Extract function name from an OpenAI tool schema."""
-        if not isinstance(schema, dict):
-            return None
-        function_part = schema.get("function")
-        if not isinstance(function_part, dict):
-            return None
-        name = function_part.get("name")
-        return name if isinstance(name, str) else None
-
-    def _filter_tool_schemas(
-        self,
-        tool_schemas: List[Dict[str, Any]],
-        preferred_names: List[str],
-    ) -> List[Dict[str, Any]]:
-        """Filter tool schemas by a preferred name list while preserving order."""
-        if not preferred_names:
-            return tool_schemas
-        name_set = set(preferred_names)
-        filtered = [
-            schema for schema in tool_schemas
-            if self._tool_name_from_schema(schema) in name_set
-        ]
-        return filtered
-
-    def _score_tool_relevance(self, user_message: str, schema: Dict[str, Any]) -> float:
-        """Generic lexical relevance score for fallback tool narrowing."""
-        name = (self._tool_name_from_schema(schema) or "").lower()
-        description = str(schema.get("function", {}).get("description", "") or "").lower()
-        user_text = (user_message or "").lower()
-
-        user_tokens = set(re.findall(r"[a-z0-9_]+", user_text))
-        tool_tokens = set(re.findall(r"[a-z0-9_]+", f"{name} {description}"))
-        overlap = user_tokens.intersection(tool_tokens)
-
-        score = float(len(overlap))
-        if name and name in user_text:
-            score += 2.0
-        if self._is_agent_tool(name):
-            score += 0.5
-        return score
-
-    def _choose_fallback_tools(
-        self,
-        user_message: str,
-        tool_schemas: List[Dict[str, Any]],
-        max_tools: int = 8,
-    ) -> List[Dict[str, Any]]:
-        """Choose a bounded fallback subset when router output is missing/ambiguous."""
-        if not tool_schemas:
-            return []
-
-        scored: List[tuple[float, Dict[str, Any]]] = []
-        for schema in tool_schemas:
-            scored.append((self._score_tool_relevance(user_message, schema), schema))
-        scored.sort(key=lambda item: item[0], reverse=True)
-
-        picked = [schema for score, schema in scored if score > 0][:max_tools]
-        if not picked:
-            picked = tool_schemas[:max_tools]
-
-        if not any(self._is_agent_tool(self._tool_name_from_schema(s) or "") for s in picked):
-            for schema in tool_schemas:
-                name = self._tool_name_from_schema(schema) or ""
-                if self._is_agent_tool(name):
-                    if schema not in picked:
-                        if len(picked) >= max_tools:
-                            picked = picked[:-1]
-                        picked.append(schema)
-                    break
-
-        return picked
-
-    @staticmethod
-    def _extract_json_object(text: str) -> Optional[Dict[str, Any]]:
-        """Extract first JSON object from model output."""
-        raw = (text or "").strip()
-        if not raw:
-            return None
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            pass
-        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if not m:
-            return None
-        try:
-            parsed = json.loads(m.group(0))
-            return parsed if isinstance(parsed, dict) else None
-        except json.JSONDecodeError:
-            return None
-
-    async def _plan_tool_policy(
-        self,
-        user_message: str,
-        tool_schemas: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        """Plan tool policy dynamically with a router LLM call (no hardcoded intent map).
-
-        The router sees all domain-filtered agent tools and selects the most
-        relevant ones for the current user message.
-        """
-        tool_names = [
-            self._tool_name_from_schema(schema)
-            for schema in tool_schemas
-            if self._tool_name_from_schema(schema)
-        ]
-
-        all_known_names = set(tool_names)
-
-        if not all_known_names:
-            return {
-                "intent": "general",
-                "must_use_tools": False,
-                "tool_schemas": tool_schemas,
-                "first_turn_tool_choice": "auto",
-                "retry_with_required_on_empty": False,
-            }
-
-        default_policy = {
-            "intent": "general",
-            "must_use_tools": False,
-            "tool_schemas": tool_schemas,
-            "first_turn_tool_choice": "auto",
-            "retry_with_required_on_empty": False,
-        }
-
-        # Show all available tools to the router
-        tool_lines = []
-        for schema in tool_schemas:
-            name = self._tool_name_from_schema(schema)
-            if not name:
-                continue
-            desc = schema.get("function", {}).get("description", "")
-            tool_lines.append(f"- {name}: {desc}")
-
-        router_messages = [
-            {"role": "system", "content": self._ROUTER_POLICY_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"User message:\n{user_message}\n\n"
-                    f"Available tools:\n" + "\n".join(tool_lines) + "\n\n"
-                    "Return JSON only."
-                ),
-            },
-        ]
-
-        try:
-            router_response = await self.llm_client.chat_completion(messages=router_messages)
-            router_json = self._extract_json_object(router_response.content or "")
-            if not router_json:
-                return default_policy
-        except Exception as e:
-            logger.warning(f"[ToolPolicy] router failed, falling back to auto: {e}")
-            return default_policy
-
-        selected_names_raw = router_json.get("selected_tools", [])
-        selected_names = [
-            str(name)
-            for name in selected_names_raw
-            if isinstance(name, str) and name in all_known_names
-        ]
-
-        must_use_tools = bool(router_json.get("must_use_tools"))
-        reason_code = str(router_json.get("reason_code", "") or "").strip().lower()
-        no_tool_reasons = {
-            "casual_chat",
-            "creative_writing",
-            "language_translation",
-            "text_rewrite",
-            "pure_math",
-        }
-        if not must_use_tools and reason_code not in no_tool_reasons:
-            must_use_tools = True
-
-        force_first_tool = router_json.get("force_first_tool")
-        first_turn_tool_choice: Any = "auto"
-
-        if isinstance(force_first_tool, str) and force_first_tool in all_known_names:
-            selected_schemas = self._filter_tool_schemas(tool_schemas, [force_first_tool])
-            first_turn_tool_choice = {
-                "type": "function",
-                "function": {"name": force_first_tool},
-            }
-            must_use_tools = True
-        elif selected_names:
-            selected_schemas = self._filter_tool_schemas(tool_schemas, selected_names)
-            if must_use_tools:
-                first_turn_tool_choice = "required"
-        elif must_use_tools:
-            selected_schemas = self._choose_fallback_tools(user_message, tool_schemas, max_tools=8)
-            first_turn_tool_choice = "required"
-        else:
-            selected_schemas = tool_schemas
-
-        intent = str(router_json.get("intent", "domain"))
-        return {
-            "intent": intent,
-            "must_use_tools": must_use_tools,
-            "tool_schemas": selected_schemas,
-            "first_turn_tool_choice": first_turn_tool_choice,
-            "retry_with_required_on_empty": must_use_tools,
-        }
-
-    def _build_builtin_tools(self) -> List[Dict[str, Any]]:
-        """Build the orchestrator's builtin tools as AgentTool instances.
-
-        These are lightweight tools the orchestrator calls directly
-        (not via an agent).
-        """
-        from ..builtin_agents.tools.google_search import (
-            google_search_executor, GOOGLE_SEARCH_SCHEMA,
-        )
-        from ..builtin_agents.tools.web_fetch import (
-            web_fetch_executor, WEB_FETCH_SCHEMA,
-        )
-        from ..builtin_agents.tools.important_dates import IMPORTANT_DATES_TOOL_DEFS
-        from ..builtin_agents.tools.user_tools import (
-            get_user_accounts_executor, get_user_profile_executor,
-            GET_USER_ACCOUNTS_SCHEMA, GET_USER_PROFILE_SCHEMA,
-        )
-        from ..builtin_agents.location import (
-            get_user_location_executor, GET_USER_LOCATION_SCHEMA,
-            set_location_reminder_executor, SET_LOCATION_REMINDER_SCHEMA,
-        )
-        from ..builtin_agents.trip_planner.travel_tools import (
-            get_weather,
-        )
-
-        tools: List[AgentTool] = []
-
-        # Google search
-        tools.append(AgentTool(
-            name="google_search",
-            description="Search the web using Google. Returns titles, URLs, and snippets of top results.",
-            parameters=GOOGLE_SEARCH_SCHEMA,
-            executor=google_search_executor,
-            category="web",
-        ))
-
-        # Web fetch
-        tools.append(AgentTool(
-            name="web_fetch",
-            description="Fetch a URL and extract its readable content as text. Use this to read articles, documentation, or any web page. Returns the main content with boilerplate removed.",
-            parameters=WEB_FETCH_SCHEMA,
-            executor=web_fetch_executor,
-            category="web",
-        ))
-
-        # Important dates (6 tools)
-        for td in IMPORTANT_DATES_TOOL_DEFS:
-            tools.append(AgentTool(
-                name=td["name"],
-                description=td["description"],
-                parameters=td["parameters"],
-                executor=td["executor"],
-                category="user",
-            ))
-
-        # User tools
-        tools.append(AgentTool(
-            name="get_user_accounts",
-            description="Get the user's connected accounts (email, calendar). Use this when user asks about their connected accounts.",
-            parameters=GET_USER_ACCOUNTS_SCHEMA,
-            executor=get_user_accounts_executor,
-            category="user",
-        ))
-        tools.append(AgentTool(
-            name="get_user_profile",
-            description="Get the user's profile information (name, email, phone, timezone). Use this when you need to know about the user.",
-            parameters=GET_USER_PROFILE_SCHEMA,
-            executor=get_user_profile_executor,
-            category="user",
-        ))
-
-        # Location tools
-        tools.append(AgentTool(
-            name="get_user_location",
-            description="Get the user's current location (latitude, longitude, and place name). Use when you need the user's precise current location for finding nearby places, calculating distances, or checking proximity.",
-            parameters=GET_USER_LOCATION_SCHEMA,
-            executor=get_user_location_executor,
-            category="location",
-        ))
-        tools.append(AgentTool(
-            name="set_location_reminder",
-            description="Set a location-based reminder that notifies the user when they arrive near a specific place. Use when the user says things like 'remind me to X when I'm near Y' or 'notify me when I get to Z'.",
-            parameters=SET_LOCATION_REMINDER_SCHEMA,
-            executor=set_location_reminder_executor,
-            category="location",
-        ))
-
-        # Weather (reuses the @tool-decorated AgentTool from trip_planner)
-        tools.append(get_weather)
-
-        # Action history - lets LLM recall recent user actions
-        from ..builtin_agents.tools.action_history import (
-            recall_recent_actions_executor, RECALL_RECENT_ACTIONS_SCHEMA,
-        )
-        tools.append(AgentTool(
-            name="recall_recent_actions",
-            description="Look up the user's recent actions and tool executions. Use this when the user asks about what they did recently, past activity, or references a previous action (e.g. 'what did I do yesterday?', 'did my email send?', 'what was that flight I searched?').",
-            parameters=RECALL_RECENT_ACTIONS_SCHEMA,
-            executor=recall_recent_actions_executor,
-            category="user",
-        ))
-
-        return tools
-
-    def _build_notify_user_tool(self, context: Dict[str, Any]):
-        """Build a notify_user tool for conditional cron delivery.
-
-        When a cron job has conditional delivery, this tool is injected into
-        the ReAct loop. The agent calls it ONLY when the monitored condition
-        is met. If the agent never calls it, no notification is sent.
-
-        Returns:
-            (AgentTool, schema_dict) tuple
-        """
-        def make_executor(ctx):
-            async def notify_user_executor(args: dict, tool_context=None) -> str:
-                message = args.get("message", "")
-                if not message:
-                    return "Error: message is required."
-                ctx["cron_notification"] = message
-                return f"Notification queued: {message}"
-            return notify_user_executor
-
-        tool = AgentTool(
-            name="notify_user",
-            description=(
-                "Send a notification to the user. ONLY call this when a monitored "
-                "condition is actually met (e.g. price dropped below threshold, "
-                "weather changed, etc.). If the condition is NOT met, do NOT call "
-                "this tool — just respond normally without notifying."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "message": {
-                        "type": "string",
-                        "description": "The notification message to send to the user",
-                    }
-                },
-                "required": ["message"],
-            },
-            executor=make_executor(context),
-            category="cron",
-        )
-
-        return tool, tool.to_openai_schema()
 
     # ==========================================================================
     # EXTENSION POINTS - Override these in subclasses

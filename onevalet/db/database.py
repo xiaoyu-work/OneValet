@@ -34,10 +34,12 @@ class Database:
         dsn: str,
         min_size: int = 2,
         max_size: int = 10,
+        query_timeout: float = 30.0,
     ):
         self._dsn = dsn
         self._min_size = min_size
         self._max_size = max_size
+        self._query_timeout = query_timeout
         self._pool = None
         self._initialized = False
 
@@ -82,22 +84,26 @@ class Database:
         """Acquire a connection from the pool. Use as async context manager."""
         return self.pool.acquire()
 
-    async def execute(self, query: str, *args: Any) -> str:
+    async def execute(self, query: str, *args: Any, timeout: float = None) -> str:
         """Execute a query and return status string."""
+        t = timeout or self._query_timeout
         async with self.pool.acquire() as conn:
-            return await conn.execute(query, *args)
+            return await conn.execute(query, *args, timeout=t)
 
-    async def fetch(self, query: str, *args: Any) -> List[Any]:
+    async def fetch(self, query: str, *args: Any, timeout: float = None) -> List[Any]:
         """Execute a query and return all rows."""
+        t = timeout or self._query_timeout
         async with self.pool.acquire() as conn:
-            return await conn.fetch(query, *args)
+            return await conn.fetch(query, *args, timeout=t)
 
-    async def fetchrow(self, query: str, *args: Any) -> Optional[Any]:
+    async def fetchrow(self, query: str, *args: Any, timeout: float = None) -> Optional[Any]:
         """Execute a query and return first row."""
+        t = timeout or self._query_timeout
         async with self.pool.acquire() as conn:
-            return await conn.fetchrow(query, *args)
+            return await conn.fetchrow(query, *args, timeout=t)
 
-    async def fetchval(self, query: str, *args: Any) -> Any:
+    async def fetchval(self, query: str, *args: Any, timeout: float = None) -> Any:
         """Execute a query and return first column of first row."""
+        t = timeout or self._query_timeout
         async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, *args)
+            return await conn.fetchval(query, *args, timeout=t)

@@ -207,6 +207,37 @@ def _create_api() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Issue #7: Rate limiting middleware for public endpoints
+    from .rate_limit import RateLimiter
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    _rate_limiter = RateLimiter(
+        requests_per_minute=int(os.getenv("ONEVALET_RATE_LIMIT_RPM", "30")),
+        requests_per_hour=int(os.getenv("ONEVALET_RATE_LIMIT_RPH", "300")),
+    )
+
+    class RateLimitMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            # Only rate limit chat/stream endpoints
+            if request.url.path in ("/chat", "/stream"):
+                # Use API key or IP as client identifier
+                client_id = (
+                    request.headers.get("x-api-key")
+                    or request.headers.get("authorization", "")
+                    or request.client.host if request.client else "unknown"
+                )
+                allowed, info = _rate_limiter.check(client_id)
+                if not allowed:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=429,
+                        content={"error": "Rate limit exceeded", **info},
+                        headers={"Retry-After": str(info.get("retry_after", 60))},
+                    )
+            return await call_next(request)
+
+    _api.add_middleware(RateLimitMiddleware)
+
     # Issue #3: Log warning if no API key is set
     if _API_KEY is None:
         logger.warning(

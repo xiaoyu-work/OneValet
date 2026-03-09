@@ -39,15 +39,14 @@ class AgentToolResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-def _extract_recent_context(orchestrator, tenant_id: str) -> str:
+def _extract_recent_context(request_context: Optional[Dict[str, Any]], tenant_id: str) -> str:
     """Extract a brief summary of recent conversation from context.
 
     Returns a string summarizing the last 3 conversation turns (max 500 chars).
     If no history is available, returns an empty string.
     """
     try:
-        context = getattr(orchestrator, "_current_context", None)
-        history = context.get("conversation_history", []) if context else []
+        history = request_context.get("conversation_history", []) if request_context else []
         if not history:
             return ""
 
@@ -76,6 +75,7 @@ async def execute_agent_tool(
     tenant_id: str,
     tool_call_args: Dict[str, Any],
     task_instruction: str = "",
+    request_context: Optional[Dict[str, Any]] = None,
 ) -> AgentToolResult:
     """Execute an agent as a tool in the ReAct loop."""
     from .approval import build_approval_request
@@ -84,7 +84,7 @@ async def execute_agent_tool(
     handoff = HandoffContext(
         task_summary=task_instruction or f"Execute {agent_type} task",
         known_entities={k: v for k, v in tool_call_args.items() if v is not None},
-        conversation_context=_extract_recent_context(orchestrator, tenant_id),
+        conversation_context=_extract_recent_context(request_context, tenant_id),
         constraints=[],
     )
 
@@ -100,7 +100,7 @@ async def execute_agent_tool(
         if orchestrator.trigger_engine.cron_service:
             enriched_hints["cron_service"] = orchestrator.trigger_engine.cron_service
     # Pass user images to agent tools (e.g. for receipt scanning)
-    current_images = getattr(orchestrator, "_current_user_images", None)
+    current_images = (request_context or {}).get("user_images")
     if current_images:
         enriched_hints["user_images"] = current_images
     # Supabase storage as default cloud storage provider (if configured)

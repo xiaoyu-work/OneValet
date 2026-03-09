@@ -25,24 +25,51 @@ class ContextManager:
     # ------------------------------------------------------------------
 
     def estimate_tokens(self, messages: List[Dict[str, Any]]) -> int:
-        """Estimate token count from messages using ~4 chars per token."""
-        total_chars = 0
+        """Estimate token count from messages.
+
+        Uses ~4 chars/token for English text, ~2 chars/token for code/JSON,
+        plus overhead per message (role, formatting).
+        """
+        total = 0
         for msg in messages:
+            total += 4  # per-message overhead (role, separators)
             content = msg.get("content")
             if content is None:
                 continue
             if isinstance(content, str):
-                total_chars += len(content)
+                total += self._estimate_string_tokens(content)
             elif isinstance(content, list):
-                # Structured content blocks (e.g. tool results with parts)
                 for part in content:
                     if isinstance(part, dict):
                         text = part.get("text") or part.get("content", "")
                         if isinstance(text, str):
-                            total_chars += len(text)
+                            total += self._estimate_string_tokens(text)
                     elif isinstance(part, str):
-                        total_chars += len(part)
-        return total_chars // 4
+                        total += self._estimate_string_tokens(part)
+            # Tool calls in assistant messages
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                for tc in tool_calls:
+                    total += 20  # function name + structure overhead
+                    args = tc.get("arguments") or tc.get("function", {}).get("arguments", "")
+                    if isinstance(args, str):
+                        total += len(args) // 3  # JSON is denser
+                    elif isinstance(args, dict):
+                        import json
+                        total += len(json.dumps(args)) // 3
+        return total
+
+    @staticmethod
+    def _estimate_string_tokens(text: str) -> int:
+        """Estimate tokens for a string. JSON/code averages ~3 chars/token,
+        natural language ~4 chars/token."""
+        if not text:
+            return 0
+        # Heuristic: if >20% of chars are {, [, ", :, it's likely JSON/code
+        special = sum(1 for c in text[:500] if c in '{}[]":,')
+        ratio = special / min(len(text), 500) if text else 0
+        chars_per_token = 3 if ratio > 0.15 else 4
+        return len(text) // chars_per_token
 
     # ------------------------------------------------------------------
     # Defense 1: Single tool-result truncation

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from .base import BaseCloudStorageProvider
+from ..http_mixin import OAuthHTTPMixin
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ FILE_FIELDS = "id,name,mimeType,modifiedTime,size,webViewLink,parents"
 FILES_LIST_FIELDS = f"files({FILE_FIELDS})"
 
 
-class GoogleDriveProvider(BaseCloudStorageProvider):
+class GoogleDriveProvider(BaseCloudStorageProvider, OAuthHTTPMixin):
     """Google Drive provider implementation using Drive API v3."""
 
     def __init__(
@@ -68,6 +69,9 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
         on_token_refreshed: Optional[Callable[[dict], None]] = None,
     ):
         super().__init__(credentials, on_token_refreshed)
+
+    def _get_headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"}
 
     @staticmethod
     def _format_mime_type(mime: str) -> str:
@@ -124,33 +128,20 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
                 "orderBy": "modifiedTime desc",
             }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{DRIVE_API}/files",
-                    headers=self._auth_headers(),
-                    params=params,
-                    timeout=15.0,
-                )
+            response = await self._oauth_request(
+                "GET", f"{DRIVE_API}/files",
+                params=params, timeout=15.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{DRIVE_API}/files",
-                            headers=self._auth_headers(),
-                            params=params,
-                            timeout=15.0,
-                        )
+            if response.status_code != 200:
+                logger.error(f"Drive search failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code != 200:
-                    logger.error(f"Drive search failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            files = response.json().get("files", [])
+            results = [self._normalize_file(f) for f in files]
 
-                files = response.json().get("files", [])
-                results = [self._normalize_file(f) for f in files]
-
-                logger.info(f"Drive search found {len(results)} files for '{query}'")
-                return {"success": True, "data": results}
+            logger.info(f"Drive search found {len(results)} files for '{query}'")
+            return {"success": True, "data": results}
 
         except Exception as e:
             logger.error(f"Drive search error: {e}", exc_info=True)
@@ -172,33 +163,20 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
                 "orderBy": "modifiedTime desc",
             }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{DRIVE_API}/files",
-                    headers=self._auth_headers(),
-                    params=params,
-                    timeout=15.0,
-                )
+            response = await self._oauth_request(
+                "GET", f"{DRIVE_API}/files",
+                params=params, timeout=15.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{DRIVE_API}/files",
-                            headers=self._auth_headers(),
-                            params=params,
-                            timeout=15.0,
-                        )
+            if response.status_code != 200:
+                logger.error(f"Drive list recent failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code != 200:
-                    logger.error(f"Drive list recent failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            files = response.json().get("files", [])
+            results = [self._normalize_file(f) for f in files]
 
-                files = response.json().get("files", [])
-                results = [self._normalize_file(f) for f in files]
-
-                logger.info(f"Drive listed {len(results)} recent files")
-                return {"success": True, "data": results}
+            logger.info(f"Drive listed {len(results)} recent files")
+            return {"success": True, "data": results}
 
         except Exception as e:
             logger.error(f"Drive list recent error: {e}", exc_info=True)
@@ -212,34 +190,21 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
 
             fields = f"{FILE_FIELDS},shared,owners,sharingUser,capabilities"
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{DRIVE_API}/files/{file_id}",
-                    headers=self._auth_headers(),
-                    params={"fields": fields},
-                    timeout=10.0,
-                )
+            response = await self._oauth_request(
+                "GET", f"{DRIVE_API}/files/{file_id}",
+                params={"fields": fields}, timeout=10.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{DRIVE_API}/files/{file_id}",
-                            headers=self._auth_headers(),
-                            params={"fields": fields},
-                            timeout=10.0,
-                        )
+            if response.status_code != 200:
+                logger.error(f"Drive get file failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code != 200:
-                    logger.error(f"Drive get file failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            f = response.json()
+            data = self._normalize_file(f)
+            data["shared"] = f.get("shared", False)
 
-                f = response.json()
-                data = self._normalize_file(f)
-                data["shared"] = f.get("shared", False)
-
-                logger.info(f"Drive got file info: {file_id}")
-                return {"success": True, "data": data}
+            logger.info(f"Drive got file info: {file_id}")
+            return {"success": True, "data": data}
 
         except Exception as e:
             logger.error(f"Drive get file error: {e}", exc_info=True)
@@ -255,36 +220,24 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             if not await self.ensure_valid_token():
                 return {"success": False, "error": "Failed to refresh access token"}
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{DRIVE_API}/files/{file_id}",
-                    headers=self._auth_headers(),
-                    params={"fields": "webContentLink,webViewLink,mimeType"},
-                    timeout=10.0,
-                )
+            response = await self._oauth_request(
+                "GET", f"{DRIVE_API}/files/{file_id}",
+                params={"fields": "webContentLink,webViewLink,mimeType"},
+                timeout=10.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{DRIVE_API}/files/{file_id}",
-                            headers=self._auth_headers(),
-                            params={"fields": "webContentLink,webViewLink,mimeType"},
-                            timeout=10.0,
-                        )
+            if response.status_code != 200:
+                logger.error(f"Drive download link failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code != 200:
-                    logger.error(f"Drive download link failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            data = response.json()
+            url = data.get("webContentLink") or data.get("webViewLink", "")
 
-                data = response.json()
-                url = data.get("webContentLink") or data.get("webViewLink", "")
-
-                logger.info(f"Drive got download link for: {file_id}")
-                return {
-                    "success": True,
-                    "data": {"url": url, "expires": ""},
-                }
+            logger.info(f"Drive got download link for: {file_id}")
+            return {
+                "success": True,
+                "data": {"url": url, "expires": ""},
+            }
 
         except Exception as e:
             logger.error(f"Drive download link error: {e}", exc_info=True)
@@ -324,52 +277,32 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
                     "role": role,
                 }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{DRIVE_API}/files/{file_id}/permissions",
-                    headers={
-                        **self._auth_headers(),
-                        "Content-Type": "application/json",
-                    },
-                    json=permission,
-                    timeout=15.0,
-                )
+            response = await self._oauth_request(
+                "POST", f"{DRIVE_API}/files/{file_id}/permissions",
+                headers={"Content-Type": "application/json"},
+                json=permission, timeout=15.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.post(
-                            f"{DRIVE_API}/files/{file_id}/permissions",
-                            headers={
-                                **self._auth_headers(),
-                                "Content-Type": "application/json",
-                            },
-                            json=permission,
-                            timeout=15.0,
-                        )
+            if response.status_code not in (200, 201):
+                logger.error(f"Drive share failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code not in (200, 201):
-                    logger.error(f"Drive share failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            # Get the shareable link
+            file_resp = await self._oauth_request(
+                "GET", f"{DRIVE_API}/files/{file_id}",
+                params={"fields": "webViewLink"}, timeout=10.0,
+            )
 
-                # Get the shareable link
-                file_resp = await client.get(
-                    f"{DRIVE_API}/files/{file_id}",
-                    headers=self._auth_headers(),
-                    params={"fields": "webViewLink"},
-                    timeout=10.0,
-                )
+            url = ""
+            if file_resp.status_code == 200:
+                url = file_resp.json().get("webViewLink", "")
 
-                url = ""
-                if file_resp.status_code == 200:
-                    url = file_resp.json().get("webViewLink", "")
-
-                share_type = f"{'email' if email else 'link'} ({link_type})"
-                logger.info(f"Drive shared file {file_id} via {share_type}")
-                return {
-                    "success": True,
-                    "data": {"url": url, "type": share_type},
-                }
+            share_type = f"{'email' if email else 'link'} ({link_type})"
+            logger.info(f"Drive shared file {file_id} via {share_type}")
+            return {
+                "success": True,
+                "data": {"url": url, "type": share_type},
+            }
 
         except Exception as e:
             logger.error(f"Drive share error: {e}", exc_info=True)
@@ -385,20 +318,13 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             f"mimeType = 'application/vnd.google-apps.folder' and "
             f"'{parent_id}' in parents and trashed = false"
         )
-        resp = await client.get(
-            f"{DRIVE_API}/files",
-            headers=self._auth_headers(),
+
+        # Use _oauth_request for automatic 401 retry
+        resp = await self._oauth_request(
+            "GET", f"{DRIVE_API}/files",
             params={"q": q, "fields": "files(id)", "pageSize": 1},
             timeout=10.0,
         )
-        if resp.status_code == 401:
-            if await self.ensure_valid_token(force_refresh=True):
-                resp = await client.get(
-                    f"{DRIVE_API}/files",
-                    headers=self._auth_headers(),
-                    params={"q": q, "fields": "files(id)", "pageSize": 1},
-                    timeout=10.0,
-                )
         if resp.status_code == 200:
             files = resp.json().get("files", [])
             if files:
@@ -412,11 +338,10 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             "mimeType": "application/vnd.google-apps.folder",
             "parents": [parent_id],
         }
-        resp = await client.post(
-            f"{DRIVE_API}/files",
-            headers={**self._auth_headers(), "Content-Type": "application/json"},
-            json=metadata,
-            timeout=15.0,
+        resp = await self._oauth_request(
+            "POST", f"{DRIVE_API}/files",
+            headers={"Content-Type": "application/json"},
+            json=metadata, timeout=15.0,
         )
         resp.raise_for_status()
         return resp.json()["id"]
@@ -476,29 +401,13 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
                 body += file_data
                 body += f"\r\n--{boundary}--".encode("utf-8")
 
-                resp = await client.post(
+                resp = await self._oauth_request(
+                    "POST",
                     "https://www.googleapis.com/upload/drive/v3/files",
-                    headers={
-                        **self._auth_headers(),
-                        "Content-Type": f"multipart/related; boundary={boundary}",
-                    },
+                    headers={"Content-Type": f"multipart/related; boundary={boundary}"},
                     params={"uploadType": "multipart", "fields": "id,name,webViewLink"},
-                    content=body,
-                    timeout=60.0,
+                    content=body, timeout=60.0,
                 )
-
-                if resp.status_code == 401:
-                    if await self.ensure_valid_token(force_refresh=True):
-                        resp = await client.post(
-                            "https://www.googleapis.com/upload/drive/v3/files",
-                            headers={
-                                **self._auth_headers(),
-                                "Content-Type": f"multipart/related; boundary={boundary}",
-                            },
-                            params={"uploadType": "multipart", "fields": "id,name,webViewLink"},
-                            content=body,
-                            timeout=60.0,
-                        )
 
                 if resp.status_code not in (200, 201):
                     logger.error(f"Drive upload failed: {resp.status_code} - {resp.text}")
@@ -525,42 +434,29 @@ class GoogleDriveProvider(BaseCloudStorageProvider):
             if not await self.ensure_valid_token():
                 return {"success": False, "error": "Failed to refresh access token"}
 
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{DRIVE_API}/about",
-                    headers=self._auth_headers(),
-                    params={"fields": "storageQuota"},
-                    timeout=10.0,
-                )
+            response = await self._oauth_request(
+                "GET", f"{DRIVE_API}/about",
+                params={"fields": "storageQuota"}, timeout=10.0,
+            )
 
-                if response.status_code == 401:
-                    logger.warning(f"401 Unauthorized - refreshing token for {self.account_name}")
-                    if await self.ensure_valid_token(force_refresh=True):
-                        response = await client.get(
-                            f"{DRIVE_API}/about",
-                            headers=self._auth_headers(),
-                            params={"fields": "storageQuota"},
-                            timeout=10.0,
-                        )
+            if response.status_code != 200:
+                logger.error(f"Drive storage usage failed: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Drive API error: {response.status_code}"}
 
-                if response.status_code != 200:
-                    logger.error(f"Drive storage usage failed: {response.status_code} - {response.text}")
-                    return {"success": False, "error": f"Drive API error: {response.status_code}"}
+            quota = response.json().get("storageQuota", {})
+            used = int(quota.get("usage", 0))
+            total = int(quota.get("limit", 0))
+            percent = (used / total * 100) if total > 0 else 0.0
 
-                quota = response.json().get("storageQuota", {})
-                used = int(quota.get("usage", 0))
-                total = int(quota.get("limit", 0))
-                percent = (used / total * 100) if total > 0 else 0.0
-
-                logger.info(f"Drive storage: {self.format_size(used)} / {self.format_size(total)}")
-                return {
-                    "success": True,
-                    "data": {
-                        "used": used,
-                        "total": total,
-                        "percent": round(percent, 2),
-                    },
-                }
+            logger.info(f"Drive storage: {self.format_size(used)} / {self.format_size(total)}")
+            return {
+                "success": True,
+                "data": {
+                    "used": used,
+                    "total": total,
+                    "percent": round(percent, 2),
+                },
+            }
 
         except Exception as e:
             logger.error(f"Drive storage usage error: {e}", exc_info=True)
