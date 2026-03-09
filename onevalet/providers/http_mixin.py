@@ -5,6 +5,8 @@ across email, calendar, todo, and cloud storage providers.
 """
 
 import logging
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -86,3 +88,43 @@ class OAuthHTTPMixin:
         raise NotImplementedError(
             f"{self.__class__.__name__} must implement _get_headers()"
         )
+
+    async def refresh_access_token(self) -> Dict[str, Any]:
+        """Refresh Google OAuth access token using refresh token."""
+        try:
+            client_id = os.getenv("GOOGLE_CLIENT_ID")
+            client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+
+            if not client_id or not client_secret:
+                return {"success": False, "error": "Google OAuth credentials not configured"}
+
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "refresh_token": self.refresh_token,
+                        "grant_type": "refresh_token",
+                    },
+                    timeout=30.0,
+                )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    expires_in = data.get("expires_in", 3600)
+                    token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                    logger.info(f"{self.__class__.__name__} token refreshed for {self.account_name}")
+                    return {
+                        "success": True,
+                        "access_token": data["access_token"],
+                        "expires_in": expires_in,
+                        "token_expiry": token_expiry,
+                    }
+                else:
+                    logger.error(f"{self.__class__.__name__} token refresh failed: {response.text}")
+                    return {"success": False, "error": f"Token refresh failed: {response.status_code}"}
+
+        except Exception as e:
+            logger.error(f"{self.__class__.__name__} token refresh error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}

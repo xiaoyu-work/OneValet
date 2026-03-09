@@ -4,7 +4,6 @@ Google Calendar Provider - Implementation for Google Calendar API
 Implements BaseCalendarProvider for Google Calendar.
 """
 
-import os
 import logging
 from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime, timedelta, timezone
@@ -245,47 +244,3 @@ class GoogleCalendarProvider(BaseCalendarProvider, OAuthHTTPMixin):
             logger.error(f"Failed to delete event: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    async def refresh_access_token(self) -> Dict[str, Any]:
-        """Refresh Google OAuth access token using refresh token."""
-        if not self.refresh_token:
-            return {"success": False, "error": "No refresh token available"}
-
-        try:
-            client_id = os.getenv("GOOGLE_CLIENT_ID")
-            client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-
-            if not client_id or not client_secret:
-                return {"success": False, "error": "Google OAuth credentials not configured"}
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "refresh_token": self.refresh_token,
-                        "grant_type": "refresh_token",
-                    },
-                    timeout=30.0,
-                )
-
-                response.raise_for_status()
-                data = response.json()
-
-                expires_in = data.get("expires_in", 3600)
-                token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-
-                logger.info(f"Refreshed Google access token for {self.account_name}")
-                return {
-                    "success": True,
-                    "access_token": data["access_token"],
-                    "expires_in": expires_in,
-                    "token_expiry": token_expiry,
-                }
-
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Token refresh failed: {e.response.status_code} - {e.response.text}")
-            return {"success": False, "error": f"HTTP {e.response.status_code}"}
-        except Exception as e:
-            logger.error(f"Token refresh failed: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}

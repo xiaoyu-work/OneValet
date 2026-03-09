@@ -298,48 +298,6 @@ class GmailProvider(BaseEmailProvider, OAuthHTTPMixin):
             logger.error(f"Gmail mark as read error: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    async def refresh_access_token(self) -> Dict[str, Any]:
-        """Refresh Gmail OAuth token."""
-        try:
-            import os
-
-            client_id = os.getenv("GOOGLE_CLIENT_ID")
-            client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
-
-            if not client_id or not client_secret:
-                return {"success": False, "error": "Google OAuth credentials not configured"}
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    "https://oauth2.googleapis.com/token",
-                    data={
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                        "refresh_token": self.refresh_token,
-                        "grant_type": "refresh_token",
-                    },
-                    timeout=30.0,
-                )
-
-                if response.status_code == 200:
-                    data = response.json()
-                    expires_in = data.get("expires_in", 3600)
-                    token_expiry = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-                    logger.info(f"Gmail token refreshed for {self.account_name}")
-                    return {
-                        "success": True,
-                        "access_token": data["access_token"],
-                        "expires_in": expires_in,
-                        "token_expiry": token_expiry,
-                    }
-                else:
-                    logger.error(f"Gmail token refresh failed: {response.text}")
-                    return {"success": False, "error": f"Token refresh failed: {response.status_code}"}
-
-        except Exception as e:
-            logger.error(f"Gmail token refresh error: {e}", exc_info=True)
-            return {"success": False, "error": str(e)}
-
     async def setup_watch(
         self,
         topic_name: str,
