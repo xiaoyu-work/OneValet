@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..app import require_app, verify_api_key
 from ..models import ChatRequest, ChatResponse
-from ..streaming.models import EventType
+from onevalet.streaming.models import EventType
 
 logger = logging.getLogger(__name__)
 
