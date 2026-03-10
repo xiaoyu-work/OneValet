@@ -804,10 +804,13 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         # Relevant memories from Momex (auto-recall based on user message)
         if self.momex:
             try:
-                recalled = await self.momex.search(
-                    tenant_id=context.get("tenant_id", ""),
-                    query=user_message,
-                    limit=10,
+                recalled = await asyncio.wait_for(
+                    self.momex.search(
+                        tenant_id=context.get("tenant_id", ""),
+                        query=user_message,
+                        limit=10,
+                    ),
+                    timeout=5.0,
                 )
                 if recalled:
                     memory_lines = [f"- {r['text']}" for r in recalled]
@@ -815,6 +818,8 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                         "\n[Relevant Memories]\n"
                         + "\n".join(memory_lines)
                     )
+            except asyncio.TimeoutError:
+                logger.warning("Momex memory recall timed out (5s), skipping")
             except Exception as e:
                 logger.warning(f"Failed to auto-recall memories: {e}")
 
