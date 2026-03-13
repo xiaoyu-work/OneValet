@@ -110,6 +110,16 @@ async def internal_credentials_get(
     return {"tenant_id": tenant_id, "service": service, "account_name": account_name, "credentials": creds}
 
 
+@router.get("/api/internal/credentials/list")
+async def internal_credentials_list(
+    request: Request, tenant_id: str, service: Optional[str] = None,
+):
+    """List all credentials WITH token fields (unsanitized). Internal use only."""
+    verify_service_key(request)
+    app = require_app()
+    return await app.list_credentials(tenant_id, service=service)
+
+
 @router.put("/api/internal/credentials")
 async def internal_credentials_update(
     request: Request, tenant_id: str, service: str,
