@@ -99,7 +99,6 @@ class OneValet:
         self._momex = None
         self._agent_registry = None
         self._orchestrator = None
-        self._event_bus = None
         self._trigger_engine = None
         self._email_handler = None
         self._model_router = None
@@ -233,18 +232,11 @@ class OneValet:
                 f"{len(rules or [])} rules"
             )
 
-        # 7. TriggerEngine + EventBus + Notifications
+        # 7. TriggerEngine + Notifications
         from .triggers import (
-            TriggerEngine, EventBus, OrchestratorExecutor,
+            TriggerEngine, OrchestratorExecutor,
             PipelineExecutor, CallbackNotification, EmailEventHandler,
         )
-
-        # EventBus (Redis Streams) — optional, requires redis config
-        redis_url = cfg.get("redis", {}).get("url") if isinstance(cfg.get("redis"), dict) else cfg.get("redis")
-        if redis_url:
-            self._event_bus = EventBus(redis_url=redis_url)
-            await self._event_bus.initialize()
-            logger.info(f"EventBus initialized (redis: {redis_url})")
 
         # TriggerEngine
         self._trigger_engine = TriggerEngine()
@@ -376,15 +368,13 @@ class OneValet:
         )
         self._trigger_engine.register_executor("pipeline", pipeline_executor)
 
-        # EmailEventHandler — if EventBus and callback_url are configured
-        if self._event_bus and callback_url:
+        # EmailEventHandler — if callback_url is configured
+        if callback_url:
             self._email_handler = EmailEventHandler(
                 llm_client=self._llm_client,
-                event_bus=self._event_bus,
                 callback_url=callback_url,
             )
-            await self._email_handler.start()
-            logger.info("EmailEventHandler started")
+            logger.info("EmailEventHandler initialized")
 
         # 9. Load API key credentials into env vars for agent access
         await self._load_credentials_to_env()
@@ -443,8 +433,6 @@ class OneValet:
                 await self._mcp_manager.disconnect_all()
             if self._orchestrator:
                 await self._orchestrator.shutdown()
-            if self._event_bus:
-                await self._event_bus.close()
             if self._database:
                 await self._database.close()
         except Exception as e:
@@ -457,7 +445,6 @@ class OneValet:
             self._momex = None
             self._agent_registry = None
             self._orchestrator = None
-            self._event_bus = None
             self._trigger_engine = None
             self._email_handler = None
             self._model_router = None
@@ -627,13 +614,6 @@ class OneValet:
         """Update the in-memory configuration."""
         self._config = config
 
-    async def ingest_event(self, event) -> None:
-        """Publish an event to the EventBus."""
-        await self._ensure_initialized()
-        if self._event_bus is None:
-            raise RuntimeError("EventBus not available")
-        await self._event_bus.publish(event)
-
     @property
     def trigger_engine(self):
         """Access the trigger engine (may be None)."""
@@ -645,9 +625,9 @@ class OneValet:
         return self._orchestrator
 
     @property
-    def event_bus(self):
-        """Access the event bus (may be None)."""
-        return self._event_bus
+    def email_handler(self):
+        """Access the email handler (may be None)."""
+        return self._email_handler
 
     async def chat(
         self,

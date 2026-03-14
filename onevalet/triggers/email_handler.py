@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional, Set
 
 import httpx
 
-from .event_bus import Event, EventBus
 from ..llm.base import BaseLLMClient
 
 logger = logging.getLogger(__name__)
@@ -40,33 +39,24 @@ class EmailEventHandler:
 
     Args:
         llm_client: LLM client for importance evaluation
-        event_bus: EventBus to subscribe to email events
         callback_url: URL to POST important email notifications to
     """
 
     def __init__(
         self,
         llm_client: BaseLLMClient,
-        event_bus: EventBus,
         callback_url: str,
     ):
         self._llm_client = llm_client
-        self._event_bus = event_bus
         self._callback_url = callback_url
         self._processed_ids: Set[str] = set()
 
-    async def start(self) -> None:
-        """Subscribe to email events on the event bus."""
-        await self._event_bus.subscribe("email:*", self.handle_email)
-        logger.info("EmailEventHandler subscribed to email:* events")
-
-    async def handle_email(self, event: Event) -> None:
+    async def handle_email(self, tenant_id: str, data: Dict[str, Any]) -> None:
         """Process an incoming email event.
 
         Evaluates importance via LLM, and if important, POSTs a callback.
         Skips duplicate message_ids.
         """
-        data = event.data or {}
         message_id = data.get("message_id", "")
 
         # Duplicate prevention
@@ -93,7 +83,7 @@ class EmailEventHandler:
         # Important email — send callback
         logger.info(f"Important email detected: {subject} — {evaluation.get('reason', '')}")
         await self._send_callback(
-            tenant_id=event.tenant_id,
+            tenant_id=tenant_id,
             summary=evaluation.get("summary", subject),
             sender=sender,
             subject=subject,

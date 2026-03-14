@@ -11,20 +11,11 @@ router = APIRouter()
 
 @router.post("/api/events/email", dependencies=[Depends(verify_api_key)])
 async def ingest_email_event(req: EmailEventRequest):
-    """Ingest an email event and publish to the EventBus."""
-    from ...triggers.event_bus import Event
-
+    """Ingest an email event and evaluate importance."""
     app = require_app()
-    if app.event_bus is None:
-        raise OneValetError(E.SERVICE_UNAVAILABLE, "EventBus not available",
+    if app.email_handler is None:
+        raise OneValetError(E.SERVICE_UNAVAILABLE, "Email handler not available",
                             details={"service": "events"})
 
-    request_data = req.model_dump()
-    event = Event(
-        source="email",
-        event_type="received",
-        data=request_data,
-        tenant_id=req.tenant_id,
-    )
-    await app.ingest_event(event)
+    await app.email_handler.handle_email(req.tenant_id, req.model_dump())
     return {"status": "ok"}
