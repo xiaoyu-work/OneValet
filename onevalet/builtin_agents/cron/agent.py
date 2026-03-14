@@ -30,7 +30,7 @@ class CronAgent(StandardAgent):
 You are a cron job management assistant. Your job is to create, manage, and \
 schedule reminders and recurring automations for the user.
 
-Today: {today} ({weekday}), timezone: {timezone}
+Today: {today} ({weekday}), current time: {current_time}, timezone: {timezone}
 
 ## REMINDER HANDLING — TOP PRIORITY
 
@@ -86,14 +86,26 @@ When the user says "remind me", "don't let me forget", "alert me at", or similar
 4. When in doubt about the time, ask the user to clarify rather than guessing wrong."""
 
     def get_system_prompt(self) -> str:
-        now = datetime.now()
-        try:
-            tz_name = now.astimezone().tzinfo.tzname(now) or "UTC"
-        except Exception:
-            tz_name = "UTC"
+        user_tz_str = self.context_hints.get("timezone", "")
+        if user_tz_str:
+            try:
+                from zoneinfo import ZoneInfo
+                user_tz = ZoneInfo(user_tz_str)
+                now = datetime.now(user_tz)
+                tz_name = user_tz_str
+            except Exception:
+                now = datetime.now()
+                tz_name = "UTC"
+        else:
+            now = datetime.now()
+            try:
+                tz_name = now.astimezone().tzinfo.tzname(now) or "UTC"
+            except Exception:
+                tz_name = "UTC"
         return self._SYSTEM_PROMPT_TEMPLATE.format(
             today=now.strftime("%Y-%m-%d"),
             weekday=now.strftime("%A"),
+            current_time=now.strftime("%H:%M"),
             timezone=tz_name,
         )
 

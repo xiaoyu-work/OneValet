@@ -772,10 +772,22 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
         # Runtime context
         now = datetime.now(timezone.utc)
-        context_lines = [f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
 
         # Add user location if available in metadata
         meta = context.get("metadata") or {}
+        tz = meta.get("timezone")
+        if tz and tz != "UTC":
+            try:
+                from zoneinfo import ZoneInfo
+                user_tz = ZoneInfo(tz)
+                user_now = now.astimezone(user_tz)
+                context_lines = [f"Current time: {user_now.strftime('%Y-%m-%d %H:%M:%S')} ({tz})"]
+            except Exception:
+                context_lines = [f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
+                context_lines.append(f"User timezone: {tz}")
+        else:
+            context_lines = [f"Current time: {now.strftime('%Y-%m-%d %H:%M:%S %Z')}"]
+
         location = meta.get("location")
         if location and isinstance(location, dict):
             lat = location.get("lat")
@@ -789,10 +801,6 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                 if place:
                     loc_str += f" ({place})"
                 context_lines.append(loc_str)
-
-        tz = meta.get("timezone")
-        if tz and tz != "UTC":
-            context_lines.append(f"User timezone: {tz}")
 
         system_parts.append("\n[Context]\n" + "\n".join(context_lines))
 

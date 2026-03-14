@@ -103,6 +103,10 @@ async def execute_agent_tool(
     current_images = (request_context or {}).get("user_images")
     if current_images:
         enriched_hints["user_images"] = current_images
+    # Pass user timezone to agent tools
+    user_timezone = (request_context or {}).get("metadata", {}).get("timezone")
+    if user_timezone:
+        enriched_hints["timezone"] = user_timezone
     # Supabase storage as default cloud storage provider (if configured)
     supabase_storage = getattr(orchestrator, "_supabase_storage", None)
     if supabase_storage and "cloud_storage_provider" not in enriched_hints:
