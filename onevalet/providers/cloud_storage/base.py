@@ -152,10 +152,6 @@ class BaseCloudStorageProvider(ABC):
         """
         pass
 
-    async def refresh_access_token(self) -> Dict[str, Any]:
-        """Refresh OAuth access token."""
-        pass
-
     # ===== Common helpers =====
 
     async def ensure_valid_token(self, force_refresh: bool = False) -> bool:

@@ -49,20 +49,6 @@ class BaseSmartHomeProvider(ABC):
         self.token_expiry = credentials.get("token_expiry")
         self._on_token_refreshed = on_token_refreshed
 
-    async def refresh_access_token(self) -> Dict[str, Any]:
-        """
-        Refresh expired OAuth access token.
-
-        Returns:
-            {
-                "success": bool,
-                "access_token": str,
-                "token_expiry": datetime,
-                "error": str (if failed)
-            }
-        """
-        pass
-
     async def ensure_valid_token(self, force_refresh: bool = False) -> bool:
         """Check if access token is valid, refresh if needed."""
         if force_refresh:

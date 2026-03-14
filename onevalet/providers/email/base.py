@@ -95,21 +95,6 @@ class BaseEmailProvider(ABC):
         """Delete or trash emails."""
         pass
 
-    async def refresh_access_token(self) -> Dict[str, Any]:
-        """
-        Refresh expired OAuth access token.
-
-        Returns:
-            {
-                "success": bool,
-                "access_token": str (new token),
-                "expires_in": int (seconds),
-                "token_expiry": datetime (calculated expiry time),
-                "error": str (if failed)
-            }
-        """
-        pass
-
     # ===== Common helper methods =====
 
     async def ensure_valid_token(self, force_refresh: bool = False) -> bool:
