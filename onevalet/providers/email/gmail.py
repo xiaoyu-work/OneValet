@@ -182,7 +182,7 @@ class GmailProvider(BaseEmailProvider, OAuthHTTPMixin):
             if query:
                 query_parts.append(query)
             if days_back:
-                after_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y/%m/%d")
+                after_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).strftime("%Y/%m/%d")
                 query_parts.append(f"after:{after_date}")
             if include_categories:
                 for category in include_categories:

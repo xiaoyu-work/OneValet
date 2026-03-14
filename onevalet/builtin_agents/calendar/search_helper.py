@@ -8,25 +8,46 @@ This module provides shared search functionality used by:
 """
 import logging
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta, timezone
+
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    from backports.zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
 
-def parse_time_range(time_range_str: str, now: datetime = None) -> Tuple[datetime, datetime]:
+def _resolve_tz(user_tz: Optional[str] = None):
+    """Return a timezone object from a user timezone string (e.g. 'America/Los_Angeles')."""
+    if user_tz and user_tz != "UTC":
+        try:
+            return ZoneInfo(user_tz)
+        except Exception:
+            logger.warning(f"Unknown timezone '{user_tz}', falling back to UTC")
+    return timezone.utc
+
+
+def parse_time_range(
+    time_range_str: str,
+    now: datetime = None,
+    user_tz: Optional[str] = None,
+) -> Tuple[datetime, datetime]:
     """
     Parse time range string to datetime range
 
     Args:
         time_range_str: Human-readable time range ("today", "tomorrow", "this week", etc.)
-        now: Current datetime (defaults to datetime.now(timezone.utc))
+        now: Current datetime (defaults to now in user's timezone)
+        user_tz: IANA timezone string (e.g. "America/New_York"). Defaults to UTC.
 
     Returns:
-        Tuple of (time_min, time_max) — always timezone-aware (UTC)
+        Tuple of (time_min, time_max) — always timezone-aware
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        tz = _resolve_tz(user_tz)
+        now = datetime.now(tz)
 
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -81,7 +102,8 @@ async def search_calendar_events(
     search_query: str = None,
     time_range: str = "next 7 days",
     max_results: int = 50,
-    account_hint: str = "primary"
+    account_hint: str = "primary",
+    user_tz: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Search calendar events with given criteria
@@ -92,6 +114,7 @@ async def search_calendar_events(
         time_range: Time range string (e.g., "today", "this week")
         max_results: Maximum events to return
         account_hint: Which calendar account to use (default "primary")
+        user_tz: IANA timezone string (e.g. "America/New_York")
 
     Returns:
         Dict with:
@@ -111,7 +134,7 @@ async def search_calendar_events(
                 "error": f"No {account_hint} calendar account found"
             }
 
-        time_min, time_max = parse_time_range(time_range)
+        time_min, time_max = parse_time_range(time_range, user_tz=user_tz)
 
         account_email = account.get("account_identifier", account.get("account_name", "your calendar"))
 

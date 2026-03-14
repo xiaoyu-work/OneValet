@@ -7,7 +7,7 @@ Extracted from CalendarAgent, CreateEventAgent, UpdateEventAgent, and DeleteEven
 import html
 import logging
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Dict, Optional
 
 from onevalet.tool_decorator import tool
@@ -60,7 +60,7 @@ async def _parse_datetime_with_llm(time_str: str, llm_client) -> Optional[dateti
     if not llm_client:
         return None
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)  # UTC is fine here — LLM just needs a reference point
     prompt = (
         f"Parse this time expression into an ISO datetime.\n\n"
         f"Current time: {now.strftime('%Y-%m-%d %H:%M')}\n"
@@ -89,7 +89,7 @@ def _parse_time_to_datetime(time_str: str) -> datetime:
     """Parse natural language time to datetime using dateutil."""
     from dateutil import parser as date_parser
 
-    default_time = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     try:
         return date_parser.parse(time_str, fuzzy=True, default=default_time)
     except Exception:
@@ -116,7 +116,8 @@ async def query_events(
         return error
 
     try:
-        time_min, time_max = parse_time_range(time_range)
+        user_tz = context.metadata.get("timezone") if context.metadata else None
+        time_min, time_max = parse_time_range(time_range, user_tz=user_tz)
 
         result = await provider.list_events(
             time_min=time_min,
@@ -297,9 +298,12 @@ async def update_event(
 
     try:
         # Search for the target event
-        now = datetime.now()
-        time_min = now.isoformat() + "Z"
-        time_max = (now + timedelta(days=30)).isoformat() + "Z"
+        user_tz_str = context.metadata.get("timezone") if context.metadata else None
+        from .search_helper import _resolve_tz
+        user_tz_obj = _resolve_tz(user_tz_str)
+        now = datetime.now(user_tz_obj)
+        time_min = now
+        time_max = now + timedelta(days=30)
 
         result = await provider.list_events(
             time_min=time_min,
@@ -420,12 +424,14 @@ async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
     search_query = args.get("search_query", "")
     time_range = args.get("time_range", "next 7 days")
 
+    user_tz = context.metadata.get("timezone") if context.metadata else None
     result = await search_calendar_events(
         user_id=context.tenant_id,
         search_query=search_query,
         time_range=time_range,
         max_results=50,
         account_hint="primary",
+        user_tz=user_tz,
     )
 
     if not result.get("success") or not result.get("events"):
@@ -471,12 +477,14 @@ async def delete_event(
     from .search_helper import search_calendar_events
     from onevalet.providers.calendar.factory import CalendarProviderFactory
 
+    user_tz = context.metadata.get("timezone") if context.metadata else None
     result = await search_calendar_events(
         user_id=context.tenant_id,
         search_query=search_query,
         time_range=time_range,
         max_results=50,
         account_hint="primary",
+        user_tz=user_tz,
     )
 
     if not result.get("success") or not result.get("events"):
