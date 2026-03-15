@@ -84,6 +84,7 @@ These examples show how to map user intent to the correct agent:
 - "Track my package" → ShippingAgent
 - "Search my cloud storage" / "files in Dropbox" → CloudStorageAgent
 - "Create a Google Doc" / "Search Google Drive" → GoogleWorkspaceAgent
+- "What does an igloo look like?" → google_search (image) + download_image, then complete_task with the image and explanation
 - "Hello" → complete_task (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()
@@ -239,6 +240,26 @@ The user has now responded. Based on their response:
 """.strip()
 
 
+def render_proactive_media() -> str:
+    """Instructions for proactively enriching answers with images."""
+    return """
+# Proactive Image Search
+
+When answering questions about visual or physical topics — such as places, landmarks, buildings, animals, plants, food, clothing, art, architecture, products, or any topic where a picture would significantly enhance understanding — **proactively search for a relevant image** without waiting for the user to ask.
+
+Steps:
+1. Call `google_search` with `search_type: "image"` and a descriptive query.
+2. Review the thumbnails and pick the most relevant, high-quality image.
+3. Call `download_image` with the selected image's full URL.
+4. Include the image naturally in your `complete_task` response.
+
+Do NOT search for images when:
+- The question is purely abstract, logical, or numerical.
+- The user is asking for action (send email, create event, etc.).
+- An image would not add meaningful value to the answer.
+""".strip()
+
+
 def render_negative_rules() -> str:
     """Things the LLM should never do."""
     return """
@@ -294,6 +315,7 @@ def build_system_prompt(
         render_error_handling(),
         render_output_style(),
         render_constraints(),
+        render_proactive_media(),
         render_negative_rules(),
     ]
 
