@@ -47,6 +47,7 @@ class EventType(str, Enum):
 
     # Progress events
     PROGRESS_UPDATE = "progress_update"
+    ACKNOWLEDGMENT = "acknowledgment"
 
     # Execution events
     EXECUTION_START = "execution_start"

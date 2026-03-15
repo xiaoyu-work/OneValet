@@ -27,6 +27,55 @@ logger = logging.getLogger(__name__)
 
 TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
 
+# ── Tool acknowledgment messages ──────────────────────────────────
+# Shown to the user before tool execution so they know Koi is working.
+# Only emitted on turn 1 (first tool invocation); subsequent turns in
+# the same ReAct loop skip the acknowledgment to avoid clutter.
+
+_TOOL_ACK_MAP = {
+    "EmailAgent": "Checking your emails…",
+    "CalendarAgent": "Looking at your calendar…",
+    "TodoAgent": "Checking your tasks…",
+    "ExpenseAgent": "Looking at your expenses…",
+    "ShipmentAgent": "Checking your packages…",
+    "MapsAgent": "Searching nearby…",
+    "BriefingAgent": "Preparing your briefing…",
+    "SmartHomeAgent": "Controlling your devices…",
+    "CronAgent": "Checking your schedules…",
+    "search_places": "Searching nearby…",
+    "get_directions": "Getting directions…",
+    "query_expenses": "Looking at your expenses…",
+    "log_expense": "Logging that expense…",
+    "search_emails": "Searching your emails…",
+    "send_email": "Drafting your email…",
+    "query_events": "Checking your calendar…",
+    "create_event": "Creating that event…",
+    "query_tasks": "Checking your tasks…",
+    "create_task": "Adding that task…",
+    "track_shipment": "Looking up that package…",
+    "control_lights": "Adjusting your lights…",
+    "control_speaker": "Controlling your speaker…",
+    "get_briefing": "Preparing your briefing…",
+}
+
+
+def _tool_acknowledgment(tool_names: List[str], turn: int) -> Optional[str]:
+    """Return a short acknowledgment string, or None to skip."""
+    if turn > 1:
+        return None  # only acknowledge on the first tool-calling turn
+
+    # Try to find a specific message for the first tool
+    for name in tool_names:
+        if name in _TOOL_ACK_MAP:
+            return _TOOL_ACK_MAP[name]
+
+    # Generic fallback for agent-style tools (contain "Agent" in name)
+    if any("Agent" in n for n in tool_names):
+        return "Working on that…"
+
+    # For simple utility tools (e.g. complete_task), skip acknowledgment
+    return None
+
 
 class ReactLoopMixin:
     """Mixin providing the ReAct loop and its helpers.
@@ -352,6 +401,12 @@ class ReactLoopMixin:
 
                 tool_names = [tc.name for tc in tool_calls]
                 logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
+
+                # Emit a brief acknowledgment before tool execution so the
+                # user sees "Looking into that..." while tools run.
+                ack = _tool_acknowledgment(tool_names, turn)
+                if ack:
+                    yield AgentEvent(type=EventType.ACKNOWLEDGMENT, data={"text": ack})
 
                 # Yield tool call start events
                 for tc in tool_calls:
