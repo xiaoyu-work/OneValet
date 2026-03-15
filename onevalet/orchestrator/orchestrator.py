@@ -491,8 +491,8 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
             return
 
-        # Step 5: Build domain-filtered tool schemas (with fallback)
-        tool_schemas = await self._build_tool_schemas_with_domain_fallback(tenant_id, domains=intent.domains)
+        # Step 5: Build domain-filtered tool schemas
+        tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
 
         # Step 5b: Inject notify_user tool for conditional cron delivery
         # Use a local copy of builtin_tools to avoid mutating the instance list

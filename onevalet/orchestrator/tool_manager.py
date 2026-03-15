@@ -70,9 +70,14 @@ class ToolManagerMixin:
         if self._tool_policy_filter:
             schemas = self._tool_policy_filter.filter_tools(schemas, tenant_id=tenant_id)
 
+        agent_tool_names = [
+            s.get("function", {}).get("name", s.get("name", "?"))
+            for s in agent_tool_schemas
+        ]
         logger.info(
             f"[Tools] {len(schemas)} total available "
-            f"(agents={len(agent_tool_schemas)}, domains={domains or ['all']})"
+            f"(agents={len(agent_tool_schemas)}, domains={domains or ['all']}, "
+            f"agent_tools={agent_tool_names})"
         )
 
         return schemas
