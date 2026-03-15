@@ -64,8 +64,7 @@ async def post_tweet(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_CREATE_POST,
-            params={"text": text},
-        )
+            params={"text": text}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Tweet posted successfully.\n\n{result}"
@@ -90,8 +89,7 @@ async def get_timeline(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_HOME_TIMELINE,
-            params={"max_results": limit},
-        )
+            params={"max_results": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Home timeline tweets:\n\n{result}"
@@ -119,8 +117,7 @@ async def search_tweets(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_RECENT_SEARCH,
-            params={"query": query, "max_results": limit},
-        )
+            params={"query": query, "max_results": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Tweets matching '{query}':\n\n{result}"
@@ -147,8 +144,7 @@ async def lookup_user(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_USER_LOOKUP,
-            params={"username": username},
-        )
+            params={"username": username}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"User @{username}:\n\n{result}"

@@ -64,8 +64,7 @@ async def create_post(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_CREATE_POST,
-            params={"text": text, "visibility": visibility},
-        )
+            params={"text": text, "visibility": visibility}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"LinkedIn post created.\n\n{result}"
@@ -89,8 +88,7 @@ async def get_my_profile(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_GET_MY_INFO,
-            params={},
-        )
+            params={}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"LinkedIn profile info:\n\n{result}"

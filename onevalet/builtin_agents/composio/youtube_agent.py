@@ -55,6 +55,7 @@ async def search_videos(
         data = await client.execute_action(
             _ACTION_SEARCH_VIDEOS,
             params={"q": query, "maxResults": limit},
+            entity_id=context.tenant_id or "default",
         )
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
@@ -83,6 +84,7 @@ async def get_video_details(
         data = await client.execute_action(
             _ACTION_GET_VIDEO_DETAILS,
             params={"id": video_id},
+            entity_id=context.tenant_id or "default",
         )
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
@@ -109,6 +111,7 @@ async def list_playlists(
         data = await client.execute_action(
             _ACTION_LIST_PLAYLISTS,
             params={"maxResults": limit},
+            entity_id=context.tenant_id or "default",
         )
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):

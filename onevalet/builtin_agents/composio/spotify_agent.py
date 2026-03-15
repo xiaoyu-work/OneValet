@@ -91,6 +91,7 @@ async def play_music(
         data = await client.execute_action(
             _ACTION_START_RESUME_PLAYBACK,
             params=params,
+            entity_id=context.tenant_id or "default",
         )
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
@@ -117,8 +118,7 @@ async def pause_music(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_PAUSE_PLAYBACK,
-            params={},
-        )
+            params={}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Playback paused.\n\n{result}"
@@ -147,8 +147,7 @@ async def search_music(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_SEARCH_FOR_ITEM,
-            params={"q": query, "type": type, "limit": limit},
-        )
+            params={"q": query, "type": type, "limit": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Spotify search results for '{query}' ({type}):\n\n{result}"
@@ -173,8 +172,7 @@ async def get_playlists(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_GET_PLAYLISTS,
-            params={"limit": limit},
-        )
+            params={"limit": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Your Spotify playlists:\n\n{result}"
@@ -204,8 +202,7 @@ async def add_to_playlist(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_ADD_ITEMS_TO_PLAYLIST,
-            params={"playlist_id": playlist_id, "uris": uris},
-        )
+            params={"playlist_id": playlist_id, "uris": uris}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Items added to playlist {playlist_id}.\n\n{result}"
@@ -229,8 +226,7 @@ async def now_playing(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_GET_CURRENTLY_PLAYING,
-            params={},
-        )
+            params={}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Currently playing on Spotify:\n\n{result}"

@@ -96,7 +96,7 @@ async def create_issue(
         if labels:
             params["labels"] = labels
 
-        data = await client.execute_action(_ACTION_CREATE_ISSUE, params=params)
+        data = await client.execute_action(_ACTION_CREATE_ISSUE, params=params, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Issue created in {owner}/{repo}.\n\n{result}"
@@ -125,8 +125,7 @@ async def list_issues(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_LIST_ISSUES,
-            params={"owner": owner, "repo": repo, "state": state},
-        )
+            params={"owner": owner, "repo": repo, "state": state}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Issues in {owner}/{repo} ({state}):\n\n{result}"
@@ -170,7 +169,7 @@ async def create_pull_request(
         if body:
             params["body"] = body
 
-        data = await client.execute_action(_ACTION_CREATE_PR, params=params)
+        data = await client.execute_action(_ACTION_CREATE_PR, params=params, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Pull request created in {owner}/{repo}.\n\n{result}"
@@ -199,8 +198,7 @@ async def list_pull_requests(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_LIST_PRS,
-            params={"owner": owner, "repo": repo, "state": state},
-        )
+            params={"owner": owner, "repo": repo, "state": state}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Pull requests in {owner}/{repo} ({state}):\n\n{result}"
@@ -228,8 +226,7 @@ async def search_repositories(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_SEARCH_REPOS,
-            params={"q": query, "per_page": limit},
-        )
+            params={"q": query, "per_page": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Repositories matching '{query}':\n\n{result}"

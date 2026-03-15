@@ -67,8 +67,7 @@ async def send_message(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_CREATE_MESSAGE,
-            params={"channel_id": channel_id, "content": content},
-        )
+            params={"channel_id": channel_id, "content": content}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Message sent to channel {channel_id}.\n\n{result}"
@@ -95,8 +94,7 @@ async def list_channels(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_LIST_GUILD_CHANNELS,
-            params={"guild_id": guild_id},
-        )
+            params={"guild_id": guild_id}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Channels in guild {guild_id}:\n\n{result}"
@@ -120,8 +118,7 @@ async def list_servers(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_LIST_MY_GUILDS,
-            params={},
-        )
+            params={}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Discord servers:\n\n{result}"

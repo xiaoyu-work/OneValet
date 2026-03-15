@@ -75,8 +75,7 @@ async def send_message(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_SEND_MESSAGE,
-            params={"channel": channel, "text": text},
-        )
+            params={"channel": channel, "text": text}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Message sent to {channel}.\n\n{result}"
@@ -104,8 +103,7 @@ async def fetch_messages(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_FETCH_MESSAGES,
-            params={"channel": channel, "limit": limit},
-        )
+            params={"channel": channel, "limit": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Messages from {channel}:\n\n{result}"
@@ -130,8 +128,7 @@ async def list_channels(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_LIST_CHANNELS,
-            params={"limit": limit},
-        )
+            params={"limit": limit}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Slack channels:\n\n{result}"
@@ -158,8 +155,7 @@ async def find_users(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_FIND_USERS,
-            params={"query": query},
-        )
+            params={"query": query}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Slack users matching '{query}':\n\n{result}"
@@ -189,8 +185,7 @@ async def create_reminder(
         client = ComposioClient()
         data = await client.execute_action(
             _ACTION_CREATE_REMINDER,
-            params={"text": text, "time": time},
-        )
+            params={"text": text, "time": time}, entity_id=context.tenant_id or "default")
         result = ComposioClient.format_action_result(data)
         if data.get("successfull") or data.get("successful"):
             return f"Reminder created: {text}\n\n{result}"
