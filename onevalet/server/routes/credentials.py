@@ -84,9 +84,9 @@ async def delete_credential(service: str, account_name: str, tenant_id: str = "d
 
 @router.get("/api/internal/credentials/by-email")
 async def internal_credentials_by_email(
-    request: Request, email: str, tenant_id: str, service: Optional[str] = None,
+    request: Request, email: str, tenant_id: Optional[str] = None, service: Optional[str] = None,
 ):
-    """Lookup credentials by email within a specific tenant. Internal use only."""
+    """Lookup credentials by email, optionally scoped to a tenant. Internal use only."""
     verify_service_key(request)
     app = require_app()
     result = await app.find_credential_by_email(email, service, tenant_id=tenant_id)
