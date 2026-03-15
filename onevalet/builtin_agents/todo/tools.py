@@ -487,10 +487,13 @@ async def set_reminder(
         CronJobCreate,
     )
 
+    # Resolve user timezone
+    user_tz = context.context_hints.get("timezone", "") if context.context_hints else ""
+
     # Build schedule
     try:
         if schedule_type == "recurring" and cron_expression:
-            schedule = CronScheduleSpec(expr=cron_expression)
+            schedule = CronScheduleSpec(expr=cron_expression, tz=user_tz or None)
         else:
             if 'T' in schedule_datetime:
                 local_dt = datetime.fromisoformat(schedule_datetime.replace('Z', '+00:00'))
@@ -556,10 +559,11 @@ async def manage_reminders(
     elif action == "delete":
         return await _delete_reminder(cron_service, context.tenant_id, task_hint)
     elif action == "update":
+        user_tz = context.context_hints.get("timezone", "") if context.context_hints else ""
         return await _update_reminder(
             cron_service, context.tenant_id, task_hint,
             new_schedule_datetime, new_cron_expression, new_message,
-            human_readable_time, update_type,
+            human_readable_time, update_type, user_tz,
         )
     else:
         return "I'm not sure what you want to do. Try 'show my reminders' or 'delete my medicine reminder'."
@@ -772,7 +776,7 @@ async def _delete_reminder(cron_service, tenant_id: str, task_hint: str) -> str:
 async def _update_reminder(
     cron_service, tenant_id: str, task_hint: str,
     new_schedule_datetime, new_cron_expression, new_message,
-    human_readable_time, update_type,
+    human_readable_time, update_type, user_tz: str = "",
 ) -> str:
     """Update a reminder's schedule or message via CronService."""
     from onevalet.triggers.cron.models import (
@@ -795,7 +799,7 @@ async def _update_reminder(
 
         if update_type in ("time", "both"):
             if new_cron_expression:
-                patch.schedule = CronScheduleSpec(expr=new_cron_expression)
+                patch.schedule = CronScheduleSpec(expr=new_cron_expression, tz=user_tz or None)
                 patch.delete_after_run = False
                 time_desc = human_readable_time or _format_cron_expr(new_cron_expression)
                 response_parts.append(f"changed to {time_desc}")

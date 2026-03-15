@@ -171,10 +171,12 @@ async def cron_add(
         except ValueError:
             return f"Invalid interval value: {schedule_value}. Provide seconds (e.g. '3600' for 1 hour)."
     elif schedule_type == "cron":
+        # Prefer explicit timezone param, fall back to user's timezone from context
+        tz = timezone or (context.context_hints.get("timezone", "") if context.context_hints else "")
         schedule = CronScheduleSpec(
             expr=schedule_value,
-            tz=timezone or None,
-            stagger_ms=5 * 60 * 1000 if not timezone else None,  # 5 min default stagger
+            tz=tz or None,
+            stagger_ms=5 * 60 * 1000 if not tz else None,
         )
     else:
         return f"Unknown schedule type: {schedule_type}. Use 'at', 'every', or 'cron'."
