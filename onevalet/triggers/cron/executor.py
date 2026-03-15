@@ -219,7 +219,7 @@ class CronExecutor:
             text = job.payload.message
         else:
             return None, f"Unsupported payload type: {type(job.payload).__name__}"
-        message = f"[Cron: {job.name}] {text}"
+        message = text
 
         try:
             result = await self._orchestrator.handle_message(

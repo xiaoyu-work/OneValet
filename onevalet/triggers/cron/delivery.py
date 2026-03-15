@@ -76,7 +76,7 @@ class CronDeliveryHandler:
         if job.delivery and job.delivery.to:
             metadata["to"] = job.delivery.to
 
-        message = f"[Cron: {job.name}] {result_text}"
+        message = result_text
 
         delivered = False
         for channel in self._notifications:
