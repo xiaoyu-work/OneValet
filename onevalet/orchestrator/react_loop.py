@@ -32,49 +32,31 @@ TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
 # Only emitted on turn 1 (first tool invocation); subsequent turns in
 # the same ReAct loop skip the acknowledgment to avoid clutter.
 
-_TOOL_ACK_MAP = {
-    "EmailAgent": "Checking your emails…",
-    "CalendarAgent": "Looking at your calendar…",
-    "TodoAgent": "Checking your tasks…",
-    "ExpenseAgent": "Looking at your expenses…",
-    "ShipmentAgent": "Checking your packages…",
-    "MapsAgent": "Searching nearby…",
-    "BriefingAgent": "Preparing your briefing…",
-    "SmartHomeAgent": "Controlling your devices…",
-    "CronAgent": "Checking your schedules…",
-    "search_places": "Searching nearby…",
-    "get_directions": "Getting directions…",
-    "query_expenses": "Looking at your expenses…",
-    "log_expense": "Logging that expense…",
-    "search_emails": "Searching your emails…",
-    "send_email": "Drafting your email…",
-    "query_events": "Checking your calendar…",
-    "create_event": "Creating that event…",
-    "query_tasks": "Checking your tasks…",
-    "create_task": "Adding that task…",
-    "track_shipment": "Looking up that package…",
-    "control_lights": "Adjusting your lights…",
-    "control_speaker": "Controlling your speaker…",
-    "get_briefing": "Preparing your briefing…",
-}
+import random
+
+_CASUAL_ACKS = [
+    "On it!",
+    "Got it, one sec…",
+    "Sure, let me check…",
+    "One moment…",
+    "Let me look into that…",
+    "Sure thing…",
+    "On it, give me a sec…",
+    "Let me see…",
+]
 
 
 def _tool_acknowledgment(tool_names: List[str], turn: int) -> Optional[str]:
-    """Return a short acknowledgment string, or None to skip."""
+    """Return a short, casual acknowledgment string, or None to skip."""
     if turn > 1:
-        return None  # only acknowledge on the first tool-calling turn
+        return None
 
-    # Try to find a specific message for the first tool
-    for name in tool_names:
-        if name in _TOOL_ACK_MAP:
-            return _TOOL_ACK_MAP[name]
+    # Skip for simple utility tools that resolve instantly
+    skip = {"complete_task", "generate_plan"}
+    if all(n in skip for n in tool_names):
+        return None
 
-    # Generic fallback for agent-style tools (contain "Agent" in name)
-    if any("Agent" in n for n in tool_names):
-        return "Working on that…"
-
-    # For simple utility tools (e.g. complete_task), skip acknowledgment
-    return None
+    return random.choice(_CASUAL_ACKS)
 
 
 class ReactLoopMixin:
