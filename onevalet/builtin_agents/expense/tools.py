@@ -772,13 +772,7 @@ async def upload_receipt(
         logger.error(f"Failed to store receipt record: {e}", exc_info=True)
         return "Sorry, I couldn't save the receipt record. Please try again."
 
-    receipt_id = record.get("id", "") if record else ""
-    result = f"Receipt saved (ID: {receipt_id})."
-    if storage_url:
-        result += f" Uploaded to: {storage_url}"
-    if description:
-        result += f" Notes: {description}"
-    return result
+    return "Receipt saved."
 
 
 # =============================================================================
