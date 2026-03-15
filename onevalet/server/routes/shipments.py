@@ -16,8 +16,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _get_repo() -> ShipmentRepository:
+async def _get_repo() -> ShipmentRepository:
     app = require_app()
+    await app._ensure_initialized()
     return ShipmentRepository(app._database)
 
 
@@ -51,7 +52,7 @@ async def internal_list_shipments(
 ):
     """List all shipments for a tenant. Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     query = "SELECT * FROM shipments WHERE tenant_id = $1"
     params = [tenant_id]
     if active_only:
@@ -70,7 +71,7 @@ async def internal_get_shipment(
 ):
     """Get a shipment by tenant_id + tracking_number. Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     rows = await repo.db.fetch(
         "SELECT * FROM shipments WHERE tenant_id = $1 AND tracking_number = $2"
         + (" AND carrier = $3" if carrier else "")
@@ -92,7 +93,7 @@ async def internal_get_shipment_by_tracking(
 ):
     """Get a shipment by tracking_number only (cross-tenant, for webhooks). Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     rows = await repo.db.fetch(
         "SELECT * FROM shipments WHERE tracking_number = $1 AND is_active = TRUE LIMIT 1",
         tracking_number.upper(),
@@ -110,7 +111,7 @@ async def internal_upsert_shipment(
 ):
     """Upsert a shipment. Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     kwargs = {}
     for field in (
         "tracking_url", "status", "description", "last_update",
@@ -138,7 +139,7 @@ async def internal_archive_shipment(
 ):
     """Archive a shipment by ID. Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     result = await repo.archive_shipment(shipment_id)
     if not result:
         raise OneValetError(E.NOT_FOUND, "Shipment not found",
@@ -153,7 +154,7 @@ async def internal_archive_by_tracking(
 ):
     """Archive a shipment by tenant_id + tracking_number. Internal use only."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     result = await repo.archive_shipment_by_tracking(body.tenant_id, body.tracking_number)
     if not result:
         raise OneValetError(E.NOT_FOUND, "Shipment not found",
@@ -169,7 +170,7 @@ async def internal_refresh_shipments(
 ):
     """Refresh all active non-delivered shipments from 17Track, then return updated list."""
     verify_service_key(request)
-    repo = _get_repo()
+    repo = await _get_repo()
     provider = TrackingProvider()
 
     # Persist timezone for background poller
