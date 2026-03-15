@@ -388,6 +388,107 @@ async def delete_expense(
 
 
 # =============================================================================
+# update_expense
+# =============================================================================
+
+_UPDATABLE_FIELDS = {"amount", "category", "description", "merchant", "currency", "date"}
+
+
+async def _preview_update_expense(args: dict, context) -> str:
+    hint = args.get("hint", "")
+    updates = {k: v for k, v in args.items() if k not in ("hint",) and v}
+    parts = ", ".join(f"{k}={v}" for k, v in updates.items())
+    return f'Update expense matching "{hint}": set {parts}?'
+
+
+@tool(needs_approval=True, get_preview=_preview_update_expense)
+async def update_expense(
+    hint: Annotated[str, "Keywords to find the expense to update (e.g. 'Starbucks yesterday', '$15 lunch')."],
+    amount: Annotated[Optional[float], "New amount. Leave empty to keep current value."] = None,
+    category: Annotated[Optional[str], "New category. Leave empty to keep current value."] = None,
+    description: Annotated[Optional[str], "New description. Leave empty to keep current value."] = None,
+    merchant: Annotated[Optional[str], "New merchant name. Leave empty to keep current value."] = None,
+    currency: Annotated[Optional[str], "New currency code (e.g. USD, EUR, CNY). Leave empty to keep current value."] = None,
+    expense_date: Annotated[Optional[str], "New date: 'today', 'yesterday', or YYYY-MM-DD. Leave empty to keep current value."] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Update fields of an existing expense found by keyword search. Only provided fields are changed."""
+    expense_repo, _, _ = _get_repos(context)
+    if not expense_repo:
+        return "Expense tracking is not available. Database not configured."
+
+    if not hint.strip():
+        return "Please provide a description, amount, or merchant to identify the expense."
+
+    # Build update payload from non-None arguments
+    updates: dict = {}
+    if amount is not None:
+        updates["amount"] = amount
+    if category is not None:
+        updates["category"] = category.strip().lower()
+    if description is not None:
+        updates["description"] = description
+    if merchant is not None:
+        updates["merchant"] = merchant
+    if currency is not None:
+        updates["currency"] = currency.upper()
+    if expense_date is not None:
+        updates["date"] = _parse_date(expense_date)
+
+    if not updates:
+        return "No fields to update. Please specify at least one field to change."
+
+    try:
+        matches = await expense_repo.search(tenant_id=context.tenant_id, query=hint.strip())
+    except Exception as e:
+        logger.error(f"Failed to search expenses: {e}", exc_info=True)
+        return "Sorry, I couldn't search for that expense. Please try again."
+
+    if not matches:
+        return f'No matching expense found for "{hint}".'
+
+    if len(matches) == 1:
+        exp = matches[0]
+        try:
+            updated = await expense_repo.update(
+                tenant_id=context.tenant_id,
+                expense_id=exp.get("id"),
+                data=updates,
+            )
+            if not updated:
+                return "Sorry, I couldn't update that expense."
+
+            changed = ", ".join(f"{k}={v}" for k, v in updates.items())
+            cur = updated.get("currency", exp.get("currency", "USD"))
+            return (
+                f"Updated: {updated.get('category', '')} "
+                f"{_format_amount(updated.get('amount', 0), cur)} "
+                f"on {updated.get('date', '')}"
+                f"{' - ' + updated.get('description', '') if updated.get('description') else ''} "
+                f"(changed: {changed})."
+            )
+        except Exception as e:
+            logger.error(f"Failed to update expense: {e}", exc_info=True)
+            return "Sorry, I couldn't update that expense. Please try again."
+
+    # Multiple matches
+    lines = [f'Found {len(matches)} expenses matching "{hint}":\n']
+    for i, exp in enumerate(matches[:10], 1):
+        d = exp.get("date", "")
+        if isinstance(d, date):
+            d = d.isoformat()
+        amt = _format_amount(exp.get("amount", 0), exp.get("currency", "USD"))
+        cat = exp.get("category", "")
+        desc = exp.get("description", "")
+        merchant_name = exp.get("merchant", "")
+        detail = desc or merchant_name
+        lines.append(f"{i}. {d} | {amt} | {cat}" + (f" | {detail}" if detail else ""))
+    lines.append("\nPlease be more specific so I can identify the right expense to update.")
+    return "\n".join(lines)
+
+
+# =============================================================================
 # spending_summary
 # =============================================================================
 

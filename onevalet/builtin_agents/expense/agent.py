@@ -23,6 +23,7 @@ from .tools import (
     log_expense,
     query_expenses,
     delete_expense,
+    update_expense,
     spending_summary,
     set_budget,
     budget_status,
@@ -49,6 +50,7 @@ Available tools:
 merchant, date, currency).
 - query_expenses: List expenses for a time period, optionally filtered by category or merchant.
 - delete_expense: Delete an expense by searching for it with keywords.
+- update_expense: Update fields of an existing expense (e.g. change currency, amount, category).
 - spending_summary: Show a spending breakdown by category for a given period with budget comparison.
 - set_budget: Set a monthly spending limit for a category or overall total.
 - budget_status: Show current budget utilization across all configured budgets.
@@ -70,17 +72,19 @@ Instructions:
    - When uncertain, use "other" and mention the detected category to the user.
 2. For spending queries (how much, total, show expenses), call query_expenses or spending_summary.
 3. For deleting entries, call delete_expense directly with identifying keywords. Do not ask for confirmation.
-4. For budget management (set limit, how much left), call set_budget or budget_status.
-5. After logging an expense, always mention the budget status if a budget is set for that category.
-6. When user_images are present in context (the user attached an image), proactively call \
+4. For updating existing expenses (e.g. wrong currency, wrong amount, wrong category), call update_expense \
+with the identifying keywords and only the fields that need to change.
+5. For budget management (set limit, how much left), call set_budget or budget_status.
+6. After logging an expense, always mention the budget status if a budget is set for that category.
+7. When user_images are present in context (the user attached an image), proactively call \
 upload_receipt after log_expense to save the receipt image.
-7. For receipt lookups ("find my receipt", "show receipt from"), call search_receipts.
-8. If the user's request is ambiguous or missing critical information (like amount), \
+8. For receipt lookups ("find my receipt", "show receipt from"), call search_receipts.
+9. If the user's request is ambiguous or missing critical information (like amount), \
 ask for clarification in your text response WITHOUT calling any tools.
-9. After getting tool results, provide a clear, concise summary to the user.
-10. When showing amounts, always use the appropriate currency symbol.
-11. Parse relative dates naturally: "yesterday", "last friday", "this morning" -> appropriate date.
-12. If the user provides multiple expenses in one message, log each one separately."""
+10. After getting tool results, provide a clear, concise summary to the user.
+11. When showing amounts, always use the appropriate currency symbol.
+12. Parse relative dates naturally: "yesterday", "last friday", "this morning" -> appropriate date.
+13. If the user provides multiple expenses in one message, log each one separately."""
 
     def get_system_prompt(self) -> str:
         now, _ = self._user_now()
@@ -100,6 +104,7 @@ ask for clarification in your text response WITHOUT calling any tools.
         log_expense,
         query_expenses,
         delete_expense,
+        update_expense,
         spending_summary,
         set_budget,
         budget_status,

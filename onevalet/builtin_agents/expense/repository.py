@@ -100,6 +100,26 @@ class ExpenseRepository(Repository):
         )
         return result == "DELETE 1"
 
+    async def update(
+        self,
+        tenant_id: str,
+        expense_id: str,
+        data: Dict[str, Any],
+    ) -> Optional[dict]:
+        """Update specific fields of an expense, verifying tenant ownership.
+
+        *data* should contain only the columns to update (e.g. currency, amount).
+        Returns the updated row or None if not found / not owned.
+        """
+        row = await self._db.fetchrow(
+            "SELECT id FROM expenses WHERE id = $1 AND tenant_id = $2",
+            expense_id,
+            tenant_id,
+        )
+        if not row:
+            return None
+        return await self._update("id", expense_id, data)
+
     async def summary_by_category(
         self, tenant_id: str, start_date: date, end_date: date
     ) -> list[dict]:
