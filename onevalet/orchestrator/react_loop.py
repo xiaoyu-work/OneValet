@@ -535,10 +535,12 @@ class ReactLoopMixin:
                             tc.id, result_text, media=result_media,
                         ))
 
-                        # Collect media marked for_storage for the final response
+                        # Collect media for the final response:
+                        # - for_storage=True media (images) for client persistence
+                        # - inline_cards for frontend card rendering
                         for m in result_media:
                             meta = m.get("metadata", {})
-                            if meta.get("for_storage"):
+                            if meta.get("for_storage") or m.get("type") == "inline_cards":
                                 _response_media.append(m)
 
                         all_tool_records.append(ToolCallRecord(
