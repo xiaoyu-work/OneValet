@@ -867,8 +867,16 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         for addr in (profile.get("addresses") or []):
             parts = [addr.get("street"), addr.get("city"), addr.get("state")]
             loc = ", ".join(p for p in parts if p)
+            label = addr.get("label", "Address").title()
             if loc:
-                lines.append(f"{addr.get('label', 'Address').title()}: {loc}")
+                line = f"{label}: {loc}"
+            else:
+                line = f"{label}:"
+            lat, lng = addr.get("lat"), addr.get("lng")
+            if lat is not None and lng is not None:
+                line += f" (coordinates: {lat}, {lng})"
+            if loc or (lat is not None and lng is not None):
+                lines.append(line)
 
         work = profile.get("work") or {}
         for job in (work.get("jobs") or []):
