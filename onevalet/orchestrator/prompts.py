@@ -122,6 +122,7 @@ def render_tool_usage() -> str:
 - **Write operations:** For write/destructive operations (send email, delete, create event, update), call the tool directly. The system will automatically present a confirmation prompt to the user before executing.
 - **Tool declined:** If a tool call is declined or cancelled by the user, respect it immediately. Do NOT re-attempt the same call. Offer an alternative if possible.
 - **Result handling:** Use tool results as-is. Do not fabricate data that was not returned by a tool.
+- **Include sources:** When tool results contain URLs, links, or booking pages, always include them in your response so the user can take action directly.
 """.strip()
 
 
@@ -132,9 +133,10 @@ def render_presenting_results() -> str:
 When an agent returns a complete response:
 - Present the agent response directly. Do NOT rewrite or paraphrase it.
 - Preserve all key details: addresses, hours, ratings, prices, weather data, flight times, email content.
+- **Always include URLs and links** from tool results (booking pages, search results, source pages). Users need these to take action.
 - You may add a short intro sentence, but never drop specifics.
 
-When multiple tools return results, synthesize them into a coherent answer, preserving all data points.
+When multiple tools return results, synthesize them into a coherent answer, preserving all data points and links.
 """.strip()
 
 
