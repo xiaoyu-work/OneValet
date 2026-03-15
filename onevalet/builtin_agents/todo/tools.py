@@ -499,6 +499,16 @@ async def set_reminder(
                 local_dt = datetime.fromisoformat(schedule_datetime.replace('Z', '+00:00'))
             else:
                 local_dt = datetime.fromisoformat(schedule_datetime)
+
+            # If the datetime has no timezone info, attach the user's timezone
+            # so CronService doesn't incorrectly treat it as UTC.
+            if local_dt.tzinfo is None and user_tz:
+                try:
+                    from zoneinfo import ZoneInfo
+                    local_dt = local_dt.replace(tzinfo=ZoneInfo(user_tz))
+                except Exception:
+                    pass
+
             schedule = AtSchedule(at=local_dt.isoformat())
     except Exception as e:
         logger.error(f"Failed to parse schedule_datetime: {e}")
