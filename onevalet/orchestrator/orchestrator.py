@@ -491,8 +491,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
             return
 
-        # Step 5: Build domain-filtered tool schemas
-        tool_schemas = await self._build_tool_schemas(tenant_id, domains=intent.domains)
+        # Step 5 & 6: Build tool schemas and LLM messages in parallel
+        tool_schemas_task = self._build_tool_schemas(tenant_id, domains=intent.domains)
+        messages_task = self._build_llm_messages(context, message, needs_memory=intent.needs_memory)
+        tool_schemas, messages = await asyncio.gather(tool_schemas_task, messages_task)
 
         # Step 5b: Inject notify_user tool for conditional cron delivery
         # Use a local copy of builtin_tools to avoid mutating the instance list
@@ -503,9 +505,6 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             tool_schemas.append(notify_schema)
 
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
-
-        # Step 6: Build LLM messages
-        messages = await self._build_llm_messages(context, message)
 
         # Convert images to media format for LLM
         media = None
@@ -725,6 +724,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         context: Dict[str, Any],
         user_message: str,
         *,
+        needs_memory: bool = True,
         include_planning: bool = False,
         approved_plan: str = "",
         pending_plan: str = "",
@@ -810,7 +810,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             system_parts.append("\n[User Profile]\n" + profile_text)
 
         # Relevant memories from Momex (auto-recall based on user message)
-        if self.momex:
+        if self.momex and needs_memory:
             try:
                 recalled = await self.momex.search(
                     tenant_id=context.get("tenant_id", ""),
@@ -994,6 +994,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         logger.info(
             f"[IntentAnalyzer] type={intent.intent_type}, "
             f"domains={intent.domains}, "
+            f"needs_memory={intent.needs_memory}, "
             f"sub_tasks={len(intent.sub_tasks)}"
         )
         return intent

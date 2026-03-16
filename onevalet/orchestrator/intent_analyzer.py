@@ -32,6 +32,7 @@ class IntentAnalysis:
 
     intent_type: str  # "single" or "multi"
     domains: List[str]  # Domains needed (e.g., ["communication", "productivity"])
+    needs_memory: bool = True  # Whether long-term memory recall is needed
     sub_tasks: List[SubTask] = field(default_factory=list)
     raw_message: str = ""  # Original user message
 
@@ -46,6 +47,7 @@ You are an intent classifier for a personal AI assistant.
 Given a user message, determine:
 1. Whether it contains a single intent or multiple independent intents
 2. Which domain(s) are needed
+3. Whether long-term memory recall is needed
 
 Domains:
 - communication: email, slack, discord, twitter/X, linkedin messaging
@@ -53,6 +55,10 @@ Domains:
 - lifestyle: expenses/budget, smart home, package tracking, spotify/music, youtube, image generation, important dates
 - travel: trip planning, maps/directions/navigation, nearby places, air quality
 - general: greeting, chitchat, creative writing, general knowledge (no agent needed)
+
+needs_memory rules:
+- true: when the user references personal history, preferences, past conversations, or context that may be stored in memory (e.g. "that restaurant I mentioned", "my usual flight", "like last time")
+- false: for greetings, direct commands, factual questions, tool-based lookups, or anything that doesn't need past context (e.g. "hi", "search flights to NYC", "what's the weather", "log expense $15 lunch")
 
 Rules:
 - For conditional logic ("if X then Y", "check X and based on that do Y"), classify as SINGLE intent — the execution engine handles conditions natively.
@@ -65,6 +71,7 @@ Return strict JSON only:
 {
   "intent_type": "single" | "multi",
   "domains": ["domain1", ...],
+  "needs_memory": true | false,
   "sub_tasks": []
 }
 
@@ -128,6 +135,7 @@ class IntentAnalyzer:
         """Parse and validate LLM response into IntentAnalysis."""
         intent_type = data.get("intent_type", "single")
         domains = data.get("domains", ["all"])
+        needs_memory = data.get("needs_memory", True)
 
         # Validate domains
         domains = [d for d in domains if d in VALID_DOMAINS] or ["all"]
@@ -163,6 +171,7 @@ class IntentAnalyzer:
         return IntentAnalysis(
             intent_type=intent_type,
             domains=domains,
+            needs_memory=needs_memory,
             sub_tasks=sub_tasks,
             raw_message=user_message,
         )
