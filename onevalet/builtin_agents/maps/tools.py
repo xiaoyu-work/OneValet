@@ -144,6 +144,15 @@ async def search_places(
             maps_uri = place.get("googleMapsUri", "")
             website = place.get("websiteUri", "")
             price_level = place.get("priceLevel", "")
+            # Map Google API price level enums to user-friendly symbols
+            _PRICE_MAP = {
+                "PRICE_LEVEL_FREE": "Free",
+                "PRICE_LEVEL_INEXPENSIVE": "$",
+                "PRICE_LEVEL_MODERATE": "$$",
+                "PRICE_LEVEL_EXPENSIVE": "$$$",
+                "PRICE_LEVEL_VERY_EXPENSIVE": "$$$$",
+            }
+            price_display = _PRICE_MAP.get(price_level, price_level)
             hours = place.get("regularOpeningHours", {})
             hours_text = "; ".join(hours.get("weekdayDescriptions", [])) if hours else ""
 
@@ -152,8 +161,8 @@ async def search_places(
                 result_lines.append(f"   Address: {address}")
             if rating:
                 result_lines.append(f"   Rating: {rating}/5 ({rating_count} reviews)")
-            if price_level:
-                result_lines.append(f"   Price: {price_level}")
+            if price_display:
+                result_lines.append(f"   Price: {price_display}")
             if phone:
                 result_lines.append(f"   Phone: {phone}")
             if hours_text:
@@ -175,8 +184,8 @@ async def search_places(
                 card["reviews"] = str(rating_count)
             if address:
                 card["address"] = address
-            if price_level:
-                card["price"] = price_level
+            if price_display:
+                card["price"] = price_display
             if phone:
                 card["phone"] = phone
             if hours_text:
