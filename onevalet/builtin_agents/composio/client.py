@@ -131,12 +131,26 @@ class ComposioClient:
     ) -> Dict[str, Any]:
         """
         Initiate an OAuth connection to an app.
+        Returns existing active connection if one already exists.
 
         Args:
             app_name: The app to connect (e.g. "github", "slack").
             entity_id: Entity ID representing the user.
             redirect_url: Optional redirect URL after OAuth completes.
         """
+        # Check for existing active connection to prevent duplicates
+        try:
+            connections = await self.list_connections(entity_id=entity_id)
+            connection_list = connections.get("items", connections.get("connections", []))
+            for conn in connection_list:
+                conn_app = (conn.get("appName") or conn.get("appUniqueId") or "").lower()
+                conn_status = (conn.get("status") or "").upper()
+                if conn_app == app_name.lower() and conn_status == "ACTIVE":
+                    logger.info(f"[Composio] Reusing existing {app_name} connection {conn.get('id')} for entity {entity_id}")
+                    return {"status": "ACTIVE", "connectedAccountId": conn.get("id", ""), "id": conn.get("id", "")}
+        except Exception as e:
+            logger.warning(f"[Composio] Failed to check existing connections: {e}")
+
         integration_id = await self._resolve_integration_id(app_name)
 
         body: Dict[str, Any] = {

@@ -612,6 +612,20 @@ async def composio_oauth_authorize(
 
     try:
         client = ComposioClient()
+
+        # Prevent duplicate connections for the same app + entity
+        connections = await client.list_connections(entity_id=tenant_id)
+        connection_list = connections.get("items", connections.get("connections", []))
+        for conn in connection_list:
+            conn_app = (conn.get("appName") or conn.get("appUniqueId") or "").lower()
+            conn_status = (conn.get("status") or "").upper()
+            if conn_app == composio_app and conn_status == "ACTIVE":
+                return {
+                    "already_connected": True,
+                    "connected_account_id": conn.get("id", ""),
+                    "message": f"{COMPOSIO_APPS[composio_app]} is already connected.",
+                }
+
         data = await client.initiate_connection(
             app_name=composio_app, entity_id=tenant_id,
             redirect_url=callback_url,
