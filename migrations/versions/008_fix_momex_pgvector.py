@@ -16,6 +16,7 @@ Revises: 007
 from typing import Sequence, Union
 
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "008"
 down_revision: Union[str, None] = "007"
@@ -28,7 +29,7 @@ EMBEDDING_SIZE = 1536
 def upgrade() -> None:
     # ── Step 1: Move pgvector to extensions schema ──────────────────────
     # ALTER EXTENSION SET SCHEMA is non-destructive (no CASCADE data loss).
-    op.execute("""
+    op.execute(text("""
         DO $$
         DECLARE
             current_schema TEXT;
@@ -48,26 +49,26 @@ def upgrade() -> None:
                 RAISE NOTICE 'pgvector already in extensions — no-op';
             END IF;
         END $$;
-    """)
+    """))
 
     # ── Step 2: Repair tenant_default (re-create anything CASCADE may
     #            have dropped when we tested earlier) ────────────────────
     _create_momex_tables("tenant_default")
 
     # ── Step 3: Repair every per-user tenant schema ─────────────────────
-    op.execute("""
+    op.execute(text("""
         DO $$
         DECLARE
             s TEXT;
         BEGIN
             FOR s IN
                 SELECT nspname FROM pg_namespace
-                WHERE nspname LIKE 'tenant_%%' AND nspname != 'tenant_default'
+                WHERE nspname LIKE 'tenant_%' AND nspname != 'tenant_default'
             LOOP
-                RAISE NOTICE 'Will repair MOMEX tables in schema: %%', s;
+                RAISE NOTICE 'Will repair MOMEX tables in schema: %', s;
             END LOOP;
         END $$;
-    """)
+    """))
     # The DO block above is just for logging; actual table creation is
     # done per-schema via _repair_tenant_schemas() helper below.
     _repair_tenant_schemas()
@@ -200,16 +201,16 @@ def _repair_tenant_schemas() -> None:
     # We use a DO block to iterate schemas, but alembic op.execute()
     # can't easily loop + call Python.  Instead we generate all the
     # DDL in a single PL/pgSQL block.
-    op.execute(f"""
+    op.execute(text("""
         DO $$
         DECLARE
             s TEXT;
         BEGIN
             FOR s IN
                 SELECT nspname FROM pg_namespace
-                WHERE nspname LIKE 'tenant_%%' AND nspname != 'tenant_default'
+                WHERE nspname LIKE 'tenant_%' AND nspname != 'tenant_default'
             LOOP
-                EXECUTE format('SET search_path TO %%I, public, extensions', s);
+                EXECUTE format('SET search_path TO %I, public, extensions', s);
 
                 -- Core tables
                 EXECUTE 'CREATE TABLE IF NOT EXISTS ConversationMetadata (
@@ -232,7 +233,7 @@ def _repair_tenant_schemas() -> None:
                     id SERIAL PRIMARY KEY,
                     msg_id INTEGER NOT NULL REFERENCES Messages(msg_id) ON DELETE CASCADE,
                     chunk_ordinal INTEGER NOT NULL,
-                    embedding vector({EMBEDDING_SIZE}) NOT NULL,
+                    embedding vector(""" + str(EMBEDDING_SIZE) + """) NOT NULL,
                     UNIQUE (msg_id, chunk_ordinal))';
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS PropertyIndex (
@@ -250,13 +251,13 @@ def _repair_tenant_schemas() -> None:
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS RelatedTermsFuzzy (
                     term TEXT NOT NULL PRIMARY KEY,
-                    term_embedding vector({EMBEDDING_SIZE}) NOT NULL)';
+                    term_embedding vector(""" + str(EMBEDDING_SIZE) + """) NOT NULL)';
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS IngestedSources (
                     source_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL DEFAULT ''Ingested'')';
 
-                RAISE NOTICE 'Repaired MOMEX tables in schema: %%', s;
+                RAISE NOTICE 'Repaired MOMEX tables in schema: %', s;
             END LOOP;
         END $$;
-    """)
+    """))
