@@ -52,6 +52,18 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _parse_coords(location: str) -> Optional[tuple]:
+    """Try to parse 'lat,lng' from a location string. Returns (lat, lng) or None."""
+    if not location:
+        return None
+    m = re.match(r'^(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)$', location.strip())
+    if m:
+        lat, lng = float(m.group(1)), float(m.group(2))
+        if -90 <= lat <= 90 and -180 <= lng <= 180:
+            return (lat, lng)
+    return None
+
+
 # =============================================================================
 # search_places
 # =============================================================================
@@ -59,7 +71,7 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
 @tool
 async def search_places(
     query: Annotated[str, "What to search for (e.g., 'coffee shops', 'pizza', 'gas station')"],
-    location: Annotated[str, "Where to search (city or neighborhood, e.g., 'Seattle' or 'downtown Portland')"] = "",
+    location: Annotated[str, "Where to search — use 'lat,lng' coordinates (e.g., '47.7148,-122.1826') or a city/neighborhood name (e.g., 'Seattle')"] = "",
     *,
     context: AgentToolContext,
 ) -> str:
@@ -85,12 +97,29 @@ async def search_places(
             ),
         }
 
-        text_query = f"{query} in {location}" if location else query
-        request_body = {
-            "textQuery": text_query,
-            "maxResultCount": 5,
-            "languageCode": "en",
-        }
+        # Detect if location is lat,lng coordinates
+        coords = _parse_coords(location)
+
+        if coords:
+            # Use locationBias for coordinate-based search (no "in ..." suffix)
+            request_body = {
+                "textQuery": query,
+                "maxResultCount": 5,
+                "languageCode": "en",
+                "locationBias": {
+                    "circle": {
+                        "center": {"latitude": coords[0], "longitude": coords[1]},
+                        "radius": 10000.0,  # 10 km radius
+                    }
+                },
+            }
+        else:
+            text_query = f"{query} in {location}" if location else query
+            request_body = {
+                "textQuery": text_query,
+                "maxResultCount": 5,
+                "languageCode": "en",
+            }
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

@@ -107,6 +107,10 @@ async def execute_agent_tool(
     user_timezone = (request_context or {}).get("metadata", {}).get("timezone")
     if user_timezone:
         enriched_hints["timezone"] = user_timezone
+    # Pass user location to agent tools (lat/lng from device)
+    user_location = (request_context or {}).get("metadata", {}).get("location")
+    if user_location and isinstance(user_location, dict):
+        enriched_hints["user_location"] = user_location
     # Supabase storage as default cloud storage provider (if configured)
     supabase_storage = getattr(orchestrator, "_supabase_storage", None)
     if supabase_storage and "cloud_storage_provider" not in enriched_hints:

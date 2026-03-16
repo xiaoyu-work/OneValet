@@ -32,20 +32,28 @@ Available tools:
 - check_air_quality: Check current air quality (AQI) for a location.
 
 Today's date: {today} ({weekday})
-
+{location_block}
 Instructions:
-1. If the user's request is missing critical information (location, destination, origin), \
+1. When searching for nearby places, ALWAYS use the user's coordinates as the location \
+parameter in the format "lat,lng" (e.g., "47.7148,-122.1826"). \
+NEVER use vague strings like "nearby" or "your current location".
+2. If the user's request is missing critical information AND you don't have their coordinates, \
 ASK the user for it in your text response WITHOUT calling any tools.
-2. Once you have enough information, call the relevant tools.
 3. After getting tool results, synthesize a clear, helpful response for the user.
-4. For directions, if the user says "from home" and you don't have their address, ask them.
+4. For directions, use user coordinates as origin when they say "from here" or "nearby". \
+If they say "from home" and you don't have their address, ask them.
 5. Be helpful and proactive — suggest nearby alternatives or additional info when relevant."""
 
     def get_system_prompt(self) -> str:
         now, _ = self._user_now()
+        loc = self.context_hints.get("user_location") if self.context_hints else None
+        location_block = ""
+        if loc and isinstance(loc, dict) and loc.get("lat") is not None:
+            location_block = f"User's current location: {loc['lat']}, {loc['lng']}\n\n"
         return self._SYSTEM_PROMPT_TEMPLATE.format(
             today=now.strftime('%Y-%m-%d'),
             weekday=now.strftime('%A'),
+            location_block=location_block,
         )
 
     tools = (
