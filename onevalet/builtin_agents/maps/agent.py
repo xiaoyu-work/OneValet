@@ -46,6 +46,7 @@ If they say "from home" and you don't have their address, ask them.
 
 Response format for search_places results:
 - Start with a brief summary sentence (e.g. "为您推荐附近3家评价高的日本料理：")
+- NEVER include raw coordinates (lat/lng) in your response — say "附近" or "您当前位置附近" instead.
 - Then list each place using a numbered list in this EXACT format:
   1. **Place Name**
      · 地址：address
