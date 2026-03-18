@@ -96,10 +96,13 @@ async def stream(req: ChatRequest):
             # Fire callback after orchestrator completes
             if execution_end_data_holder and _KOIAI_CALLBACK_URL:
                 ed = execution_end_data_holder[0]
+                # ed is an AgentResult dataclass, not a dict
+                final_resp = getattr(ed, "raw_message", "") or ""
+                tool_calls = getattr(ed, "metadata", {}).get("tool_calls", []) if hasattr(ed, "metadata") else []
                 await _post_stream_result(
                     tenant_id=req.tenant_id,
-                    final_response=ed.get("final_response", ""),
-                    tool_calls=ed.get("tool_calls", []),
+                    final_response=final_resp,
+                    tool_calls=tool_calls,
                 )
 
     async def event_generator():
