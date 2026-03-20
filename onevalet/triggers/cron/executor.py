@@ -12,6 +12,7 @@ from .models import (
     CronEvent,
     CronJob,
     CronRunEntry,
+    DeliveryMode,
     SessionTarget,
     SystemEventPayload,
     WakeMode,
@@ -219,6 +220,16 @@ class CronExecutor:
             text = job.payload.message
         else:
             return None, f"Unsupported payload type: {type(job.payload).__name__}"
+
+        # Simple reminders (SystemEventPayload with announce delivery) don't need
+        # AI processing — the payload text IS the reminder. Passing it through the
+        # orchestrator causes the AI to re-interpret it as a new user instruction.
+        if (isinstance(job.payload, SystemEventPayload)
+                and job.delivery
+                and job.delivery.mode == DeliveryMode.ANNOUNCE
+                and not job.delivery.conditional):
+            return text, None
+
         message = text
 
         try:
