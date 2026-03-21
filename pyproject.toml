@@ -1,7 +1,7 @@
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-# momex pin: 1a48255 (pgbouncer transaction fix)
+# momex pin: 24be52c (search perf optimization)
 
 [project]
 name = "onevalet"
