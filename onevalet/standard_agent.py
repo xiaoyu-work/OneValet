@@ -1658,11 +1658,18 @@ Return JSON only."""
 
     def _build_tool_context(self) -> AgentToolContext:
         """Create AgentToolContext from agent state."""
+        metadata: Dict[str, Any] = {}
+        if self.context_hints:
+            if self.context_hints.get("timezone"):
+                metadata["timezone"] = self.context_hints["timezone"]
+            if self.context_hints.get("user_location"):
+                metadata["location"] = self.context_hints["user_location"]
         return AgentToolContext(
             llm_client=self.llm_client,
             tenant_id=self.tenant_id,
             user_profile=self.context_hints.get("user_profile") if self.context_hints else None,
             context_hints=self.context_hints,
+            metadata=metadata,
         )
 
     @staticmethod
