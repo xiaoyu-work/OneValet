@@ -121,4 +121,4 @@ When `model_routing.enabled` is not set or `false`, OneValet uses the single LLM
 
 ## License
 
-[MIT](LICENSE)
+[BSL 1.1](LICENSE) — Free for personal, educational, and non-commercial use. Commercial license required for companies with annual revenue over $1M or hosted services. Converts to Apache 2.0 on 2030-03-21. Contact z@withkoi.ai for commercial licensing.
