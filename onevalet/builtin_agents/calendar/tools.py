@@ -166,6 +166,13 @@ async def query_events(
             location = event.get("location", "")
             if location:
                 card["location"] = location
+            # Google Calendar event URL for deep linking
+            event_id = event.get("id", "")
+            html_link = event.get("htmlLink", "")
+            if html_link:
+                card["eventUrl"] = html_link
+            elif event_id:
+                card["eventId"] = event_id
             event_cards.append(card)
 
         media = []
