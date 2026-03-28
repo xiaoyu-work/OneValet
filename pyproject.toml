@@ -8,7 +8,7 @@ name = "onevalet"
 version = "0.1.1"
 description = "A personal AI agent framework with state-driven agents and ReAct orchestration"
 readme = "README.md"
-license = "BSL-1.1"
+license = {text = "BSL-1.1"}
 requires-python = ">=3.12"
 authors = [
     { name = "OneValet Contributors" }
