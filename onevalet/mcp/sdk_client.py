@@ -103,8 +103,28 @@ class MCPSDKClient(MCPClient):
     async def _connect_websocket(self) -> None:
         raise NotImplementedError(
             "WebSocket transport is not supported by the mcp SDK. "
-            "Use stdio or sse transport instead."
+            "Use stdio, sse, or streamable_http transport instead."
         )
+
+    async def _connect_streamable_http(self) -> None:
+        from mcp.client.session import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+
+        self._exit_stack = AsyncExitStack()
+        await self._exit_stack.__aenter__()
+
+        read_stream, write_stream = await self._exit_stack.enter_async_context(
+            streamablehttp_client(
+                url=self.config.url,
+                headers=self.config.headers or None,
+                timeout=self.config.timeout,
+            )
+        )
+        self._session = await self._exit_stack.enter_async_context(
+            ClientSession(read_stream, write_stream)
+        )
+        await self._session.initialize()
+        logger.info(f"MCP Streamable HTTP session initialized: {self.config.name}")
 
     # ── Capability discovery ─────────────────────────────────────────
 

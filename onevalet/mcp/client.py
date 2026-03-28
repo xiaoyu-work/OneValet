@@ -88,6 +88,8 @@ class MCPClient(MCPClientProtocol):
                 await self._connect_stdio()
             elif self.config.transport == MCPTransportType.SSE:
                 await self._connect_sse()
+            elif self.config.transport == MCPTransportType.STREAMABLE_HTTP:
+                await self._connect_streamable_http()
             elif self.config.transport == MCPTransportType.WEBSOCKET:
                 await self._connect_websocket()
 
@@ -114,6 +116,13 @@ class MCPClient(MCPClientProtocol):
         raise NotImplementedError(
             "SSE transport requires MCP SDK integration. "
             "Override _connect_sse() or use MCPSDKClient."
+        )
+
+    async def _connect_streamable_http(self) -> None:
+        """Connect via Streamable HTTP transport - override for actual implementation"""
+        raise NotImplementedError(
+            "Streamable HTTP transport requires MCP SDK integration. "
+            "Override _connect_streamable_http() or use MCPSDKClient."
         )
 
     async def _connect_websocket(self) -> None:

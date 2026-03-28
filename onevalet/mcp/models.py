@@ -11,6 +11,7 @@ class MCPTransportType(str, Enum):
     """MCP transport types"""
     STDIO = "stdio"
     SSE = "sse"
+    STREAMABLE_HTTP = "streamable_http"
     WEBSOCKET = "websocket"
 
 

@@ -68,9 +68,16 @@ embedding:
 #
 # Each entry defines an MCP server whose tools become available to agents.
 # Tools are auto-discovered and named "mcp__{server}__{tool}".
-# Supported transports: stdio, sse
+# Supported transports: stdio, sse, streamable_http
 # ---------------------------------------------------------------------------
 # mcp_servers:
+#   invokit:
+#     transport: streamable_http
+#     url: https://api.invok.it/mcp
+#     headers:
+#       Authorization: "Bearer ${INVOKIT_API_KEY:-}"
+#     timeout: 30
+#
 #   filesystem:
 #     transport: stdio
 #     command: npx
