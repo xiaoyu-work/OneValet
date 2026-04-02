@@ -175,6 +175,23 @@ class LLMRegistry:
                 extra=config.extra or {},
             )
 
+            if config.provider.lower() == "copilot":
+                from .copilot_client import CopilotLLMClient
+                from .copilot_auth import CopilotTokenManager
+                github_token = api_key or os.environ.get("GITHUB_TOKEN")
+                if not github_token:
+                    logger.warning("Copilot provider requires GITHUB_TOKEN")
+                    return None
+                github_refresh_token = os.environ.get("GITHUB_REFRESH_TOKEN")
+                token_manager = CopilotTokenManager(
+                    github_token=github_token,
+                    github_refresh_token=github_refresh_token,
+                )
+                return CopilotLLMClient(
+                    token_manager=token_manager,
+                    config=llm_config,
+                )
+
             from .litellm_client import LiteLLMClient
             return LiteLLMClient(config=llm_config, provider_name=config.provider.lower())
 

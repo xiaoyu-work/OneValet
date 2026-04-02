@@ -118,11 +118,38 @@ class OneValet:
 
         # 1. LLM client
         api_key = llm_cfg.get("api_key")
-
-        from .llm.litellm_client import LiteLLMClient
         from .llm.base import LLMConfig
-        llm_config = LLMConfig(model=model, api_key=api_key, base_url=llm_cfg.get("base_url"))
-        self._llm_client = LiteLLMClient(config=llm_config, provider_name=provider)
+
+        if provider == "copilot":
+            # Copilot uses OAuth — create CopilotLLMClient with token manager
+            from .llm.copilot_client import CopilotLLMClient
+            from .llm.copilot_auth import CopilotTokenManager
+
+            github_token = llm_cfg.get("github_token") or os.environ.get("GITHUB_TOKEN")
+            if not github_token:
+                raise ValueError(
+                    "Copilot provider requires a GitHub token. Either:\n"
+                    "  1. Run 'python -m onevalet copilot-auth' to authenticate, or\n"
+                    "  2. Set llm.github_token in config.yaml, or\n"
+                    "  3. Set the GITHUB_TOKEN environment variable."
+                )
+            github_refresh_token = (
+                llm_cfg.get("github_refresh_token")
+                or os.environ.get("GITHUB_REFRESH_TOKEN")
+            )
+            token_manager = CopilotTokenManager(
+                github_token=github_token,
+                github_refresh_token=github_refresh_token,
+            )
+            llm_config = LLMConfig(model=model)
+            self._llm_client = CopilotLLMClient(
+                token_manager=token_manager,
+                config=llm_config,
+            )
+        else:
+            from .llm.litellm_client import LiteLLMClient
+            llm_config = LLMConfig(model=model, api_key=api_key, base_url=llm_cfg.get("base_url"))
+            self._llm_client = LiteLLMClient(config=llm_config, provider_name=provider)
         logger.info(f"LLM client: provider={provider}, model={model}")
 
         # 2. Database
@@ -143,7 +170,7 @@ class OneValet:
         from .memory.momex import MomexMemory
         momex_provider = provider
         # Map OneValet provider names to momex provider names
-        if momex_provider in ("gemini", "ollama"):
+        if momex_provider in ("gemini", "ollama", "copilot"):
             momex_provider = "openai"  # fallback: momex only supports openai/azure/anthropic/deepseek/qwen
 
         # Embedding config
@@ -194,17 +221,30 @@ class OneValet:
             if name == "default":
                 continue  # already registered above
             try:
-                _prov_llm_config = _LLMConfig(
-                    model=prov_cfg["model"],
-                    api_key=prov_cfg.get("api_key"),
-                    base_url=prov_cfg.get("base_url"),
-                )
-                _prov_client = _LiteLLMClient(
-                    config=_prov_llm_config,
-                    provider_name=prov_cfg.get("provider", "openai"),
-                )
+                _prov_name = prov_cfg.get("provider", "openai")
+                if _prov_name == "copilot":
+                    from .llm.copilot_client import CopilotLLMClient as _CopilotClient
+                    from .llm.copilot_auth import CopilotTokenManager as _CopilotTM
+                    _gh_token = prov_cfg.get("github_token") or os.environ.get("GITHUB_TOKEN")
+                    if not _gh_token:
+                        logger.warning(f"Copilot provider '{name}' skipped: no GITHUB_TOKEN")
+                        continue
+                    _gh_refresh = prov_cfg.get("github_refresh_token") or os.environ.get("GITHUB_REFRESH_TOKEN")
+                    _tm = _CopilotTM(github_token=_gh_token, github_refresh_token=_gh_refresh)
+                    _prov_llm_config = _LLMConfig(model=prov_cfg["model"])
+                    _prov_client = _CopilotClient(token_manager=_tm, config=_prov_llm_config)
+                else:
+                    _prov_llm_config = _LLMConfig(
+                        model=prov_cfg["model"],
+                        api_key=prov_cfg.get("api_key"),
+                        base_url=prov_cfg.get("base_url"),
+                    )
+                    _prov_client = _LiteLLMClient(
+                        config=_prov_llm_config,
+                        provider_name=_prov_name,
+                    )
                 llm_registry.register(name, _prov_client)
-                logger.info(f"Registered LLM provider: {name} ({prov_cfg.get('provider')}/{prov_cfg['model']})")
+                logger.info(f"Registered LLM provider: {name} ({_prov_name}/{prov_cfg['model']})")
             except Exception as e:
                 logger.warning(f"Failed to register LLM provider '{name}': {e}")
 

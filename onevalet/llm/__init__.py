@@ -23,6 +23,8 @@ Usage:
 
 from .base import BaseLLMClient, LLMConfig, LLMResponse, StreamChunk
 from .litellm_client import LiteLLMClient
+from .copilot_client import CopilotLLMClient
+from .copilot_auth import CopilotTokenManager
 from .registry import LLMRegistry, LLMProviderConfig
 from .router import ModelRouter, RoutingRule, RoutingDecision
 
@@ -32,6 +34,8 @@ __all__ = [
     "LLMResponse",
     "StreamChunk",
     "LiteLLMClient",
+    "CopilotLLMClient",
+    "CopilotTokenManager",
     "LLMRegistry",
     "LLMProviderConfig",
     "ModelRouter",

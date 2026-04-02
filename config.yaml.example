@@ -7,10 +7,21 @@ database: ${DATABASE_URL}
 #   storage_bucket: onevalet-files        # bucket name in Supabase Dashboard
 
 llm:
-  provider: openai          # openai | anthropic | azure | dashscope | gemini | ollama
+  provider: openai          # openai | anthropic | azure | dashscope | gemini | ollama | copilot
   model: gpt-4o
   # api_key: ${OPENAI_API_KEY}
   # base_url: https://your-endpoint.openai.azure.com/  # Azure only
+
+# --- GitHub Copilot provider ---
+# Use your Copilot subscription for LLM access (no API key needed).
+# First run: python -m onevalet copilot-auth
+# Then configure:
+#
+# llm:
+#   provider: copilot
+#   model: claude-sonnet-4.6    # or gpt-4o, claude-opus-4.6, etc.
+#   github_token: ${GITHUB_TOKEN}
+#   github_refresh_token: ${GITHUB_REFRESH_TOKEN}   # optional, for auto-renewal
 
 embedding:
   provider: openai          # openai | azure
