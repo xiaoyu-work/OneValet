@@ -337,3 +337,20 @@ async def device_flow_authenticate() -> dict:
     print("=" * 60)
 
     return token_data
+
+
+if __name__ == "__main__":
+    import sys
+
+    try:
+        token_data = asyncio.run(device_flow_authenticate())
+    except RuntimeError as e:
+        print(f"\n  ✗ Authentication failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    access_token = token_data["access_token"]
+    refresh_token = token_data.get("refresh_token", "")
+
+    print(f"\n  GITHUB_TOKEN={access_token}")
+    if refresh_token:
+        print(f"  GITHUB_REFRESH_TOKEN={refresh_token}")
