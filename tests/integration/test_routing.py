@@ -21,7 +21,6 @@ ROUTING_CASES = [
     ("Set a reminder to call mom tomorrow", ["TodoAgent"]),
     ("Add buy groceries to my todo list", ["TodoAgent"]),
     ("Find a good Italian restaurant nearby", ["MapsAgent"]),
-    ("How do I get to the airport from here?", ["MapsAgent"]),
     ("Track my package 1Z999AA10123456784", ["ShippingAgent"]),
     ("What's my morning briefing?", ["BriefingAgent"]),
     ("Set up daily briefing at 8am", ["BriefingAgent"]),
@@ -46,6 +45,43 @@ async def test_routes_to_correct_agent(orchestrator_factory, user_input, expecte
     """The orchestrator should delegate the user message to the correct agent."""
     orch, recorder = await orchestrator_factory()
     result = await orch.handle_message(tenant_id="test_user", message=user_input)
+
+    routed_agents = [c["agent_type"] for c in recorder.agent_calls]
+    tool_names = [tc["tool_name"] for tc in recorder.tool_calls]
+    print(f"\n  routed={routed_agents} tools={tool_names}")
+    print(f"  response={result.raw_message[:200] if result.raw_message else '(empty)'}")
+    assert any(agent in routed_agents for agent in expected_agents), (
+        f"Expected one of {expected_agents}, got {routed_agents}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Location-aware routing tests
+# ---------------------------------------------------------------------------
+
+LOCATION_ROUTING_CASES = [
+    ("How do I get to the airport from here?", ["MapsAgent"]),
+    ("Find coffee shops within walking distance", ["MapsAgent"]),
+    ("What's the weather like where I am?", ["MapsAgent", "TripPlannerAgent"]),
+]
+
+
+@pytest.mark.parametrize(
+    "user_input,expected_agents",
+    LOCATION_ROUTING_CASES,
+    ids=[c[0][:40] for c in LOCATION_ROUTING_CASES],
+)
+async def test_routes_with_location_context(orchestrator_factory, user_input, expected_agents):
+    """Location-dependent queries should route correctly when location metadata is provided."""
+    orch, recorder = await orchestrator_factory()
+    result = await orch.handle_message(
+        tenant_id="test_user",
+        message=user_input,
+        metadata={
+            "location": {"lat": 47.6062, "lng": -122.3321, "place_name": "Seattle, WA"},
+            "timezone": "America/Los_Angeles",
+        },
+    )
 
     routed_agents = [c["agent_type"] for c in recorder.agent_calls]
     tool_names = [tc["tool_name"] for tc in recorder.tool_calls]
