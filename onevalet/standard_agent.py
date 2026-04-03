@@ -335,15 +335,18 @@ class StandardAgent(BaseAgent):
     def get_system_prompt(self) -> str:
         """Return the system prompt for the mini ReAct loop.
 
-        Injects user context (True Memory, User Profile, Personality) from
-        the orchestrator handoff so domain agents can personalize responses.
+        Injects user context (True Memory, User Profile) from the orchestrator
+        handoff so domain agents can personalize task execution.
+
+        Note: Personality (AI-to-user tone) is NOT injected here — it only
+        controls how the orchestrator talks to the user, not how subagents
+        execute tasks. User communication preferences (e.g. "formal tone for
+        work emails") are conveyed via True Memory feedback entries instead.
+
         Override in subclasses to customize. Only used when tools is non-empty.
         """
         parts = [self.domain_system_prompt]
 
-        # Inject user context from orchestrator handoff
-        meta = self.context_hints.get("handoff", {}).get("known_entities", {})
-        # Also check direct context_hints for backward compat
         user_context = self._build_user_context_section()
         if user_context:
             parts.append(user_context)
@@ -352,7 +355,12 @@ class StandardAgent(BaseAgent):
         return "\n\n".join(parts)
 
     def _build_user_context_section(self) -> str:
-        """Build user context section from orchestrator-passed data."""
+        """Build user context section from orchestrator-passed data.
+
+        Includes True Memory (canonical facts + behavioral feedback) and
+        basic User Profile identity. Does NOT include Personality — that
+        controls AI-to-user tone at the orchestrator level only.
+        """
         sections: List[str] = []
 
         # True Memory (canonical facts + behavioral feedback)
@@ -376,7 +384,7 @@ class StandardAgent(BaseAgent):
             if lines:
                 sections.append("[True Memory]\n" + "\n".join(lines))
 
-        # User Profile
+        # User Profile (basic identity only — full profile stays at orchestrator)
         user_profile = self.context_hints.get("user_profile")
         if user_profile and isinstance(user_profile, dict):
             profile_lines = []
@@ -387,11 +395,6 @@ class StandardAgent(BaseAgent):
                 profile_lines.append(f"Birthday: {identity['birthday']}")
             if profile_lines:
                 sections.append("[User Profile]\n" + "\n".join(profile_lines))
-
-        # Personality
-        personality = self.context_hints.get("koi_personality")
-        if personality and isinstance(personality, str):
-            sections.append(f"[Personality Style]\n{personality}")
 
         return "\n\n".join(sections)
 

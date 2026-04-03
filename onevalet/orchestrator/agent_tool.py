@@ -129,9 +129,6 @@ async def execute_agent_tool(
     user_profile = (request_context or {}).get("metadata", {}).get("user_profile")
     if user_profile:
         enriched_hints["user_profile"] = user_profile
-    koi_personality = (request_context or {}).get("metadata", {}).get("koi_personality")
-    if koi_personality:
-        enriched_hints["koi_personality"] = koi_personality
     # Supabase storage as default cloud storage provider (if configured)
     supabase_storage = getattr(orchestrator, "_supabase_storage", None)
     if supabase_storage and "cloud_storage_provider" not in enriched_hints:
