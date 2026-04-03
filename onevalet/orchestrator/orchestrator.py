@@ -431,11 +431,19 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
         metadata = metadata or {}
 
+        # ── Request tracing ──
+        request_id = self._audit.start_request(
+            tenant_id=tenant_id,
+            message=message,
+        )
+        context_trace_status = "completed"
+
         # Step 0: Clean up stale/completed agents to prevent cross-request state leakage
         await self._cleanup_stale_agents(tenant_id)
 
         # Step 1: Prepare context
         context = await self.prepare_context(tenant_id, message, metadata)
+        context["request_id"] = request_id
 
         # Store images in context so agent tools can access them (e.g. receipt scanning)
         if images:
@@ -485,6 +493,11 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
         # Step 4: Intent Analysis — classify domains and detect multi-intent
         intent = await self._analyze_intent(message, context)
+        self._audit.log_phase("intent_analysis", {
+            "intent_type": intent.intent_type,
+            "domains": intent.domains,
+            "sub_tasks": len(intent.sub_tasks) if intent.sub_tasks else 0,
+        })
 
         # Step 4b: Multi-intent → DAG execution
         if intent.intent_type == "multi" and intent.sub_tasks:
@@ -527,6 +540,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             tool_schemas.append(notify_schema)
 
         logger.info(f"[Tools] {len(tool_schemas)} tools available for ReAct")
+        self._audit.log_phase("tool_loading", {
+            "tool_count": len(tool_schemas),
+            "domains": intent.domains,
+        })
 
         # Convert images to media format for LLM
         media = None
@@ -598,7 +615,12 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         await self._save_tool_call_history(tenant_id, tool_calls)
 
         # Step 9: Post-process
+        self._audit.log_phase("post_process", {"has_proposals": bool(result.metadata.get("true_memory_proposals"))})
         result = await self.post_process(result, context)
+        self._audit.end_request(
+            status=result.status.value if hasattr(result.status, "value") else str(result.status),
+            token_usage=result.metadata.get("token_usage"),
+        )
         yield AgentEvent(type=EventType.EXECUTION_END, data=result)
 
     # ==========================================================================

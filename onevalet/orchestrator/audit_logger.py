@@ -5,20 +5,24 @@ Produces JSON log entries via Python's standard logging module under
 the ``onevalet.audit`` logger name.  Each entry includes a timestamp,
 event_type, optional tenant_id, and event-specific fields.
 
+When a request_id is set via ``start_request()``, all subsequent log
+entries automatically include it — enabling end-to-end tracing of a
+single user request across intent analysis, routing, tool execution,
+memory extraction, and response delivery.
+
 Usage::
 
     audit = AuditLogger()
-    audit.log_policy_decision(
-        intent="book_flight",
-        must_use_tools=True,
-        selected_tools=["flight_search"],
-        reason_code="domain_action",
-    )
+    audit.start_request(tenant_id="user-123", message="check my email")
+    audit.log_phase("intent_analysis", {"domains": ["communication"]})
+    audit.log_tool_execution(...)
+    audit.end_request(status="completed", token_usage={...})
 """
 
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -26,10 +30,75 @@ _audit_logger = logging.getLogger("onevalet.audit")
 
 
 class AuditLogger:
-    """Structured audit logger for key orchestrator decisions."""
+    """Structured audit logger with per-request tracing."""
 
     def __init__(self, tenant_id: Optional[str] = None) -> None:
         self._default_tenant_id = tenant_id
+        self._request_id: Optional[str] = None
+        self._request_start: Optional[float] = None
+
+    # ------------------------------------------------------------------
+    # Request tracing
+    # ------------------------------------------------------------------
+
+    def start_request(
+        self,
+        tenant_id: str,
+        message: str,
+        request_id: Optional[str] = None,
+    ) -> str:
+        """Begin tracing a new request. Returns the request_id."""
+        self._request_id = request_id or uuid.uuid4().hex[:12]
+        self._request_start = time.monotonic()
+        self._default_tenant_id = tenant_id
+        self._emit("request_start", {
+            "tenant_id": tenant_id,
+            "message_preview": message[:120] if message else "",
+        })
+        return self._request_id
+
+    def end_request(
+        self,
+        status: str = "completed",
+        token_usage: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        """End tracing the current request."""
+        fields: Dict[str, Any] = {"status": status}
+        if self._request_start is not None:
+            fields["total_ms"] = int((time.monotonic() - self._request_start) * 1000)
+        if token_usage:
+            fields["token_usage"] = token_usage
+        if error:
+            fields["error"] = error
+        self._emit("request_end", fields)
+        self._request_id = None
+        self._request_start = None
+
+    def log_phase(
+        self,
+        phase: str,
+        details: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
+    ) -> None:
+        """Log a named phase within the current request.
+
+        Useful for: intent_analysis, domain_filtering, tool_loading,
+        memory_recall, true_memory_extraction, post_process, etc.
+        """
+        fields: Dict[str, Any] = {
+            "tenant_id": self._tid(tenant_id),
+            "phase": phase,
+        }
+        if self._request_start is not None:
+            fields["elapsed_ms"] = int((time.monotonic() - self._request_start) * 1000)
+        if details:
+            fields.update(details)
+        self._emit("phase", fields)
+
+    @property
+    def request_id(self) -> Optional[str]:
+        return self._request_id
 
     # ------------------------------------------------------------------
     # helpers
@@ -40,6 +109,8 @@ class AuditLogger:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": event_type,
         }
+        if self._request_id:
+            entry["request_id"] = self._request_id
         entry.update(fields)
         _audit_logger.info(json.dumps(entry, default=str))
 
@@ -47,7 +118,7 @@ class AuditLogger:
         return tenant_id or self._default_tenant_id or ""
 
     # ------------------------------------------------------------------
-    # public API
+    # public API (existing)
     # ------------------------------------------------------------------
 
     def log_policy_decision(
