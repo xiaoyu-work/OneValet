@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _CANDIDATE_PATTERNS = (
+    # Durable facts
     r"\bremember\b",
     r"\bfor future reference\b",
     r"\bkeep in mind\b",
@@ -29,6 +30,16 @@ _CANDIDATE_PATTERNS = (
     r"\bcall me\b",
     r"\bi (?:am|work|live|prefer|like|love|hate|dislike|always|never)\b",
     r"\bmy (?:birthday|email|phone|favorite)\b",
+    # Feedback signals — user correcting or confirming AI behavior
+    r"\bdon'?t do that\b",
+    r"\bstop (?:doing|asking|saying)\b",
+    r"\bnext time\b",
+    r"\bplease (?:always|never|stop|don'?t)\b",
+    r"\bi (?:don'?t )?like (?:it )?when you\b",
+    r"\bthat'?s (?:perfect|exactly|right|correct|great|wrong|not what)\b",
+    r"\byes,? (?:exactly|perfect|that'?s? (?:it|right))\b",
+    r"\bkeep doing\b",
+    r"\bdon'?t (?:ask|bother|need to)\b",
 )
 
 _TASK_PREFIXES = (
@@ -51,7 +62,7 @@ _TASK_PREFIXES = (
 # ---------------------------------------------------------------------------
 
 _PROPOSAL_SYSTEM_PROMPT = """
-You extract durable user facts for a canonical true-memory store.
+You extract durable user facts AND behavioral feedback for a canonical true-memory store.
 
 Return JSON only in this exact shape:
 {
@@ -66,21 +77,39 @@ Return JSON only in this exact shape:
       "confidence": 0.97,
       "source_type": "user_direct",
       "reason": "The user directly stated a stable travel preference.",
+      "why": "User finds aisle seats more comfortable on long flights.",
+      "how_to_apply": "When booking flights, default to aisle seat selection.",
       "evidence": "Remember that I prefer aisle seats when I fly."
     }
   ]
 }
 
-Rules:
-- Store only durable personal facts or durable preferences that will matter in future turns.
+## Two categories of memory
+
+### 1. Durable facts (namespace: identity, work, relationship, lifestyle, travel, preference)
+Personal facts, biographical info, and stable preferences.
+- Store when the user states something about themselves that will remain true across sessions.
+- source_type: "user_direct" or "user_correction".
+
+### 2. Behavioral feedback (namespace: feedback)
+How the user wants the AI to behave — both corrections AND confirmations.
+- Corrections: "don't do that", "stop asking me to confirm", "next time just do it"
+- Confirmations: "yes exactly", "perfect, keep doing that", "that's the right approach"
+- Store BOTH corrections and confirmations. Corrections prevent repeating mistakes;
+  confirmations prevent drifting away from approaches the user already validated.
+- source_type: "user_correction" for corrections, "user_confirmation" for confirmations.
+- ALWAYS include "why" (the reason behind the feedback) and "how_to_apply" (when this guidance kicks in).
+
+## Rules
+- Store only things that will matter in future turns.
 - Prefer direct user statements over inferences.
 - Do NOT store transient tasks, temporary plans, questions, or assistant claims.
-- If the user corrects or replaces a prior fact, reuse the same namespace/fact_key with operation "upsert".
-- Use operation "revoke" only when the user explicitly invalidates an existing fact without replacing it.
-- Keep namespace concise: identity, work, relationship, lifestyle, travel, preference, ai.
+- If the user corrects or replaces a prior fact/feedback, reuse the same namespace/fact_key with operation "upsert".
+- Use operation "revoke" only when the user explicitly invalidates something without replacing it.
 - Keep fact_key stable and snake_case.
-- Keep summary to one sentence that starts with "User ...".
-- source_type should usually be "user_direct" or "user_correction".
+- Keep summary to one sentence starting with "User ...".
+- "why" should explain the user's reason or motivation (one sentence).
+- "how_to_apply" should describe when/where this memory should influence behavior (one sentence).
 - If nothing qualifies, return {"should_store": false, "proposals": []}.
 """.strip()
 
@@ -107,7 +136,11 @@ def format_true_memory_for_prompt(
     *,
     limit: int = 20,
 ) -> str:
-    """Format canonical app-owned memory facts for prompt injection."""
+    """Format canonical app-owned memory facts for prompt injection.
+
+    Feedback memories include Why/How-to-apply lines so the LLM can
+    reason about edge cases rather than blindly following rules.
+    """
     if not true_memory:
         return ""
 
@@ -122,8 +155,20 @@ def format_true_memory_for_prompt(
             value = fact.get("value")
             if namespace and fact_key:
                 summary = f"{namespace}.{fact_key}: {value}"
-        if summary:
-            lines.append(f"- {summary}")
+        if not summary:
+            continue
+
+        line = f"- {summary}"
+
+        # For feedback memories, append Why + How so the LLM can generalize
+        why = str(fact.get("why") or "").strip()
+        how = str(fact.get("how_to_apply") or "").strip()
+        if why:
+            line += f" Why: {why}"
+        if how:
+            line += f" Apply: {how}"
+
+        lines.append(line)
 
     return "\n".join(lines)
 
@@ -242,6 +287,8 @@ def _normalize_proposal(
         "confidence": round(confidence, 4),
         "source_type": source_type,
         "reason": item.get("reason"),
+        "why": " ".join(str(item.get("why") or "").split()).strip() or None,
+        "how_to_apply": " ".join(str(item.get("how_to_apply") or "").split()).strip() or None,
         "evidence": item.get("evidence") or fallback_evidence,
     }
 
@@ -313,6 +360,50 @@ def _fallback_extract(user_message: str) -> List[Dict[str, Any]]:
             "confidence": 0.84,
             "source_type": "user_direct",
             "reason": "Matched an explicit home location statement.",
+            "evidence": text,
+        })
+
+    # Feedback: user correcting AI behavior
+    stop_match = re.search(
+        r"\b(?:stop|don'?t|quit|please don'?t)\s+(doing|asking|saying|sending|checking)\s+(.{5,60})",
+        lowered,
+    )
+    if stop_match:
+        action = stop_match.group(1)
+        detail = stop_match.group(2).rstrip(" .,!").strip()
+        fact_key = _normalize_slug(f"stop_{action}_{detail[:30]}")
+        proposals.append({
+            "operation": "upsert",
+            "namespace": "feedback",
+            "fact_key": fact_key,
+            "value": {"correction": text},
+            "summary": f"User wants assistant to stop {action} {detail}.",
+            "confidence": 0.85,
+            "source_type": "user_correction",
+            "reason": "User explicitly corrected AI behavior.",
+            "why": f"User said to stop {action} {detail}.",
+            "how_to_apply": f"Avoid {action} {detail} in future interactions.",
+            "evidence": text,
+        })
+
+    # Feedback: user confirming AI behavior
+    confirm_match = re.search(
+        r"\b(?:yes,? ?exactly|perfect|that'?s (?:right|correct|it|great)|keep doing (?:that|this))\b",
+        lowered,
+    )
+    if confirm_match and not stop_match:
+        fact_key = _normalize_slug(f"confirmed_{text[:30]}")
+        proposals.append({
+            "operation": "upsert",
+            "namespace": "feedback",
+            "fact_key": fact_key,
+            "value": {"confirmation": text},
+            "summary": f"User confirmed current approach is correct.",
+            "confidence": 0.75,
+            "source_type": "user_confirmation",
+            "reason": "User validated the assistant's approach.",
+            "why": "User expressed approval of the current interaction style.",
+            "how_to_apply": "Continue using this approach in similar situations.",
             "evidence": text,
         })
 

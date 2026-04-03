@@ -152,3 +152,91 @@ class TestExtractTrueMemoryProposals:
         )
         # LLM says nothing to store, fallback also has nothing → empty
         assert proposals == []
+
+    @pytest.mark.asyncio
+    async def test_fallback_extracts_feedback_correction(self):
+        llm_client = AsyncMock()
+        llm_client.chat_completion.side_effect = RuntimeError("boom")
+
+        proposals = await extract_true_memory_proposals(
+            llm_client,
+            user_message="Stop asking me to confirm every email before sending",
+        )
+
+        assert len(proposals) == 1
+        assert proposals[0]["namespace"] == "feedback"
+        assert proposals[0]["source_type"] == "user_correction"
+        assert "stop" in proposals[0]["summary"].lower()
+        assert proposals[0]["why"] is not None
+        assert proposals[0]["how_to_apply"] is not None
+
+    @pytest.mark.asyncio
+    async def test_fallback_extracts_feedback_confirmation(self):
+        llm_client = AsyncMock()
+        llm_client.chat_completion.side_effect = RuntimeError("boom")
+
+        proposals = await extract_true_memory_proposals(
+            llm_client,
+            user_message="Yes exactly, that's the right approach",
+        )
+
+        assert len(proposals) == 1
+        assert proposals[0]["namespace"] == "feedback"
+        assert proposals[0]["source_type"] == "user_confirmation"
+
+    @pytest.mark.asyncio
+    async def test_llm_extracts_feedback_with_why_and_how(self):
+        llm_client = AsyncMock()
+        llm_client.chat_completion.return_value = MockLLMResponse(
+            content="""{
+              "should_store": true,
+              "proposals": [
+                {
+                  "operation": "upsert",
+                  "namespace": "feedback",
+                  "fact_key": "no_email_confirmation",
+                  "value": {"rule": "skip confirmation for routine emails"},
+                  "summary": "User wants assistant to skip email confirmation prompts.",
+                  "confidence": 0.92,
+                  "source_type": "user_correction",
+                  "reason": "User explicitly told the assistant to stop asking.",
+                  "why": "User finds confirmation prompts slow and unnecessary for routine emails.",
+                  "how_to_apply": "Send routine emails directly without asking for confirmation. Still confirm for emails to new recipients or with attachments."
+                }
+              ]
+            }""",
+        )
+
+        proposals = await extract_true_memory_proposals(
+            llm_client,
+            user_message="Stop asking me to confirm every email before sending, just send it",
+        )
+
+        assert len(proposals) == 1
+        assert proposals[0]["namespace"] == "feedback"
+        assert proposals[0]["why"] is not None
+        assert "confirmation" in proposals[0]["why"].lower()
+        assert proposals[0]["how_to_apply"] is not None
+        assert "routine" in proposals[0]["how_to_apply"].lower()
+
+
+class TestFormatTrueMemoryWithFeedback:
+    def test_feedback_memory_shows_why_and_apply(self):
+        facts = [
+            {
+                "summary": "User wants assistant to skip email confirmation.",
+                "namespace": "feedback",
+                "why": "User finds confirmations slow for routine emails.",
+                "how_to_apply": "Send routine emails directly without confirmation.",
+            },
+            {
+                "summary": "User prefers aisle seats.",
+                "namespace": "travel",
+            },
+        ]
+        result = format_true_memory_for_prompt(facts)
+        assert "Why:" in result
+        assert "Apply:" in result
+        # Non-feedback memory should NOT have Why/Apply
+        lines = result.strip().split("\n")
+        assert "Why:" not in lines[1]
