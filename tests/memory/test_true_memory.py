@@ -59,10 +59,10 @@ class TestFormatTrueMemoryForPrompt:
         assert format_true_memory_for_prompt([]) == ""
         assert format_true_memory_for_prompt(None) == ""
 
-    def test_falls_back_to_namespace_key(self):
+    def test_skips_facts_without_summary(self):
         facts = [{"namespace": "travel", "fact_key": "seat", "value": "aisle"}]
         result = format_true_memory_for_prompt(facts)
-        assert "travel.seat" in result
+        assert result == ""  # No summary → skipped, no internal IDs leak
 
 
 class TestExtractTrueMemoryProposals:

@@ -138,8 +138,9 @@ def format_true_memory_for_prompt(
 ) -> str:
     """Format canonical app-owned memory facts for prompt injection.
 
-    Feedback memories include Why/How-to-apply lines so the LLM can
-    reason about edge cases rather than blindly following rules.
+    Output is pure natural-language text — no internal identifiers (namespace,
+    fact_key) are exposed.  Feedback memories include Why/How-to-apply lines
+    so the LLM can reason about edge cases rather than blindly following rules.
     """
     if not true_memory:
         return ""
@@ -150,17 +151,11 @@ def format_true_memory_for_prompt(
             continue
         summary = str(fact.get("summary") or "").strip()
         if not summary:
-            namespace = str(fact.get("namespace") or "").strip()
-            fact_key = str(fact.get("fact_key") or "").strip()
-            value = fact.get("value")
-            if namespace and fact_key:
-                summary = f"{namespace}.{fact_key}: {value}"
-        if not summary:
             continue
 
         line = f"- {summary}"
 
-        # For feedback memories, append Why + How so the LLM can generalize
+        # Append Why + How so the LLM can generalize
         why = str(fact.get("why") or "").strip()
         how = str(fact.get("how_to_apply") or "").strip()
         if why:
