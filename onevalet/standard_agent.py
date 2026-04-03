@@ -203,6 +203,7 @@ class StandardAgent(BaseAgent):
         self.agent_id = self._generate_agent_id()
         self.llm_client = llm_client
         self.orchestrator_callback = orchestrator_callback
+        self.execution_policy = kwargs.get("execution_policy")
 
         # State management
         self.status = AgentStatus.INITIALIZING
@@ -1209,6 +1210,13 @@ Return JSON only."""
         """
         return self._recalled_memories
 
+    @property
+    def session_working_memory(self) -> Dict[str, Any]:
+        """Structured session notes passed in from the orchestrator."""
+        if not self.context_hints:
+            return {}
+        return dict(self.context_hints.get("session_working_memory") or {})
+
     def set_recalled_memories(self, memories: List[Dict[str, Any]]) -> None:
         """
         Set recalled memories (called by orchestrator).
@@ -1467,7 +1475,28 @@ Return JSON only."""
             else:
                 args = {}
 
-            requires_approval = tool.needs_approval or tool.risk_level in ("write", "destructive")
+            policy_decision = self._evaluate_tool_policy(tool, args)
+            if policy_decision is not None and not policy_decision.allowed:
+                error_text = (
+                    f"Permission denied for tool '{tc.name}': {policy_decision.reason}"
+                )
+                self._tool_trace.append(
+                    {"tool": tc.name, "status": "denied", "summary": error_text[:240]}
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": error_text,
+                    }
+                )
+                continue
+
+            requires_approval = (
+                tool.needs_approval
+                or tool.risk_level in ("write", "destructive")
+                or bool(policy_decision and policy_decision.require_approval)
+            )
             if requires_approval:
                 if tool.get_preview:
                     try:
@@ -1664,12 +1693,29 @@ Return JSON only."""
                 metadata["timezone"] = self.context_hints["timezone"]
             if self.context_hints.get("user_location"):
                 metadata["location"] = self.context_hints["user_location"]
+            if self.context_hints.get("session_id"):
+                metadata["session_id"] = self.context_hints["session_id"]
+            if self.context_hints.get("permissions"):
+                metadata["permissions"] = self.context_hints["permissions"]
         return AgentToolContext(
             llm_client=self.llm_client,
             tenant_id=self.tenant_id,
             user_profile=self.context_hints.get("user_profile") if self.context_hints else None,
             context_hints=self.context_hints,
             metadata=metadata,
+        )
+
+    def _evaluate_tool_policy(self, tool: AgentTool, args: Dict[str, Any]):
+        """Evaluate runtime execution policy for a tool call if configured."""
+        if not self.execution_policy:
+            return None
+        return self.execution_policy.evaluate(
+            tool,
+            tenant_id=self.tenant_id,
+            args=args,
+            metadata=self._build_tool_context().metadata,
+            request_context=self.context_hints,
+            agent_type=self.agent_type,
         )
 
     @staticmethod

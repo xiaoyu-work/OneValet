@@ -186,9 +186,10 @@ def render_memory_usage() -> str:
     return """
 # Memory & Personalization
 
-Your system prompt may include **[User Profile]** and **[Relevant Memories]** sections.
+Your system prompt may include **[True Memory]**, **[User Profile]**, and **[Relevant Memories]** sections.
 These are automatically injected — no tool call needed.
 
+- Treat **[True Memory]** as canonical app-owned facts. If it conflicts with recalled memory, trust **[True Memory]**.
 - Use them naturally to personalize responses.
 - Do not ask the user for information already present in their profile or memories.
 - If the sections are absent, the user has no profile or no relevant memories — that is normal.

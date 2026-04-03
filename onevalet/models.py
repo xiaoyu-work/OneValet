@@ -75,6 +75,13 @@ class AgentTool:
         needs_approval: If True, pause execution for user confirmation before running.
         risk_level: One of "read", "write", "destructive".
         get_preview: Async function to generate human-readable preview for approval.
+        read_only: Whether the tool is expected to avoid modifying user state.
+        mutates_user_data: Whether execution changes user-controlled state.
+        idempotent: Whether repeated execution is safe.
+        renderer: Optional UI rendering hint ("markdown", "table", "image", etc.).
+        sensitive_args: Argument names that should be redacted in logs/UI.
+        enabled_tiers: Optional allow-list of tiers that may execute the tool.
+        requires_feature_flag: Optional feature flag required to execute the tool.
     """
 
     name: str
@@ -85,6 +92,22 @@ class AgentTool:
     risk_level: str = "read"  # "read", "write", "destructive"
     category: str = "utility"
     get_preview: Optional[Callable] = None
+    read_only: Optional[bool] = None
+    mutates_user_data: Optional[bool] = None
+    idempotent: Optional[bool] = None
+    renderer: Optional[str] = None
+    sensitive_args: List[str] = field(default_factory=list)
+    enabled_tiers: Optional[List[str]] = None
+    requires_feature_flag: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        """Fill in conservative defaults derived from risk level."""
+        if self.read_only is None:
+            self.read_only = self.risk_level == "read"
+        if self.mutates_user_data is None:
+            self.mutates_user_data = self.risk_level in ("write", "destructive")
+        if self.idempotent is None:
+            self.idempotent = self.risk_level == "read"
 
     def to_openai_schema(self) -> Dict[str, Any]:
         """Convert to OpenAI function-calling tool schema."""

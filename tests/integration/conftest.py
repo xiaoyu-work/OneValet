@@ -339,6 +339,13 @@ class ToolCallRecorder:
             risk_level=tool.risk_level,
             category=tool.category,
             get_preview=wrapped_preview,
+            read_only=tool.read_only,
+            mutates_user_data=tool.mutates_user_data,
+            idempotent=tool.idempotent,
+            renderer=tool.renderer,
+            sensitive_args=list(tool.sensitive_args),
+            enabled_tiers=list(tool.enabled_tiers) if tool.enabled_tiers is not None else None,
+            requires_feature_flag=tool.requires_feature_flag,
         )
 
     def reset(self) -> None:

@@ -24,6 +24,7 @@ class ToolManagerMixin:
     - ``credential_store``
     - ``database``
     - ``_tool_policy_filter``
+    - ``_execution_policy``
     - ``builtin_tools``
     """
 
@@ -82,7 +83,7 @@ class ToolManagerMixin:
 
         return schemas
 
-    def _build_builtin_tools(self) -> List[Dict[str, Any]]:
+    def _build_builtin_tools(self) -> List[AgentTool]:
         """Build the orchestrator's builtin tools as AgentTool instances.
 
         These are lightweight tools the orchestrator calls directly
@@ -119,6 +120,7 @@ class ToolManagerMixin:
             parameters=GOOGLE_SEARCH_SCHEMA,
             executor=google_search_executor,
             category="web",
+            renderer="table",
         ))
 
         # Web fetch
@@ -128,6 +130,7 @@ class ToolManagerMixin:
             parameters=WEB_FETCH_SCHEMA,
             executor=web_fetch_executor,
             category="web",
+            renderer="markdown",
         ))
 
         # Download image (for storing selected images locally)
@@ -137,6 +140,7 @@ class ToolManagerMixin:
             parameters=DOWNLOAD_IMAGE_SCHEMA,
             executor=download_image_executor,
             category="web",
+            renderer="image",
         ))
 
         # Important dates (6 tools)
@@ -179,6 +183,9 @@ class ToolManagerMixin:
             parameters=SET_LOCATION_REMINDER_SCHEMA,
             executor=set_location_reminder_executor,
             category="location",
+            read_only=False,
+            mutates_user_data=True,
+            idempotent=False,
         ))
 
         # Weather (reuses the @tool-decorated AgentTool from trip_planner)
@@ -258,6 +265,10 @@ class ToolManagerMixin:
                 "Please retry with valid JSON arguments."
             )
 
+        blocked = self._check_schema_policy(tool_name, tenant_id=tenant_id)
+        if blocked is not None:
+            return blocked
+
         if self._is_agent_tool(tool_name):
             # Agent-Tool execution
             task_instruction = args.pop("task_instruction", "")
@@ -275,6 +286,16 @@ class ToolManagerMixin:
             tool = next((t for t in tools if t.name == tool_name), None)
             if not tool:
                 return f"Error: Tool '{tool_name}' not found"
+
+            runtime_block = self._check_runtime_policy(
+                tool,
+                args=args,
+                tenant_id=tenant_id,
+                metadata=metadata,
+                request_context=request_context,
+            )
+            if runtime_block is not None:
+                return runtime_block
 
             context = AgentToolContext(
                 tenant_id=tenant_id,
@@ -301,6 +322,45 @@ class ToolManagerMixin:
             f"[ReAct] Tool result truncated: {len(result_text)} -> {cut} chars"
         )
         return result_text[:cut] + "\n\n[truncated - result exceeded size limit]"
+
+    def _check_schema_policy(self, tool_name: str, *, tenant_id: str) -> Optional[str]:
+        """Reapply schema-time policy at execution time."""
+        if not self._tool_policy_filter:
+            return None
+        if self._tool_policy_filter.is_tool_allowed(tool_name, tenant_id=tenant_id):
+            return None
+        reason = self._tool_policy_filter.get_filter_reason(tool_name, tenant_id=tenant_id)
+        detail = f": {reason}" if reason else ""
+        return f"Error: Tool '{tool_name}' is blocked by policy{detail}."
+
+    def _check_runtime_policy(
+        self,
+        tool: AgentTool,
+        *,
+        args: Dict[str, Any],
+        tenant_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        request_context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Apply runtime execution policy to a concrete tool call."""
+        if not getattr(self, "_execution_policy", None):
+            return None
+
+        decision = self._execution_policy.evaluate(
+            tool,
+            tenant_id=tenant_id,
+            args=args,
+            metadata=metadata,
+            request_context=request_context,
+        )
+        if not decision.allowed:
+            return f"Error: Permission denied for tool '{tool.name}': {decision.reason}"
+        if decision.require_approval:
+            return (
+                f"Error: Tool '{tool.name}' requires approval before execution. "
+                "Ask the user for confirmation or pre-approve the tool in request permissions."
+            )
+        return None
 
     def _build_notify_user_tool(self, context: Dict[str, Any]):
         """Build a notify_user tool for conditional cron delivery.
@@ -341,6 +401,9 @@ class ToolManagerMixin:
             },
             executor=make_executor(context),
             category="cron",
+            read_only=False,
+            mutates_user_data=True,
+            idempotent=False,
         )
 
         return tool, tool.to_openai_schema()

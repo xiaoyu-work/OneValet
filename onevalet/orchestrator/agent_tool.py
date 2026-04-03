@@ -26,6 +26,7 @@ class HandoffContext:
     known_entities: Dict[str, Any]  # extracted entities from tool_call_args
     conversation_context: str  # summary of recent conversation (last 3 turns)
     constraints: List[str]  # any constraints mentioned by user
+    session_memory: Dict[str, Any]  # orchestrator-owned working memory snapshot
 
 
 @dataclass
@@ -86,6 +87,7 @@ async def execute_agent_tool(
         known_entities={k: v for k, v in tool_call_args.items() if v is not None},
         conversation_context=_extract_recent_context(request_context, tenant_id),
         constraints=[],
+        session_memory=dict((request_context or {}).get("session_working_memory") or {}),
     )
 
     enriched_hints = dict(tool_call_args)
@@ -107,6 +109,15 @@ async def execute_agent_tool(
     user_timezone = (request_context or {}).get("metadata", {}).get("timezone")
     if user_timezone:
         enriched_hints["timezone"] = user_timezone
+    permissions = (request_context or {}).get("metadata", {}).get("permissions")
+    if permissions and isinstance(permissions, dict):
+        enriched_hints["permissions"] = permissions
+    session_id = (request_context or {}).get("session_id")
+    if session_id:
+        enriched_hints["session_id"] = session_id
+    recalled_memories = (request_context or {}).get("recalled_memories")
+    if recalled_memories:
+        enriched_hints["recalled_memories"] = recalled_memories
     # Pass user location to agent tools (lat/lng from device)
     user_location = (request_context or {}).get("metadata", {}).get("location")
     if user_location and isinstance(user_location, dict):
@@ -117,11 +128,13 @@ async def execute_agent_tool(
         enriched_hints["cloud_storage_provider"] = supabase_storage.for_tenant(tenant_id)
 
     # Pass structured handoff via context_hints
+    enriched_hints["session_working_memory"] = handoff.session_memory
     enriched_hints["handoff"] = {
         "task_summary": handoff.task_summary,
         "known_entities": handoff.known_entities,
         "conversation_context": handoff.conversation_context,
         "constraints": handoff.constraints,
+        "session_memory": handoff.session_memory,
     }
 
     # Check if agent requires a service the tenant hasn't connected

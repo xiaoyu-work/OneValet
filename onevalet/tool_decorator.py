@@ -252,6 +252,13 @@ def tool(
     risk_level: str = "read",
     category: str = "utility",
     get_preview: Optional[Callable] = None,
+    read_only: Optional[bool] = None,
+    mutates_user_data: Optional[bool] = None,
+    idempotent: Optional[bool] = None,
+    renderer: Optional[str] = None,
+    sensitive_args: Optional[List[str]] = None,
+    enabled_tiers: Optional[List[str]] = None,
+    requires_feature_flag: Optional[str] = None,
     name: Optional[str] = None,
 ) -> Any:
     """Decorator that converts a typed async function into an :class:`AgentTool`.
@@ -275,6 +282,13 @@ def tool(
             risk_level=risk_level,
             category=category,
             get_preview=get_preview,
+            read_only=read_only,
+            mutates_user_data=mutates_user_data,
+            idempotent=idempotent,
+            renderer=renderer,
+            sensitive_args=list(sensitive_args or []),
+            enabled_tiers=list(enabled_tiers) if enabled_tiers is not None else None,
+            requires_feature_flag=requires_feature_flag,
         )
 
     if func is not None:

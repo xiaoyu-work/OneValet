@@ -54,6 +54,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any, AsyncIterator, Callable, TYPE_CHECKING
 
 from ..message import Message
+from ..memory.governance import MemoryGovernance
+from ..memory.session_memory import SessionMemoryManager
+from ..memory.true_memory import extract_true_memory_proposals, format_true_memory_for_prompt
 from ..models import AgentToolContext
 from ..result import AgentResult, AgentStatus
 from ..streaming.models import StreamMode, AgentEvent, EventType
@@ -71,6 +74,7 @@ from ..constants import GENERATE_PLAN_TOOL_NAME
 from .context_manager import ContextManager
 from .prompts import build_system_prompt
 from .audit_logger import AuditLogger
+from .execution_policy import ExecutionPolicyEngine
 from .tool_policy import ToolPolicyFilter
 
 from .react_loop import ReactLoopMixin
@@ -181,6 +185,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         post_process_hooks: Optional[List[Callable]] = None,
         tool_policy_filter: Optional[ToolPolicyFilter] = None,
         model_router: Optional["ModelRouter"] = None,
+        memory_governance: Optional[MemoryGovernance] = None,
+        session_memory: Optional[SessionMemoryManager] = None,
+        execution_policy: Optional[ExecutionPolicyEngine] = None,
     ):
         """
         Initialize Orchestrator.
@@ -253,6 +260,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         self._post_process_hooks: List[Callable] = list(post_process_hooks or [])
         self._tool_policy_filter = tool_policy_filter
         self._model_router = model_router
+        self.memory_governance = memory_governance or MemoryGovernance()
+        self.session_memory = session_memory or SessionMemoryManager()
+        self._execution_policy = execution_policy or ExecutionPolicyEngine()
 
         # Audit logging
         self._audit = AuditLogger()
@@ -894,10 +904,21 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
         system_parts.append("\n[Context]\n" + "\n".join(context_lines))
 
+        # True Memory (canonical app-owned facts, passed by app layer)
+        true_memory_text = format_true_memory_for_prompt(meta.get("true_memory"))
+        if true_memory_text:
+            system_parts.append("\n[True Memory]\n" + true_memory_text)
+
         # User profile (extracted from email, passed by app layer)
         profile_text = self._format_user_profile(meta.get("user_profile"))
         if profile_text:
             system_parts.append("\n[User Profile]\n" + profile_text)
+
+        session_prompt = context.get("session_memory_prompt") or self.session_memory.build_prompt_section(
+            context.get("session_id", context.get("tenant_id", "")),
+        )
+        if session_prompt:
+            system_parts.append("\n[Session Working Memory]\n" + session_prompt)
 
         # Relevant memories from Momex (auto-recall based on user message)
         if self.momex and needs_memory:
@@ -910,12 +931,12 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                     ),
                     timeout=5.0,
                 )
+                recalled = self.memory_governance.select_recalled_memories(recalled)
                 if recalled:
-                    memory_lines = [f"- {r['text']}" for r in recalled]
-                    system_parts.append(
-                        "\n[Relevant Memories]\n"
-                        + "\n".join(memory_lines)
-                    )
+                    context["recalled_memories"] = recalled
+                    memory_block = self.memory_governance.build_recalled_memory_block(recalled)
+                    if memory_block:
+                        system_parts.append("\n[Relevant Memories]\n" + memory_block)
             except asyncio.TimeoutError:
                 logger.warning("MOMEX search timed out (5s), skipping memory recall")
             except Exception as e:
@@ -1508,6 +1529,16 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         if external_history:
             context["conversation_history"] = external_history
 
+        session_state = self.session_memory.prepare_session(
+            session_id,
+            message,
+            has_active_agents=bool(active_agents),
+        )
+        context["session_working_memory"] = session_state
+        session_prompt = self.session_memory.build_prompt_section(session_id)
+        if session_prompt:
+            context["session_memory_prompt"] = session_prompt
+
         return context
 
     async def should_process(
@@ -1629,6 +1660,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                 message_hub=self.message_hub,
                 orchestrator_callback=self._create_callback_invoker(tenant_id),
                 context_hints=context_hints,
+                execution_policy=self._execution_policy,
             )
 
             if not agent:
@@ -1642,6 +1674,11 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             # Fallback: if agent has no LLM, use orchestrator's
             if not agent.llm_client:
                 agent.llm_client = self.llm_client
+
+            if context_hints and hasattr(agent, "set_recalled_memories"):
+                recalled_memories = context_hints.get("recalled_memories") or []
+                if recalled_memories:
+                    agent.set_recalled_memories(recalled_memories)
 
             # Add to pool
             await self.agent_pool.add_agent(agent)
@@ -1685,6 +1722,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         tenant_id = context["tenant_id"]
         session_id = context.get("session_id", tenant_id)
         user_message = context.get("message", "")
+        status_value = result.status.value if hasattr(result.status, "value") else str(result.status)
 
         # Build conversation messages for storage
         messages = []
@@ -1693,7 +1731,35 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         if result.raw_message:
             messages.append({"role": "assistant", "content": result.raw_message})
 
-        if messages:
+        session_snapshot = self.session_memory.update_from_result(
+            session_id,
+            user_message=user_message,
+            assistant_message=result.raw_message,
+            result_status=status_value,
+            tool_calls=context.get("tool_calls"),
+            metadata=result.metadata,
+        )
+        context["session_working_memory"] = session_snapshot
+        session_prompt = self.session_memory.build_prompt_section(session_id)
+        if session_prompt:
+            context["session_memory_prompt"] = session_prompt
+
+        if messages and self.momex:
+            decision = self.memory_governance.decide_storage(
+                user_message=user_message,
+                assistant_message=result.raw_message,
+                result_status=status_value,
+                metadata={**(context.get("metadata") or {}), **(result.metadata or {})},
+            )
+            result.metadata["memory_write"] = {
+                "stored": decision.should_store,
+                "reason": decision.reason,
+                "tags": list(decision.tags),
+            }
+        else:
+            decision = None
+
+        if messages and self.momex and decision and decision.should_store:
             # Long-term knowledge extraction — fire-and-forget so the
             # response is not blocked by embedding / LLM extraction.
             async def _bg_momex_add():
@@ -1707,6 +1773,21 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                     logger.warning(f"Background momex.add failed: {e}")
 
             asyncio.create_task(_bg_momex_add())
+
+        # True Memory proposal extraction — runs synchronously so proposals
+        # are available in result.metadata before the response is returned.
+        try:
+            proposals = await extract_true_memory_proposals(
+                self.llm_client,
+                user_message=user_message,
+                assistant_response=result.raw_message or "",
+                existing_true_memory=(context.get("metadata") or {}).get("true_memory"),
+                user_profile=(context.get("metadata") or {}).get("user_profile"),
+            )
+            if proposals:
+                result.metadata["true_memory_proposals"] = proposals
+        except Exception as e:
+            logger.warning(f"True memory proposal extraction failed: {e}")
 
         # Guardrails output check
         if self.guardrails_checker and result.raw_message:

@@ -61,6 +61,13 @@ from .manager import (
 )
 
 from .momex import MomexMemory
+from .governance import MemoryGovernance, MemoryWriteDecision
+from .session_memory import SessionMemoryManager, SessionWorkingMemory
+from .true_memory import (
+    extract_true_memory_proposals,
+    format_true_memory_for_prompt,
+    looks_like_true_memory_candidate,
+)
 
 __all__ = [
     # Models
@@ -74,4 +81,13 @@ __all__ = [
     "configure_memory",
     # Momex (recommended)
     "MomexMemory",
+    # Governance / working memory
+    "MemoryGovernance",
+    "MemoryWriteDecision",
+    "SessionMemoryManager",
+    "SessionWorkingMemory",
+    # True memory
+    "extract_true_memory_proposals",
+    "format_true_memory_for_prompt",
+    "looks_like_true_memory_candidate",
 ]
