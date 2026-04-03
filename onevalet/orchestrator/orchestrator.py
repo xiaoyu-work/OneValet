@@ -931,7 +931,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                     ),
                     timeout=5.0,
                 )
-                recalled = self.memory_governance.select_recalled_memories(recalled)
+                recalled = self.memory_governance.select_recalled_memories(
+                    recalled,
+                    true_memory=meta.get("true_memory"),
+                )
                 if recalled:
                     context["recalled_memories"] = recalled
                     memory_block = self.memory_governance.build_recalled_memory_block(recalled)

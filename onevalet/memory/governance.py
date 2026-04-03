@@ -64,10 +64,24 @@ class MemoryGovernance:
         self.max_prompt_memories = max_prompt_memories
         self.max_prompt_chars = max_prompt_chars
 
-    def select_recalled_memories(self, recalled: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        """Deduplicate and cap recalled memories before prompt injection."""
+    def select_recalled_memories(
+        self,
+        recalled: Optional[List[Dict[str, Any]]],
+        true_memory: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Deduplicate, filter conflicts with True Memory, and cap recalled memories."""
         if not recalled:
             return []
+
+        # Build a set of (namespace, fact_key) from canonical True Memory
+        # so we can suppress stale Momex hits that contradict confirmed facts.
+        canonical_keys: set[tuple[str, str]] = set()
+        if true_memory:
+            for fact in true_memory:
+                ns = str(fact.get("namespace") or "").strip().lower()
+                fk = str(fact.get("fact_key") or "").strip().lower()
+                if ns and fk:
+                    canonical_keys.add((ns, fk))
 
         selected: List[Dict[str, Any]] = []
         seen: set[str] = set()
@@ -81,6 +95,11 @@ class MemoryGovernance:
             text = _compact(str(item.get("text", "") or ""), 220)
             if not text or text in seen:
                 continue
+
+            # Skip Momex memories that conflict with canonical True Memory
+            if canonical_keys and self._conflicts_with_true_memory(item, text, canonical_keys):
+                continue
+
             projected = total_chars + len(text)
             if selected and projected > self.max_prompt_chars:
                 break
@@ -90,6 +109,29 @@ class MemoryGovernance:
             if len(selected) >= self.max_prompt_memories:
                 break
         return selected
+
+    @staticmethod
+    def _conflicts_with_true_memory(
+        item: Dict[str, Any],
+        text: str,
+        canonical_keys: set[tuple[str, str]],
+    ) -> bool:
+        """Check if a recalled Momex memory likely overlaps a canonical fact."""
+        # If the Momex item carries structured metadata with namespace/fact_key,
+        # do an exact match.
+        ns = str(item.get("namespace") or item.get("category") or "").strip().lower()
+        fk = str(item.get("fact_key") or item.get("key") or "").strip().lower()
+        if ns and fk and (ns, fk) in canonical_keys:
+            return True
+
+        # Heuristic: check if the recalled text echoes any canonical key pair.
+        lowered = text.lower()
+        for c_ns, c_fk in canonical_keys:
+            readable_key = c_fk.replace("_", " ")
+            if readable_key in lowered and c_ns in lowered:
+                return True
+
+        return False
 
     def build_recalled_memory_block(self, recalled: Optional[List[Dict[str, Any]]]) -> str:
         """Render recalled memories into a compact prompt section."""
