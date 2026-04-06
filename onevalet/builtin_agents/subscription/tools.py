@@ -129,3 +129,69 @@ async def query_subscriptions(
         })
 
     return ToolOutput(text=text_result, media=media)
+
+
+# =============================================================================
+# check_expiring_subscriptions
+# =============================================================================
+
+@tool
+async def check_expiring_subscriptions(
+    days_ahead: Annotated[int, "Check for subscriptions renewing within this many days. Default 3."] = 3,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Check for subscriptions renewing soon. Used by proactive alerts."""
+    db = await _get_db(context)
+    if not db:
+        return "Subscription tracking is not available. Database not configured."
+
+    try:
+        from datetime import date, timedelta
+
+        today = date.today()
+        cutoff = today + timedelta(days=days_ahead)
+
+        query = (
+            "SELECT service_name, amount, currency, billing_cycle, renewal_date "
+            "FROM subscriptions "
+            "WHERE tenant_id = $1 AND is_active = TRUE AND status = 'active' "
+            "AND renewal_date IS NOT NULL "
+            "AND renewal_date >= $2 AND renewal_date <= $3 "
+            "ORDER BY renewal_date ASC"
+        )
+        rows = await db.fetch(query, context.tenant_id, today, cutoff)
+    except Exception as e:
+        logger.error(f"Failed to check expiring subscriptions: {e}", exc_info=True)
+        return "Sorry, I couldn't check your subscriptions right now."
+
+    if not rows:
+        return f"No subscriptions renewing in the next {days_ahead} days."
+
+    from datetime import date as date_cls
+
+    lines = []
+    for row in rows:
+        name = row["service_name"]
+        amount = row.get("amount")
+        currency = row.get("currency", "USD")
+        renewal = row.get("renewal_date")
+
+        amount_str = _format_amount(amount, currency) if amount else ""
+
+        if isinstance(renewal, date_cls):
+            delta = (renewal - today).days
+        else:
+            delta = days_ahead  # fallback
+
+        if delta == 0:
+            when = "today"
+        elif delta == 1:
+            when = "tomorrow"
+        else:
+            when = f"in {delta} days"
+
+        price_part = f" ({amount_str})" if amount_str else ""
+        lines.append(f"💳 {name}{price_part} renews {when}")
+
+    return "\n".join(lines)

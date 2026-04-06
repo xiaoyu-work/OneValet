@@ -9,7 +9,7 @@ to query them.
 from onevalet import valet
 from onevalet.standard_agent import StandardAgent
 
-from .tools import query_subscriptions
+from .tools import query_subscriptions, check_expiring_subscriptions
 
 
 @valet(domain="lifestyle")
@@ -44,4 +44,5 @@ Instructions:
 
     tools = (
         query_subscriptions,
+        check_expiring_subscriptions,
     )

@@ -20,6 +20,7 @@ from .tools import (
     create_event,
     update_event,
     delete_event,
+    check_upcoming_events,
 )
 
 
@@ -57,4 +58,4 @@ ASK the user for it in your text response WITHOUT calling any tools.
             weekday=now.strftime("%A"),
         )
 
-    tools = (query_events, create_event, update_event, delete_event)
+    tools = (query_events, create_event, update_event, delete_event, check_upcoming_events)

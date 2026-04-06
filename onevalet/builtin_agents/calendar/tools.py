@@ -575,3 +575,72 @@ async def delete_event(
         return f"Done! I deleted {deleted_count} event(s), but {failed_count} couldn't be removed."
     else:
         return f"Done! I've removed {deleted_count} event(s) from your calendar."
+
+
+# =============================================================================
+# check_upcoming_events
+# =============================================================================
+
+@tool
+async def check_upcoming_events(
+    minutes_ahead: Annotated[int, "Check for events starting within this many minutes. Default 30."] = 30,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Check for calendar events starting soon. Used by proactive reminders."""
+    provider, account, error = await _get_provider(context.tenant_id)
+    if error:
+        return error
+
+    try:
+        now = datetime.now(timezone.utc)
+        time_min = now.isoformat()
+        time_max = (now + timedelta(minutes=minutes_ahead)).isoformat()
+
+        result = await provider.list_events(
+            time_min=time_min,
+            time_max=time_max,
+            max_results=10,
+        )
+
+        if not result.get("success"):
+            return f"Failed to check calendar: {result.get('error', 'Unknown error')}"
+
+        events = result.get("data", [])
+        if not events:
+            return f"No upcoming events in the next {minutes_ahead} minutes."
+
+        lines = []
+        for event in events:
+            summary = html.unescape(event.get("summary", "Untitled"))
+            start = event.get("start")
+            start_dt = None
+            if isinstance(start, dict):
+                dt_str = start.get("dateTime", "")
+                if dt_str:
+                    try:
+                        start_dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                    except (ValueError, AttributeError):
+                        pass
+            elif isinstance(start, datetime):
+                start_dt = start
+
+            if start_dt:
+                mins_until = max(0, int((start_dt - now).total_seconds() / 60))
+                line = f"📅 {summary} starts in {mins_until} minutes"
+            else:
+                line = f"📅 {summary} starts soon"
+
+            location = event.get("location", "")
+            if location:
+                line += f"\n📍 {location}"
+            html_link = event.get("htmlLink", "")
+            if html_link:
+                line += f"\n🔗 {html_link}"
+            lines.append(line)
+
+        return "\n\n".join(lines)
+
+    except Exception as e:
+        logger.error(f"check_upcoming_events failed: {e}", exc_info=True)
+        return "Sorry, I couldn't check your upcoming events right now."

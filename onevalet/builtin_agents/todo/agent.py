@@ -23,6 +23,7 @@ from .tools import (
     delete_task,
     set_reminder,
     manage_reminders,
+    check_overdue_tasks,
 )
 
 
@@ -67,4 +68,4 @@ in your text response WITHOUT calling any tools.
             timezone=tz_name,
         )
 
-    tools = (query_tasks, create_task, update_task, delete_task, set_reminder, manage_reminders)
+    tools = (query_tasks, create_task, update_task, delete_task, set_reminder, manage_reminders, check_overdue_tasks)

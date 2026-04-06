@@ -945,3 +945,69 @@ Return a JSON array of matching indices (0-based), like: [0, 3, 5]"""
         logger.error(f"Filter LLM failed: {e}")
 
     return []
+
+
+# =============================================================================
+# check_overdue_tasks
+# =============================================================================
+
+@tool
+async def check_overdue_tasks(*, context: AgentToolContext) -> str:
+    """Check for overdue and today-due tasks. Used by proactive reminders."""
+    try:
+        accounts = await _resolve_accounts(context.tenant_id)
+        if not accounts:
+            return "No todo accounts found. Please connect one first."
+
+        all_tasks = []
+        for account in accounts:
+            provider = _get_provider(account)
+            if not provider:
+                continue
+            if not await provider.ensure_valid_token():
+                continue
+            try:
+                result = await provider.list_tasks(completed=False)
+                if result.get("success"):
+                    all_tasks.extend(result.get("data", []))
+            except Exception as e:
+                logger.debug(f"check_overdue_tasks: failed for {account.get('account_name')}: {e}")
+
+        if not all_tasks:
+            return "No overdue or due tasks. You're all caught up!"
+
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        overdue = []
+        due_today = []
+
+        for task in all_tasks:
+            due = task.get("due") or task.get("due_date", "")
+            if isinstance(due, dict):
+                due = due.get("date", "")
+            if not due:
+                continue
+            due_date = due[:10]  # YYYY-MM-DD
+            title = task.get("title", "Untitled")
+            if due_date < today_str:
+                overdue.append(title)
+            elif due_date == today_str:
+                due_today.append(title)
+
+        if not overdue and not due_today:
+            return "No overdue or due tasks. You're all caught up!"
+
+        parts = []
+        if overdue:
+            titles = ", ".join(overdue[:5])
+            suffix = f" (+{len(overdue) - 5} more)" if len(overdue) > 5 else ""
+            parts.append(f"🔴 {len(overdue)} overdue: {titles}{suffix}")
+        if due_today:
+            titles = ", ".join(due_today[:5])
+            suffix = f" (+{len(due_today) - 5} more)" if len(due_today) > 5 else ""
+            parts.append(f"📋 {len(due_today)} due today: {titles}{suffix}")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.error(f"check_overdue_tasks failed: {e}", exc_info=True)
+        return "Sorry, I couldn't check your tasks right now."
