@@ -482,6 +482,63 @@ class OneValet:
                     delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
                 ))
 
+            # --- Evening Summary (F3) ---
+            if "Proactive: Evening Summary" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Evening Summary",
+                    description="End-of-day recap and tomorrow preview.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="0 21 * * *"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Generate a brief evening summary for the user. Include: "
+                                "1) What they accomplished today (tasks completed, emails handled). "
+                                "2) Tomorrow's first event and how many meetings they have. "
+                                "3) Any overdue tasks they should tackle tomorrow. "
+                                "Keep it warm and concise (3-4 lines). "
+                                "If nothing notable happened and tomorrow is clear, respond with nothing_to_report."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
+            # --- Weekly Planning (F4) ---
+            if "Proactive: Weekly Planning" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Weekly Planning",
+                    description="Sunday evening next-week overview.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="0 19 * * 0"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Generate a brief weekly preview for next week. Include: "
+                                "1) Total meetings and busiest day. "
+                                "2) Any deadlines or important dates. "
+                                "3) Tasks carrying over from this week. "
+                                "Keep it to 4-5 lines max. Be encouraging. "
+                                "If next week is completely empty, say so briefly — don't skip."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
+            # --- Task Rollover (F20) ---
+            if "Proactive: Task Rollover" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Task Rollover",
+                    description="Evening check for incomplete today-due tasks.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="0 20 * * *"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Check for tasks that were due today but not completed. "
+                                "If any, list them briefly and suggest moving to tomorrow. "
+                                "If all tasks are done or none were due, respond with nothing_to_report."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
             for job_input in jobs_to_create:
                 await self._cron_service.add(job_input)
                 logger.info(f"Auto-created proactive job '{job_input.name}' for tenant {tenant_id}")
