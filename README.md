@@ -1,6 +1,28 @@
 # Koa
 
-A self-hosted AI personal assistant. Manage emails, calendar, and more through a chat interface.
+**Your proactive AI chief of staff** — triages email, manages calendar, tracks expenses & packages, controls smart home, plans trips, monitors subscriptions. Reaches you via AI glasses before you even think to ask.
+
+### What Koa Does
+
+- 📧 **Email** — triages Gmail & Outlook, flags what's important, sends on your behalf
+- 📅 **Calendar** — manages Google Calendar & Outlook events, resolves conflicts, sets reminders
+- ✅ **Tasks & Todos** — Google Tasks, Microsoft To Do, Todoist — unified under one AI
+- 💰 **Expenses** — tracks spending, scans receipts, manages budgets
+- 📦 **Packages** — auto-detects tracking numbers from emails, monitors delivery status
+- 🏠 **Smart Home** — controls Philips Hue lights & Sonos speakers by voice
+- ✈️ **Trip Planning** — builds itineraries, searches flights & hotels
+- 🗺️ **Maps & Location** — directions, nearby places, commute estimates
+- 📝 **Notion** — reads and writes to your Notion workspace
+- ☁️ **Cloud Storage** — Google Drive, OneDrive, Dropbox file management
+- 🔔 **Subscriptions** — detects recurring charges, alerts on renewals
+- 📰 **Daily Briefings** — morning digest of weather, calendar, emails, reminders
+- 🎨 **Image Generation** — creates images via DALL·E, Gemini, or Azure
+- 🤖 **Proactive Intelligence** — learns your habits, reaches out before you ask
+- 🕶️ **AI Glasses** — delivers notifications and interacts through smart glasses
+
+### How It's Different
+
+Koa is **proactive** — it doesn't wait for you to ask. It watches your email, detects important messages, tracks your packages, and pushes notifications to your phone or AI glasses. It has **true memory** across conversations and learns your preferences over time. 30+ specialized agents work together through a ReAct orchestrator with automatic model routing.
 
 ## Quick Start
 
