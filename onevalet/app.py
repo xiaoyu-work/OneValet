@@ -412,6 +412,83 @@ class OneValet:
                 os.environ.setdefault(env_var, val)
                 logger.debug(f"Loaded credential {env_var} from config")
 
+    async def _ensure_proactive_jobs(self, tenant_id: str) -> None:
+        """Auto-create system proactive cron jobs for a tenant if they don't exist.
+
+        Called when a user connects a new service (OAuth). Creates:
+        - Calendar check every 15 min (if not already present)
+        - Task check daily at 9am (if not already present)
+        - Subscription check daily at 10am (if not already present)
+        """
+        if not self._cron_service:
+            return
+
+        try:
+            existing = self._cron_service.list_jobs(user_id=tenant_id, include_disabled=True)
+            existing_names = {j.name for j in existing}
+
+            from .triggers.cron.models import (
+                CronJobCreate, CronScheduleSpec, SessionTarget,
+                WakeMode, AgentTurnPayload, DeliveryConfig, DeliveryMode,
+            )
+
+            jobs_to_create = []
+
+            if "Proactive: Calendar Check" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Calendar Check",
+                    description="Check for upcoming calendar events and send reminders.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="*/15 * * * *"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Check for calendar events starting in the next 30 minutes. "
+                                "If any, notify the user with event name, time, and meeting link. "
+                                "If nothing upcoming, respond with nothing_to_report."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
+            if "Proactive: Task Check" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Task Check",
+                    description="Check for overdue and today-due tasks.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="0 9 * * *"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Check for overdue and today-due tasks. "
+                                "If any, notify the user with a brief summary. "
+                                "If nothing, respond with nothing_to_report."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
+            if "Proactive: Subscription Check" not in existing_names:
+                jobs_to_create.append(CronJobCreate(
+                    name="Proactive: Subscription Check",
+                    description="Check for subscriptions renewing in the next 3 days.",
+                    user_id=tenant_id,
+                    schedule=CronScheduleSpec(expr="0 10 * * *"),
+                    session_target=SessionTarget.ISOLATED,
+                    wake_mode=WakeMode.NEXT_HEARTBEAT,
+                    payload=AgentTurnPayload(
+                        message="Check for subscriptions renewing in the next 3 days. "
+                                "If any, notify the user with name, price, and renewal date. "
+                                "If nothing, respond with nothing_to_report."
+                    ),
+                    delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                ))
+
+            for job_input in jobs_to_create:
+                await self._cron_service.add(job_input)
+                logger.info(f"Auto-created proactive job '{job_input.name}' for tenant {tenant_id}")
+
+        except Exception as e:
+            logger.warning(f"Failed to ensure proactive jobs for {tenant_id}: {e}")
+
     @property
     def database(self):
         """Access the database instance (may be None before initialization)."""
@@ -467,6 +544,8 @@ class OneValet:
         await self._ensure_initialized()
         await self._credential_store.save(tenant_id=tenant_id, service=service, credentials=credentials, account_name=account_name)
         await self._load_credentials_to_env()
+        # Auto-register proactive cron jobs when a service is first connected
+        await self._ensure_proactive_jobs(tenant_id)
 
     async def delete_credential(self, tenant_id: str, service: str, account_name: str) -> bool:
         """Delete a credential entry. Returns True if deleted."""
