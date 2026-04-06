@@ -1,4 +1,4 @@
-# OneValet
+# Koa
 
 A self-hosted AI personal assistant. Manage emails, calendar, and more through a chat interface.
 
@@ -7,15 +7,15 @@ A self-hosted AI personal assistant. Manage emails, calendar, and more through a
 ### 1. Install
 
 ```bash
-git clone https://github.com/xiaoyu-work/onevalet.git
-cd onevalet
+git clone https://github.com/xiaoyu-work/koa.git
+cd koa
 uv sync --extra openai        # or: --extra anthropic, --all-extras
 ```
 
 ### 2. Start
 
 ```bash
-uv run onevalet --ui
+uv run koa --ui
 ```
 
 Open **http://localhost:8000** in your browser.
@@ -77,7 +77,7 @@ database: postgresql://user:pass@host:5432/dbname
 
 ## Model Routing
 
-OneValet can automatically route each request to the best LLM based on task complexity. Simple tasks (greetings, quick lookups) go to cheap/fast models; complex tasks (trip planning, multi-agent workflows) go to stronger models. This can cut API costs significantly without sacrificing quality.
+Koa can automatically route each request to the best LLM based on task complexity. Simple tasks (greetings, quick lookups) go to cheap/fast models; complex tasks (trip planning, multi-agent workflows) go to stronger models. This can cut API costs significantly without sacrificing quality.
 
 ### How It Works
 
@@ -117,7 +117,7 @@ model_routing:
       provider: strong
 ```
 
-When `model_routing.enabled` is not set or `false`, OneValet uses the single LLM defined in the `llm` section (the default behavior).
+When `model_routing.enabled` is not set or `false`, Koa uses the single LLM defined in the `llm` section (the default behavior).
 
 ## License
 
