@@ -1,12 +1,12 @@
-# OneValet
+# Koa
 
-OneValet is a deployable AI personal assistant. Clone the repo, configure your LLM provider and database, and run a REST API that handles chat and streaming out of the box.
+Koa is a deployable AI personal assistant. Clone the repo, configure your LLM provider and database, and run a REST API that handles chat and streaming out of the box.
 
 ## Documentation
 
 | Topic | Description |
 |-------|-------------|
-| [Getting Started](getting-started.md) | Deploy OneValet in 5 minutes |
+| [Getting Started](getting-started.md) | Deploy Koa in 5 minutes |
 | [Configuration](configuration.md) | `config.yaml` and environment variable reference |
 | [Agents](agents.md) | Create custom agents with `@valet` and `InputField` |
 | [Tools](tools.md) | Add tools for LLM function calling |

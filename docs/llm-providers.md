@@ -1,6 +1,6 @@
 # LLM Providers
 
-OneValet supports multiple LLM providers. Configure your provider in `config.yaml`.
+Koa supports multiple LLM providers. Configure your provider in `config.yaml`.
 
 ## Supported Providers
 

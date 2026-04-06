@@ -1,6 +1,6 @@
 # Streaming
 
-OneValet streams responses in real time via Server-Sent Events (SSE).
+Koa streams responses in real time via Server-Sent Events (SSE).
 
 ## Endpoint
 

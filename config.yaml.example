@@ -24,8 +24,8 @@ embedding:
 #   Your name is Jarvis. You speak in a warm, butler-like tone.
 #
 # system_prompt_mode: append    # "append" (default) or "override"
-#   append  — system_prompt is added after the built-in OneValet prompt
-#   override — system_prompt replaces the default preamble ("You are OneValet...")
+#   append  — system_prompt is added after the built-in Koa prompt
+#   override — system_prompt replaces the default preamble ("You are Koa...")
 #              while keeping all functional sections (tool routing, workflow, etc.)
 
 # ---------------------------------------------------------------------------
@@ -97,7 +97,7 @@ embedding:
 #     env:
 #       MY_VAR: some-value
 
-# Callbacks — OneValet POSTs notifications here (e.g. important emails, trigger results)
+# Callbacks — Koa POSTs notifications here (e.g. important emails, trigger results)
 # callbacks:
 #   notify_url: http://localhost:8001/webhook/onevalet/callback
 

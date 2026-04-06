@@ -11,7 +11,7 @@ readme = "README.md"
 license = {text = "BSL-1.1"}
 requires-python = ">=3.12"
 authors = [
-    { name = "OneValet Contributors" }
+    { name = "Koa Contributors" }
 ]
 keywords = [
     "agent",
@@ -77,10 +77,10 @@ all = [
 onevalet = "onevalet.server:main"
 
 [project.urls]
-Homepage = "https://github.com/xiaoyu-work/onevalet"
-Documentation = "https://xiaoyu-work.github.io/onevalet"
-Repository = "https://github.com/xiaoyu-work/onevalet"
-Issues = "https://github.com/xiaoyu-work/onevalet/issues"
+Homepage = "https://github.com/withkoi/koa"
+Documentation = "https://withkoi.github.io/koa"
+Repository = "https://github.com/withkoi/koa"
+Issues = "https://github.com/withkoi/koa/issues"
 
 [tool.hatch.metadata]
 allow-direct-references = true

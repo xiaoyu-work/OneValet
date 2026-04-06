@@ -1,6 +1,6 @@
 # Tool Development Guide
 
-OneValet provides a tool system for LLM function calling.
+Koa provides a tool system for LLM function calling.
 
 ## Defining a Tool
 

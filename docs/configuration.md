@@ -52,7 +52,7 @@ ONEVALET_HOST=127.0.0.1 ONEVALET_PORT=9000 python -m onevalet
 
 ### Embedding (Memory)
 
-OneValet uses OpenAI embeddings for long-term memory. If your LLM provider is OpenAI or Azure, the same API key is reused automatically. For other providers (Anthropic, DashScope, Gemini, Ollama), set `OPENAI_API_KEY` for embedding support:
+Koa uses OpenAI embeddings for long-term memory. If your LLM provider is OpenAI or Azure, the same API key is reused automatically. For other providers (Anthropic, DashScope, Gemini, Ollama), set `OPENAI_API_KEY` for embedding support:
 
 | Provider | Embedding Key |
 |----------|--------------|

@@ -1,6 +1,6 @@
 # State Machine
 
-OneValet uses a state machine to manage agent lifecycle. This document explains the default states, transitions, and how to customize behavior.
+Koa uses a state machine to manage agent lifecycle. This document explains the default states, transitions, and how to customize behavior.
 
 ## Default States
 

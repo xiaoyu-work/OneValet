@@ -1,12 +1,12 @@
 # Getting Started
 
-Deploy OneValet and send your first request in 5 minutes.
+Deploy Koa and send your first request in 5 minutes.
 
 ## 1. Clone the repo
 
 ```bash
-git clone https://github.com/xiaoyu-work/onevalet.git
-cd onevalet
+git clone https://github.com/withkoi/koa.git
+cd koa
 ```
 
 ## 2. Install dependencies
@@ -85,7 +85,7 @@ The `/stream` endpoint returns server-sent events. See [Streaming](streaming.md)
 
 ## Custom agents
 
-OneValet ships with built-in agents, but you can create your own using `@valet`, `StandardAgent`, and `InputField`. See the [Agents](agents.md) guide.
+Koa ships with built-in agents, but you can create your own using `@valet`, `StandardAgent`, and `InputField`. See the [Agents](agents.md) guide.
 
 ## Next steps
 

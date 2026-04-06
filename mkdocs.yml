@@ -1,8 +1,8 @@
-site_name: OneValet
+site_name: Koa
 site_description: Personal AI agent framework
-site_url: https://xiaoyu-work.github.io/onevalet
-repo_url: https://github.com/xiaoyu-work/onevalet
-repo_name: xiaoyu-work/onevalet
+site_url: https://withkoi.github.io/koa
+repo_url: https://github.com/withkoi/koa
+repo_name: withkoi/koa
 
 theme:
   name: material
@@ -59,4 +59,4 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/xiaoyu-work/onevalet
+      link: https://github.com/withkoi/koa

@@ -1,13 +1,13 @@
-# Contributing to OneValet
+# Contributing to Koa
 
-Thanks for your interest in contributing to OneValet!
+Thanks for your interest in contributing to Koa!
 
 ## Development Setup
 
 ```bash
 # Clone the repo
-git clone https://github.com/xiaoyu-work/onevalet.git
-cd onevalet
+git clone https://github.com/withkoi/koa.git
+cd koa
 
 # Install in development mode
 pip install -e ".[all]"

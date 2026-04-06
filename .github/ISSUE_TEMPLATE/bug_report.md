@@ -27,7 +27,7 @@ What actually happened.
 ## Environment
 
 - Python version:
-- OneValet version:
+- Koa version:
 - OS:
 
 ## Additional Context
