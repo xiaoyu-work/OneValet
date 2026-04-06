@@ -45,6 +45,11 @@ class CronDeliveryHandler:
         if not job.delivery or job.delivery.mode == DeliveryMode.NONE:
             return DeliveryResult(status="not-requested")
 
+        # If the agent responded with "nothing_to_report", skip delivery
+        if result_text and "nothing_to_report" in result_text.lower():
+            logger.debug("Proactive check: nothing to report, skipping delivery")
+            return DeliveryResult(status="not-requested")
+
         try:
             if job.delivery.mode == DeliveryMode.ANNOUNCE:
                 await self._deliver_announce(job, result_text)
