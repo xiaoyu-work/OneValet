@@ -251,6 +251,88 @@ async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
 
 
 @tool(needs_approval=True, get_preview=_preview_create_event)
+async def _schedule_event_reminders(
+    context: AgentToolContext,
+    summary: str,
+    start_dt: datetime,
+    location: str = None,
+    attendees: list = None,
+):
+    """Auto-schedule proactive reminders when a calendar event is created/updated."""
+    cron_service = context.context_hints.get("cron_service") if context.context_hints else None
+    if not cron_service:
+        return
+
+    from onevalet.triggers.cron.models import (
+        CronJobCreate, AtSchedule, SessionTarget,
+        WakeMode, AgentTurnPayload, DeliveryConfig, DeliveryMode,
+    )
+
+    tenant_id = context.tenant_id
+    jobs = []
+
+    # 30-min-before reminder
+    remind_at = start_dt - timedelta(minutes=30)
+    if remind_at > datetime.now(timezone.utc):
+        meeting_link_hint = "Include the meeting link if available."
+        jobs.append(CronJobCreate(
+            name=f"Reminder: {summary}",
+            description=f"30-min reminder for '{summary}'",
+            user_id=tenant_id,
+            schedule=AtSchedule(at=remind_at.isoformat()),
+            session_target=SessionTarget.ISOLATED,
+            wake_mode=WakeMode.NEXT_HEARTBEAT,
+            payload=AgentTurnPayload(
+                message=f"Remind the user: '{summary}' starts in 30 minutes. {meeting_link_hint}"
+            ),
+            delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+        ))
+
+    # Departure reminder (45 min before, only if location)
+    if location:
+        depart_at = start_dt - timedelta(minutes=45)
+        if depart_at > datetime.now(timezone.utc):
+            jobs.append(CronJobCreate(
+                name=f"Depart for: {summary}",
+                description=f"Departure reminder for '{summary}' at {location}",
+                user_id=tenant_id,
+                schedule=AtSchedule(at=depart_at.isoformat()),
+                session_target=SessionTarget.ISOLATED,
+                wake_mode=WakeMode.NEXT_HEARTBEAT,
+                payload=AgentTurnPayload(
+                    message=f"The user has '{summary}' at '{location}' starting soon. "
+                            f"Get their current location, calculate travel time, and tell them when to leave."
+                ),
+                delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+            ))
+
+    # Meeting prep (10 min before, only if attendees)
+    if attendees:
+        prep_at = start_dt - timedelta(minutes=10)
+        if prep_at > datetime.now(timezone.utc):
+            attendee_str = ", ".join(attendees[:5])
+            jobs.append(CronJobCreate(
+                name=f"Prep: {summary}",
+                description=f"Meeting prep for '{summary}'",
+                user_id=tenant_id,
+                schedule=AtSchedule(at=prep_at.isoformat()),
+                session_target=SessionTarget.ISOLATED,
+                wake_mode=WakeMode.NEXT_HEARTBEAT,
+                payload=AgentTurnPayload(
+                    message=f"'{summary}' starts in 10 minutes with: {attendee_str}. "
+                            f"Search recent emails from these people and give the user a brief context summary."
+                ),
+                delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+            ))
+
+    for job in jobs:
+        try:
+            await cron_service.add(job)
+            logger.info(f"Auto-scheduled reminder '{job.name}' for tenant {tenant_id}")
+        except Exception as e:
+            logger.warning(f"Failed to schedule reminder '{job.name}': {e}")
+
+
 async def create_event(
     summary: Annotated[str, "Event title/summary"],
     start: Annotated[str, "Event start time (e.g., 'tomorrow at 2pm', '2025-03-15 14:00')"],
@@ -290,6 +372,16 @@ async def create_event(
         )
 
         if result.get("success"):
+            # Auto-schedule proactive reminders
+            try:
+                await _schedule_event_reminders(
+                    context, summary, start_dt,
+                    location=location,
+                    attendees=attendee_list or None,
+                )
+            except Exception as e:
+                logger.debug(f"Auto-reminder scheduling failed: {e}")
+
             event_link = result.get("html_link", "")
             response = f"Done! I've added '{summary}' to your calendar."
             if event_link:
@@ -448,6 +540,21 @@ async def update_event(
         )
 
         if result.get("success"):
+            # Auto-schedule reminders if the event time was changed
+            if "start" in parsed_changes and isinstance(parsed_changes["start"], datetime):
+                try:
+                    event_title = parsed_changes.get("summary") or target_event.get("summary", "event")
+                    updated_location = parsed_changes.get("location") or target_event.get("location")
+                    raw_attendees = target_event.get("attendees") or []
+                    attendee_emails = [a.get("email") for a in raw_attendees if a.get("email")] if raw_attendees else None
+                    await _schedule_event_reminders(
+                        context, event_title, parsed_changes["start"],
+                        location=updated_location,
+                        attendees=attendee_emails or None,
+                    )
+                except Exception as e:
+                    logger.debug(f"Auto-reminder scheduling on update failed: {e}")
+
             event_title = parsed_changes.get("summary") or target_event.get("summary", "event")
             if "start" in parsed_changes:
                 new_time = parsed_changes["start"].strftime("%Y-%m-%d %H:%M") if isinstance(parsed_changes["start"], datetime) else str(parsed_changes["start"])

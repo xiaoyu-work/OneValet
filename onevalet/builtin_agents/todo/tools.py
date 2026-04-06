@@ -229,6 +229,37 @@ async def create_task(
         result = await provider.create_task(title=title, due=due, priority=priority)
 
         if result.get("success"):
+            # Auto-schedule due date reminder
+            if due:
+                cron_service = context.context_hints.get("cron_service") if context.context_hints else None
+                if cron_service:
+                    try:
+                        from dateutil.parser import parse as dateparse
+                        due_dt = dateparse(due)
+                        remind_at = due_dt.replace(hour=9, minute=0, second=0)
+                        if remind_at.tzinfo is None:
+                            remind_at = remind_at.replace(tzinfo=timezone.utc)
+                        if remind_at > datetime.now(timezone.utc):
+                            from onevalet.triggers.cron.models import (
+                                CronJobCreate, AtSchedule, SessionTarget,
+                                WakeMode, AgentTurnPayload, DeliveryConfig, DeliveryMode,
+                            )
+                            await cron_service.add(CronJobCreate(
+                                name=f"Due: {title}",
+                                description="Task due date reminder",
+                                user_id=context.tenant_id,
+                                schedule=AtSchedule(at=remind_at.isoformat()),
+                                session_target=SessionTarget.ISOLATED,
+                                wake_mode=WakeMode.NEXT_HEARTBEAT,
+                                payload=AgentTurnPayload(
+                                    message=f"Remind the user: task '{title}' is due today."
+                                ),
+                                delivery=DeliveryConfig(mode=DeliveryMode.ANNOUNCE, channel="callback"),
+                            ))
+                            logger.info(f"Auto-scheduled due-date reminder for task '{title}'")
+                    except Exception as e:
+                        logger.debug(f"Task reminder scheduling failed: {e}")
+
             account_name = account_obj.get("account_name", account_obj.get("provider", ""))
             due_str = f" (due {due})" if due else ""
             return f"Added to {account_name}: {title}{due_str}"
