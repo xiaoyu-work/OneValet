@@ -182,6 +182,49 @@ async def analyze_user_habits(*, context: AgentToolContext) -> str:
     except Exception as e:
         logger.debug(f"Calendar pattern analysis failed: {e}")
 
+    # 4. Analyze email notification interactions (tapped vs dismissed)
+    try:
+        interactions = await db.fetch(
+            """SELECT sender, action, COUNT(*) as cnt
+               FROM notification_interactions
+               WHERE user_id = $1 AND created_at > NOW() - INTERVAL '14 days'
+                 AND category = 'email_alert' AND sender != ''
+               GROUP BY sender, action
+               ORDER BY cnt DESC LIMIT 20""",
+            tenant_id,
+        )
+        if interactions:
+            from collections import defaultdict
+            sender_stats: dict = defaultdict(lambda: {"tapped": 0, "dismissed": 0})
+            for row in interactions:
+                sender_stats[row["sender"]][row["action"]] = row["cnt"]
+
+            # Senders the user consistently ignores (dismissed >= 3, never tapped)
+            ignored = [s for s, stats in sender_stats.items()
+                       if stats["dismissed"] >= 3 and stats["tapped"] == 0]
+            # Senders the user always taps (tapped >= 3, never dismissed)
+            priority = [s for s, stats in sender_stats.items()
+                        if stats["tapped"] >= 3 and stats["dismissed"] == 0]
+
+            if ignored:
+                discoveries.append({
+                    "namespace": "feedback",
+                    "fact_key": "email_ignore_senders",
+                    "value": {"senders": ignored},
+                    "summary": f"User consistently ignores email notifications from: {', '.join(ignored[:5])}",
+                    "how_to_apply": "Do NOT notify user about emails from these senders.",
+                })
+            if priority:
+                discoveries.append({
+                    "namespace": "feedback",
+                    "fact_key": "email_priority_senders",
+                    "value": {"senders": priority},
+                    "summary": f"User always reads email notifications from: {', '.join(priority[:5])}",
+                    "how_to_apply": "ALWAYS notify user about emails from these senders, even if content seems routine.",
+                })
+    except Exception as e:
+        logger.debug(f"Email interaction analysis failed: {e}")
+
     if not discoveries:
         return "Not enough data yet to discover habits (need at least a week of usage)."
 

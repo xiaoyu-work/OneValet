@@ -107,6 +107,16 @@ class EmailEventHandler:
         subject = data.get("subject", "")
         snippet = data.get("snippet", "")
 
+        # Fast check: skip senders the user consistently ignores (learned from interactions)
+        if self._database:
+            try:
+                skip = await self._is_learned_ignore_sender(tenant_id, sender)
+                if skip:
+                    logger.debug(f"Skipping email from learned-ignore sender: {sender}")
+                    return
+            except Exception:
+                pass
+
         # Single LLM call for both importance and subscription detection
         evaluation = await self._evaluate_email(sender, subject, snippet)
         if evaluation is None:
@@ -130,7 +140,20 @@ class EmailEventHandler:
                 logger.warning(f"Profile update failed: {e}")
 
         # Handle importance
-        if not evaluation.get("important", False):
+        is_important = evaluation.get("important", False)
+
+        # Override: force-notify for learned priority senders
+        if not is_important and self._database:
+            try:
+                is_priority = await self._is_learned_priority_sender(tenant_id, sender)
+                if is_priority:
+                    is_important = True
+                    evaluation["reason"] = "Learned priority sender (user always reads these)"
+                    logger.info(f"Force-notifying for priority sender: {sender}")
+            except Exception:
+                pass
+
+        if not is_important:
             logger.debug(f"Email not important: {subject} (reason: {evaluation.get('reason', 'N/A')})")
             return
 
@@ -238,6 +261,47 @@ class EmailEventHandler:
             tenant_id, [section, field], value,
         )
         logger.info(f"Profile updated from email: {section}.{field} = {value} for tenant {tenant_id[:8]}")
+
+    async def _is_learned_ignore_sender(self, tenant_id: str, sender: str) -> bool:
+        """Check if this sender is in the user's learned ignore list."""
+        row = await self._database.fetchrow(
+            """SELECT COUNT(*) as cnt FROM notification_interactions
+               WHERE user_id = $1 AND sender = $2 AND action = 'dismissed'
+                 AND created_at > NOW() - INTERVAL '30 days'""",
+            tenant_id, sender,
+        )
+        dismissed = row["cnt"] if row else 0
+        if dismissed < 3:
+            return False
+        # Check they never tapped
+        row2 = await self._database.fetchrow(
+            """SELECT COUNT(*) as cnt FROM notification_interactions
+               WHERE user_id = $1 AND sender = $2 AND action = 'tapped'
+                 AND created_at > NOW() - INTERVAL '30 days'""",
+            tenant_id, sender,
+        )
+        tapped = row2["cnt"] if row2 else 0
+        return tapped == 0
+
+    async def _is_learned_priority_sender(self, tenant_id: str, sender: str) -> bool:
+        """Check if this sender is in the user's learned priority list."""
+        row = await self._database.fetchrow(
+            """SELECT COUNT(*) as cnt FROM notification_interactions
+               WHERE user_id = $1 AND sender = $2 AND action = 'tapped'
+                 AND created_at > NOW() - INTERVAL '30 days'""",
+            tenant_id, sender,
+        )
+        tapped = row["cnt"] if row else 0
+        if tapped < 3:
+            return False
+        row2 = await self._database.fetchrow(
+            """SELECT COUNT(*) as cnt FROM notification_interactions
+               WHERE user_id = $1 AND sender = $2 AND action = 'dismissed'
+                 AND created_at > NOW() - INTERVAL '30 days'""",
+            tenant_id, sender,
+        )
+        dismissed = row2["cnt"] if row2 else 0
+        return dismissed == 0
 
     async def _evaluate_email(
         self, sender: str, subject: str, snippet: str
