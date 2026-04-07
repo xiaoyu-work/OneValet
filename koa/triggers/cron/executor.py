@@ -198,7 +198,7 @@ class CronExecutor:
             return await self._execute_isolated(job)
 
     def _build_metadata(self, job: CronJob, **extra) -> dict:
-        """Build metadata dict for orchestrator calls."""
+        """Build metadata dict for orchestrator calls, including cached user profile."""
         meta = {
             "source": "cron",
             "cron_job_id": job.id,
@@ -209,6 +209,14 @@ class CronExecutor:
         # Signal the orchestrator to inject notify_user tool
         if job.delivery and job.delivery.conditional:
             meta["cron_conditional_delivery"] = True
+
+        # Inject cached user profile so cron jobs get the same context as
+        # interactive requests. The profile is cached by the orchestrator
+        # whenever it arrives from the app layer via metadata.
+        cached_profile = self._orchestrator.get_cached_user_profile(job.user_id)
+        if cached_profile:
+            meta["user_profile"] = cached_profile
+
         return meta
 
     async def _execute_main(self, job: CronJob) -> Tuple[Optional[str], Optional[str]]:

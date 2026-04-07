@@ -263,6 +263,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         self._post_process_hooks: List[Callable] = list(post_process_hooks or [])
         self._tool_policy_filter = tool_policy_filter
         self._model_router = model_router
+
+        # User profile cache — populated from app-layer metadata on interactive
+        # requests, reused by cron jobs so they get the same personal context.
+        self._user_profile_cache: Dict[str, Dict[str, Any]] = {}
         self.memory_governance = memory_governance or MemoryGovernance()
         self.session_memory = session_memory or SessionMemoryManager()
         self._execution_policy = execution_policy or ExecutionPolicyEngine()
@@ -1016,7 +1020,13 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             system_parts.append("\n[True Memory]\n" + true_memory_text)
 
         # User profile (extracted from email, passed by app layer)
-        profile_text = self._format_user_profile(meta.get("user_profile"))
+        user_profile = meta.get("user_profile")
+        if user_profile:
+            # Cache for cron jobs to reuse
+            tenant_id = context.get("tenant_id", "")
+            if tenant_id:
+                self._user_profile_cache[tenant_id] = user_profile
+        profile_text = self._format_user_profile(user_profile)
         if profile_text:
             system_parts.append("\n[User Profile]\n" + profile_text)
 
@@ -1071,6 +1081,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         })
 
         return messages
+
+    def get_cached_user_profile(self, tenant_id: str) -> Optional[Dict[str, Any]]:
+        """Return cached user profile for cron/scheduled jobs."""
+        return self._user_profile_cache.get(tenant_id)
 
     @staticmethod
     def _format_user_profile(profile: Optional[Dict[str, Any]]) -> str:
