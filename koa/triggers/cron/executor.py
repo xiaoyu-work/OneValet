@@ -197,8 +197,8 @@ class CronExecutor:
         else:
             return await self._execute_isolated(job)
 
-    def _build_metadata(self, job: CronJob, **extra) -> dict:
-        """Build metadata dict for orchestrator calls, including cached user profile."""
+    async def _build_metadata(self, job: CronJob, **extra) -> dict:
+        """Build metadata dict for orchestrator calls, including user profile from DB."""
         meta = {
             "source": "cron",
             "cron_job_id": job.id,
@@ -210,12 +210,18 @@ class CronExecutor:
         if job.delivery and job.delivery.conditional:
             meta["cron_conditional_delivery"] = True
 
-        # Inject cached user profile so cron jobs get the same context as
-        # interactive requests. The profile is cached by the orchestrator
-        # whenever it arrives from the app layer via metadata.
-        cached_profile = self._orchestrator.get_cached_user_profile(job.user_id)
-        if cached_profile:
-            meta["user_profile"] = cached_profile
+        # Load user profile from DB so cron jobs get the same personal context
+        # as interactive requests (name, timezone, relationships, etc.)
+        try:
+            db = self._orchestrator.database
+            if db:
+                from koa.services.profile_repo import ProfileRepository
+                repo = ProfileRepository(db)
+                profile = await repo.get_profile(job.user_id)
+                if profile:
+                    meta["user_profile"] = profile
+        except Exception as e:
+            logger.debug(f"Cron: failed to load user profile for {job.user_id[:8]}: {e}")
 
         return meta
 
@@ -244,7 +250,7 @@ class CronExecutor:
             result = await self._orchestrator.handle_message(
                 tenant_id=job.user_id,
                 message=message,
-                metadata=self._build_metadata(job),
+                metadata=await self._build_metadata(job),
             )
             return self._extract_summary(job, result, text), None
         except Exception as e:
@@ -261,7 +267,7 @@ class CronExecutor:
             result = await self._orchestrator.handle_message(
                 tenant_id=job.user_id,
                 message=message,
-                metadata=self._build_metadata(job, isolated=True),
+                metadata=await self._build_metadata(job, isolated=True),
             )
             return self._extract_summary(job, result, ""), None
         except Exception as e:
