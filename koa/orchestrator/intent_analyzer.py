@@ -102,13 +102,13 @@ class IntentAnalyzer:
         self,
         user_message: str,
         conversation_history: Optional[List[Dict[str, Any]]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> IntentAnalysis:
         """Analyze user message intent and domain classification.
 
-        Uses a single lightweight LLM call.
-        Includes recent conversation history so short follow-ups like "ok",
-        "yes", "tell me more" are classified in the context of the preceding
-        exchange rather than defaulting to 'general'.
+        Receives the same conversation_history and metadata that the main
+        ReAct LLM sees, so short follow-ups ("ok", "yes", "然后呢") are
+        classified in the context of the preceding exchange.
 
         Falls back to single-intent with all domains on failure.
         """
@@ -116,14 +116,35 @@ class IntentAnalyzer:
             {"role": "system", "content": INTENT_ANALYZER_SYSTEM_PROMPT},
         ]
 
-        # Include last few turns of conversation so the classifier can see
-        # what the user is responding to (e.g. "ok" after a travel answer).
+        # Full conversation history — same as what the main model receives.
+        # Only include user/assistant messages (skip tool results to save tokens).
         if conversation_history:
-            recent = [
-                m for m in conversation_history
-                if m.get("role") in ("user", "assistant")
-            ][-6:]  # last 3 exchanges max
-            messages.extend(recent)
+            for m in conversation_history:
+                role = m.get("role")
+                content = m.get("content")
+                if role in ("user", "assistant") and content:
+                    # Truncate long assistant responses to keep classifier fast
+                    if role == "assistant" and len(content) > 200:
+                        content = content[:200] + "..."
+                    messages.append({"role": role, "content": content})
+
+        # Inject runtime context (time, location) so the classifier knows
+        # situational details — same info the main model gets.
+        if metadata:
+            context_parts = []
+            tz = metadata.get("timezone")
+            if tz:
+                context_parts.append(f"User timezone: {tz}")
+            location = metadata.get("location")
+            if location and isinstance(location, dict):
+                lat, lng = location.get("lat"), location.get("lng")
+                if lat is not None and lng is not None:
+                    context_parts.append(f"User location: {lat}, {lng}")
+            if context_parts:
+                messages.append({
+                    "role": "system",
+                    "content": "[Context]\n" + "\n".join(context_parts),
+                })
 
         messages.append({"role": "user", "content": user_message})
         try:
