@@ -15,8 +15,17 @@ logger = logging.getLogger(__name__)
 
 BRIEFING_JOB_NAME = "Daily Briefing"
 BRIEFING_INSTRUCTION = (
-    "Generate a morning briefing for the user. Summarize today's calendar events, "
-    "pending tasks, upcoming important dates, and unread emails."
+    "Generate my morning briefing. Call get_briefing to gather today's data, "
+    "then present the results following these rules:\n"
+    "1. Lead with the MOST urgent item (overdue task, meeting in <2h, important date today)\n"
+    "2. Use this format — skip sections with nothing to report:\n"
+    "   🔴 Urgent: [items needing immediate action]\n"
+    "   📅 Today: [calendar events with times]\n"
+    "   ✅ Tasks: [due today or overdue]\n"
+    "   🎂 Dates: [birthdays/anniversaries within 7 days]\n"
+    "   📧 Emails: [unread important emails]\n"
+    "3. End with ONE actionable suggestion\n"
+    "4. Max 8 lines total. Be warm but concise."
 )
 
 
@@ -86,6 +95,61 @@ def _format_relative(ms) -> str:
 
 
 # =============================================================================
+# Profile birthday helper
+# =============================================================================
+
+def _check_profile_birthdays(profile: dict, now: datetime, sections: list):
+    """Check user profile relationships for upcoming birthdays within 7 days."""
+    relationships = profile.get("relationships", {})
+    family = relationships.get("family", [])
+    partner = relationships.get("significant_other")
+    # Collect all people with birthdays
+    people = list(family)
+    if partner and isinstance(partner, dict):
+        people.append(partner)
+
+    if not people:
+        return
+
+    today = now.date()
+    lines = []
+    for person in people:
+        bday_str = person.get("birthday", "")
+        name = person.get("name", "Someone")
+        rel = person.get("relationship", "")
+        if not bday_str:
+            continue
+        try:
+            bday = datetime.strptime(bday_str, "%Y-%m-%d").date()
+            # This year's occurrence
+            this_year = bday.replace(year=today.year)
+            if this_year < today:
+                this_year = bday.replace(year=today.year + 1)
+            days_until = (this_year - today).days
+            if days_until <= 7:
+                label = f"{name}" + (f" ({rel})" if rel else "")
+                if days_until == 0:
+                    lines.append(f"- 🔴 🎂 {label}'s birthday is TODAY!")
+                elif days_until == 1:
+                    lines.append(f"- 🎂 {label}'s birthday is tomorrow")
+                else:
+                    lines.append(f"- 🎂 {label}'s birthday in {days_until} days")
+        except (ValueError, TypeError):
+            continue
+
+    if lines:
+        # Merge with existing dates section or create new
+        header_exists = any("## Upcoming Dates" in s for s in sections)
+        if header_exists:
+            for i, s in enumerate(sections):
+                if "## Upcoming Dates" in s:
+                    sections[i] = s + "\n" + "\n".join(lines)
+                    break
+        else:
+            sections.append("## Upcoming Dates\n" + "\n".join(lines))
+
+
+# =============================================================================
 # get_briefing
 # =============================================================================
 
@@ -128,7 +192,7 @@ async def get_briefing(*, context: AgentToolContext) -> str:
         except Exception as exc:
             logger.debug("Briefing: todo section failed: %s", exc)
 
-    # 3. Important dates (from DB)
+    # 3. Important dates (from DB + user profile relationships)
     db = context.context_hints.get("db") if context.context_hints else None
     if db:
         try:
@@ -145,6 +209,14 @@ async def get_briefing(*, context: AgentToolContext) -> str:
                 sections.append("\n".join(lines))
         except Exception as exc:
             logger.debug("Briefing: important dates section failed: %s", exc)
+
+    # 3b. Profile relationship birthdays (family, partner, etc.)
+    user_profile = context.context_hints.get("user_profile") if context.context_hints else None
+    if user_profile:
+        try:
+            _check_profile_birthdays(user_profile, now, sections)
+        except Exception as exc:
+            logger.debug("Briefing: profile birthdays failed: %s", exc)
 
     # 4. Unread emails
     email_provider = context.context_hints.get("email_provider") if context.context_hints else None

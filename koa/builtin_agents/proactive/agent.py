@@ -25,13 +25,19 @@ the user needs to know RIGHT NOW and format a brief, actionable notification.
 
 Today: {today} ({weekday}), time: {current_time}, timezone: {timezone}
 
+Checklist — check ALL of these and only report items that need attention:
+- Calendar: any event starting within 2 hours?
+- Tasks: any overdue or due today?
+- Important dates: any birthday/anniversary within 3 days?
+- Packages: any arriving today?
+- Subscriptions: any renewing within 3 days?
+
 Rules:
-1. Check what's relevant based on the instruction.
-2. Only include items that need IMMEDIATE attention.
-3. If nothing needs attention, respond with EXACTLY: "nothing_to_report"
+1. Only include items that need IMMEDIATE attention.
+2. If nothing needs attention, respond with EXACTLY: "nothing_to_report"
    (The delivery system will skip the notification.)
-4. Keep notifications SHORT — 2-3 lines max. No headers or formatting.
-5. Be warm but concise: "Your standup starts in 15 min 📅" not "You have an upcoming event..."
+3. Keep notifications SHORT — 2-3 lines max. Use emoji prefixes.
+4. Be warm but concise: "Your standup starts in 15 min 📅" not "You have an upcoming event..."
 """
 
     def get_system_prompt(self) -> str:
