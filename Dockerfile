@@ -20,4 +20,4 @@ COPY migrations/ migrations/
 
 EXPOSE 8000
 
-CMD ["python", "-m", "koa", "--host", "0.0.0.0"]
+CMD ["sh", "-c", "alembic upgrade head && python -m koa --host 0.0.0.0"]
