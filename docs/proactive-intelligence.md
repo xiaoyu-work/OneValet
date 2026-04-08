@@ -4,7 +4,7 @@ Koi doesn't wait for you to ask. It monitors your life in the background and rea
 
 **And the longer you use it, the smarter it gets.**
 
-Every conversation, every email, every notification you tap or ignore — Koi quietly learns from it all. After a week it knows your routine. After a month it knows your preferences. After six months it knows your life — and switching to another assistant would mean starting over from scratch.
+Every conversation, every email, every notification you tap or ignore — Koi quietly learns from it all. After a week it knows your routine. After a month it knows your preferences. After six months it knows your life better than any app you've ever used.
 
 ---
 
@@ -164,17 +164,15 @@ By now, Koi has built a rich picture:
 - Your financial patterns → "How much did I spend this month?" → Koi knows your subscription costs, recent expenses, and spending trends
 - Your daily rhythm → Morning briefings arrive exactly when you wake up, not at some generic 7am
 
-### Month 6 — Switching Becomes Impossible
+### Month 6 — Your Personal AI, Truly Personal
 
-At this point, Koi holds:
+At this point, Koi feels less like an app and more like a trusted assistant who genuinely knows you:
 
-- Hundreds of personal facts and preferences
-- Your complete email notification profile (who matters, who doesn't)
-- Your behavioral patterns and daily routine
-- Your family's birthdays and important dates
-- Your travel and financial history
+- Ask about flights → it already knows your airline, your seat preference, and checks your calendar
+- Ask about gift ideas → it knows your mom's birthday, your relationship, your budget patterns
+- Wake up in the morning → briefing arrives at exactly the right time, with exactly the info you need
 
-**Switching to another AI assistant would mean losing all of this and starting from zero.** That's not lock-in by design — it's value that compounds over time.
+**No other AI can do this** — because no other AI has spent six months learning who you are.
 
 ---
 
