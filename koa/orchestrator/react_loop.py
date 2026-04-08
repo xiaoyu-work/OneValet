@@ -333,39 +333,11 @@ class ReactLoopMixin:
 
             tool_calls = response.tool_calls
 
-            # No tool calls -- two cases:
-            # 1. LLM produced a text-only response (common for greetings /
-            #    small talk / general chat).  Use it directly instead of
-            #    forcing a retry that degrades the answer.
-            # 2. LLM truly forgot to call complete_task (empty content).
-            #    Retry with tool_choice="required".
-            #    Nudge messages are removed after each attempt to avoid polluting
-            #    subsequent turns with "Call complete_task now" clutter.
+            # No tool calls → LLM forgot to call complete_task.
+            # Retry up to max_complete_task_retries times with tool_choice="required".
+            # Nudge messages are removed after each attempt to avoid polluting
+            # subsequent turns with "Call complete_task now" clutter.
             if not tool_calls:
-                text_response = getattr(response, "content", None) or ""
-                text_response = text_response.strip()
-                if text_response and len(text_response) >= 10:
-                    # Case 1: LLM gave a substantive text answer — accept it
-                    logger.info(
-                        f"[ReAct] turn={turn} text-only response "
-                        f"({len(text_response)} chars), treating as final answer"
-                    )
-                    final_response = text_response
-                    self._audit.log_react_turn(
-                        turn=turn, tool_calls=[], final_answer=True,
-                        tenant_id=tenant_id,
-                    )
-                    async for event in self._yield_chunked_response(final_response, turn):
-                        yield event
-                    break
-
-                # Case 2: No content, or suspiciously short (< 10 chars like "k." / "ok")
-                # — force retry with complete_task so LLM gives a real answer
-                if text_response:
-                    logger.warning(
-                        f"[ReAct] turn={turn} text-only response too short "
-                        f"({len(text_response)} chars: {text_response!r}), forcing retry"
-                    )
                 max_retries = self._react_config.max_complete_task_retries
                 for retry in range(1, max_retries + 1):
                     logger.warning(
