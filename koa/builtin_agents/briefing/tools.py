@@ -157,40 +157,49 @@ def _check_profile_birthdays(profile: dict, now: datetime, sections: list):
 async def get_briefing(*, context: AgentToolContext) -> str:
     """Generate a daily briefing with calendar events, pending tasks, important dates, and unread emails."""
     sections = []
+    now = datetime.now(timezone.utc)
+    tenant_id = context.tenant_id
 
     # 1. Calendar events today
-    cal_provider = context.context_hints.get("calendar_provider") if context.context_hints else None
-    if cal_provider:
-        try:
-            now = datetime.now(timezone.utc)
-            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-            today_end = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
-            events = await cal_provider.list_events(time_min=today_start, time_max=today_end)
-            if events.get("success") and events.get("data"):
-                lines = ["## Calendar"]
-                for e in events["data"]:
-                    time_str = e.get("start", {}).get("dateTime", "All day")
-                    start_dt = e.get("start", {}).get("dateTime", "")
-                    label = "🔴 SOON: " if _is_within_hours(start_dt, 2) else ""
-                    lines.append(f"- {label}{time_str}: {e.get('summary', 'Untitled')}")
-                sections.append("\n".join(lines))
-        except Exception as exc:
-            logger.debug("Briefing: calendar section failed: %s", exc)
+    try:
+        from koa.providers.calendar.resolver import CalendarAccountResolver
+        from koa.providers.calendar.factory import CalendarProviderFactory
+        account = await CalendarAccountResolver.resolve_account(tenant_id, "primary")
+        if account:
+            cal = CalendarProviderFactory.create_provider(account)
+            if cal and await cal.ensure_valid_token():
+                today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+                today_end = now.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+                events = await cal.list_events(time_min=today_start, time_max=today_end)
+                if events.get("success") and events.get("data"):
+                    lines = ["## Calendar"]
+                    for e in events["data"]:
+                        time_str = e.get("start", {}).get("dateTime", "All day")
+                        start_dt = e.get("start", {}).get("dateTime", "")
+                        label = "🔴 SOON: " if _is_within_hours(start_dt, 2) else ""
+                        lines.append(f"- {label}{time_str}: {e.get('summary', 'Untitled')}")
+                    sections.append("\n".join(lines))
+    except Exception as exc:
+        logger.debug("Briefing: calendar section failed: %s", exc)
 
     # 2. Pending todos
-    todo_provider = context.context_hints.get("todo_provider") if context.context_hints else None
-    if todo_provider:
-        try:
-            tasks = await todo_provider.query(status="pending")
-            if tasks.get("success") and tasks.get("data"):
-                lines = ["## Tasks"]
-                for t in tasks["data"][:10]:
-                    due = t.get("due_date") or t.get("due", {}).get("date", "")
-                    overdue = "🔴 OVERDUE: " if due and due < now.strftime("%Y-%m-%d") else ""
-                    lines.append(f"- {overdue}{t.get('title', 'Untitled')}")
-                sections.append("\n".join(lines))
-        except Exception as exc:
-            logger.debug("Briefing: todo section failed: %s", exc)
+    try:
+        from koa.providers.todo.resolver import TodoAccountResolver
+        from koa.providers.todo.factory import TodoProviderFactory
+        todo_account = await TodoAccountResolver.resolve_account(tenant_id, "primary")
+        if todo_account:
+            todo = TodoProviderFactory.create_provider(todo_account)
+            if todo and await todo.ensure_valid_token():
+                tasks = await todo.query(status="pending")
+                if tasks.get("success") and tasks.get("data"):
+                    lines = ["## Tasks"]
+                    for t in tasks["data"][:10]:
+                        due = t.get("due_date") or t.get("due", {}).get("date", "")
+                        overdue = "🔴 OVERDUE: " if due and due < now.strftime("%Y-%m-%d") else ""
+                        lines.append(f"- {overdue}{t.get('title', 'Untitled')}")
+                    sections.append("\n".join(lines))
+    except Exception as exc:
+        logger.debug("Briefing: todo section failed: %s", exc)
 
     # 3. Important dates (from DB + user profile relationships)
     db = context.context_hints.get("db") if context.context_hints else None
@@ -219,17 +228,21 @@ async def get_briefing(*, context: AgentToolContext) -> str:
             logger.debug("Briefing: profile birthdays failed: %s", exc)
 
     # 4. Unread emails
-    email_provider = context.context_hints.get("email_provider") if context.context_hints else None
-    if email_provider:
-        try:
-            emails = await email_provider.list_messages(query="is:unread", max_results=5)
-            if emails.get("success") and emails.get("data"):
-                lines = ["## Unread Emails"]
-                for e in emails["data"]:
-                    lines.append(f"- {e.get('sender', 'Unknown')}: {e.get('subject', 'No subject')}")
-                sections.append("\n".join(lines))
-        except Exception as exc:
-            logger.debug("Briefing: email section failed: %s", exc)
+    try:
+        from koa.providers.email.resolver import EmailAccountResolver
+        from koa.providers.email.factory import EmailProviderFactory
+        email_account = await EmailAccountResolver.resolve_account(tenant_id, "primary")
+        if email_account:
+            email = EmailProviderFactory.create_provider(email_account)
+            if email and await email.ensure_valid_token():
+                emails = await email.list_messages(query="is:unread", max_results=5)
+                if emails.get("success") and emails.get("data"):
+                    lines = ["## Unread Emails"]
+                    for e in emails["data"]:
+                        lines.append(f"- {e.get('sender', 'Unknown')}: {e.get('subject', 'No subject')}")
+                    sections.append("\n".join(lines))
+    except Exception as exc:
+        logger.debug("Briefing: email section failed: %s", exc)
 
     if not sections:
         return "No briefing data available. Connect your calendar, email, or todo services first."
