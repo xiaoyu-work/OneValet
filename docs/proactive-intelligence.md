@@ -42,8 +42,6 @@ When a new email arrives, Koi reads it instantly and decides if you need to know
 - Time-sensitive actions and deadlines
 - Personal urgent messages
 
-**Learns your preferences:** Over time, Koi notices which email notifications you tap vs ignore, and automatically adjusts — silencing senders you don't care about and prioritizing the ones you always read.
-
 ## 📦 Package Tracking
 
 When your package status changes, Koi notifies you immediately:
@@ -146,14 +144,16 @@ Koi's Habit Discovery system analyzes your behavior patterns:
 
 > *Example: You've been checking your calendar every morning at 7:30am for two weeks. Koi automatically moves your morning briefing from 7:00 to 7:30 — right when you need it.*
 
-### Month 1 — It Learns What Emails Matter to You
+### Month 1 — It Knows Your Preferences Deeply
 
-Koi watches which notifications you tap vs which ones you swipe away:
+By now, Koi has accumulated dozens of personal facts from your conversations:
 
-- **Ignored 3 times** → Koi silences that sender. No more interruptions.
-- **Tapped 3 times** → Koi marks that sender as priority. Even if the email looks routine, you'll always be notified.
+- Your travel preferences (airline, seat, hotel chain)
+- Your communication style (concise vs detailed)
+- Your work context (job, team, schedule)
+- Corrections and feedback ("don't do that", "I prefer this way")
 
-> *Example: You always tap emails from your boss but always ignore emails from HR newsletters. After a few weeks, Koi stops notifying you about HR newsletters — and makes sure your boss's emails always get through, even on weekends.*
+> *Example: You asked Koi to book flights three times, always choosing United. Koi now defaults to searching United first — without you ever explicitly saying "I prefer United."*
 
 ### Month 3 — It Knows Your Life
 
@@ -186,8 +186,7 @@ Koi uses multiple memory layers that work together:
 | **Long-Term Memory** | Facts and context from past conversations | Forever |
 | **Structured Facts** | Explicit preferences with reasoning ("prefers aisle seats because...") | Forever |
 | **Email Profile** | Identity, relationships, loyalty, vehicle info — extracted from your inbox | Forever, auto-updates |
-| **Behavioral Patterns** | Your daily routine, feature usage, notification preferences | Refreshed weekly |
-| **Notification Learning** | Which senders you care about vs ignore | Rolling 30 days |
+| **Behavioral Patterns** | Your daily routine, feature usage | Refreshed weekly |
 
 When these layers conflict, structured facts always win — so if you explicitly say "I changed my mind, I prefer window seats now," Koi immediately overrides any old memories about aisle seats.
 
