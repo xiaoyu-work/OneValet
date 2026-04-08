@@ -27,7 +27,7 @@ database: ${DATABASE_URL}
 
 ```yaml
 provider: anthropic
-model: claude-sonnet-4-5-20250929
+model: claude-3-5-sonnet-20241022
 database: ${DATABASE_URL}
 ```
 
