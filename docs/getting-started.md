@@ -5,7 +5,7 @@ Deploy Koa and send your first request in 5 minutes.
 ## 1. Clone the repo
 
 ```bash
-git clone https://github.com/withkoi/koa.git
+git clone https://github.com/xiaoyu-work/koa.git
 cd koa
 ```
 
