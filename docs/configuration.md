@@ -36,14 +36,24 @@ llm:
 ## Starting the Server
 
 ```bash
-# Default: reads config.yaml, listens on 0.0.0.0:8000
-python -m koa
-
-# Custom config path
-KOA_CONFIG=my_config.yaml python -m koa
+# Default: reads config.yaml, listens on 127.0.0.1:8000
+uv run koa serve
 
 # Custom host/port
-KOA_HOST=127.0.0.1 KOA_PORT=9000 python -m koa
+uv run koa serve --host 0.0.0.0 --port 9000
+
+# Or via env vars
+KOA_HOST=0.0.0.0 KOA_PORT=9000 uv run koa serve
+
+# Custom config path
+KOA_CONFIG=my_config.yaml uv run koa serve
+```
+
+### CLI Chat
+
+```bash
+# Interactive chat (connects to running server)
+uv run koa chat
 ```
 
 ## Environment Variables

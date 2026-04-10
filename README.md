@@ -28,7 +28,13 @@ Koa is **proactive** — it doesn't wait for you to ask. It watches your email, 
 
 ## Quick Start
 
-### 1. Install
+### 1. Prerequisites
+
+- Python 3.12+
+- PostgreSQL 16+ (or use Docker: `docker compose up -d db`)
+- An LLM API key (OpenAI, Anthropic, etc.)
+
+### 2. Install
 
 ```bash
 git clone https://github.com/xiaoyu-work/koa.git
@@ -36,13 +42,34 @@ cd koa
 uv sync --extra openai        # or: --extra anthropic, --all-extras
 ```
 
-### 2. Start
+### 3. Configure
+
+```bash
+cp .env.example .env           # edit with your DATABASE_URL, API keys
+cp config.yaml.example config.yaml  # edit with your provider/model
+```
+
+Minimal `config.yaml`:
+
+```yaml
+database: ${DATABASE_URL}
+
+llm:
+  provider: openai
+  model: gpt-4o
+
+embedding:
+  provider: openai
+  model: text-embedding-3-small
+```
+
+### 4. Start
 
 ```bash
 uv run koa serve
 ```
 
-### 3. Chat
+### 5. Chat
 
 In another terminal:
 
@@ -50,15 +77,35 @@ In another terminal:
 uv run koa chat
 ```
 
-### 4. Configure
+```
+Connected to Koa v0.1.1 at http://localhost:8000
+Type your message and press Enter. Ctrl+C to quit.
 
-Go to **http://localhost:8000/settings** or edit `config.yaml` directly:
+You: Do I have any unread emails?
+Koa:   ⚙ Email... ✓
+  You have 3 unread emails...
 
-1. **LLM Provider** - Choose your AI provider (OpenAI, Azure, Anthropic, etc.), enter API key, model name, and database URL
-2. **OAuth Apps** *(optional)* - Add Google/Microsoft OAuth app credentials to enable one-click account connection
-3. **Connect Accounts** *(optional)* - Connect Gmail, Outlook, Google Calendar, or Outlook Calendar
+You: What's on my calendar today?
+Koa:   ⚙ Calendar... ✓
+  You have 2 meetings today...
+```
 
-That's it. Go back to the chat and start talking.
+### Docker
+
+```bash
+cp .env.example .env           # edit with your API keys
+docker compose up
+```
+
+This starts both PostgreSQL and Koa. Chat with: `docker compose exec app koa chat`
+
+## CLI
+
+| Command | Description |
+|---------|-------------|
+| `koa serve` | Start the API server (default: `http://localhost:8000`) |
+| `koa chat` | Interactive chat with the running server |
+| `koa serve --host 0.0.0.0 --port 9000` | Custom host/port |
 
 ## API
 
@@ -79,56 +126,29 @@ curl -X POST http://localhost:8000/chat \
 curl -X POST http://localhost:8000/stream \
   -H "Content-Type: application/json" \
   -d '{"message": "Do I have any unread emails?"}'
-
-# Multi-tenant
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id": "user_123", "message": "What is on my calendar today?"}'
-
-# With API key authentication
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{"message": "Do I have any unread emails?"}'
 ```
 
 ## Config
 
-`config.yaml` is created automatically via the settings page. You can also create it manually:
-
-```yaml
-database: postgresql://user:pass@host:5432/dbname
-
-llm:
-  provider: openai          # openai / anthropic / azure / dashscope / gemini / ollama
-  model: gpt-4o
-  api_key: sk-...           # or omit to use provider's default env var
-
-embedding:
-  provider: openai
-  model: text-embedding-3-small
-```
+See [config.yaml.example](config.yaml.example) for the full reference.
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `database` | Yes | PostgreSQL connection URL |
-| `llm.provider` | Yes | LLM provider |
-| `llm.model` | Yes | Model name |
+| `llm.provider` | Yes | `openai` / `anthropic` / `azure` / `dashscope` / `gemini` / `ollama` |
+| `llm.model` | Yes | Model name (e.g. `gpt-4o`, `claude-sonnet-4-20250514`) |
 | `llm.api_key` | No | API key (defaults to provider env var) |
-| `llm.base_url` | No | Custom endpoint (required for Azure) |
-| `embedding.provider` | Yes | Embedding provider |
+| `embedding.provider` | Yes | Embedding provider for memory |
 | `embedding.model` | Yes | Embedding model name |
-| `system_prompt` | No | System prompt / personality |
 
 ### Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection URL (used in config via `${DATABASE_URL}`) |
-| `KOA_API_KEY` | No | API key for endpoint authentication. **If not set, all endpoints are unauthenticated (dev mode only).** |
+| `DATABASE_URL` | Yes | PostgreSQL connection URL |
+| `KOA_API_KEY` | No | API key for endpoint auth. **If not set, endpoints are unauthenticated (dev mode).** |
+| `KOA_CREDENTIAL_KEY` | No | AES-256 encryption key for OAuth tokens at rest |
 | `KOA_SERVICE_KEY` | No | Service key for internal endpoints |
-| `KOA_CREDENTIAL_KEY` | No | AES-256 encryption key for credentials at rest. When set, OAuth tokens are encrypted in the database. |
-| `KOA_CORS_ORIGINS` | No | Comma-separated allowed CORS origins (default: `http://localhost:3000,http://localhost:5173`) |
 
 ## Model Routing
 
