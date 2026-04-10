@@ -79,11 +79,22 @@ async def verify_api_key(
 ):
     """Verify API key from Authorization: Bearer <key> or X-API-Key header.
 
-    When KOA_API_KEY is not set, all requests are allowed (dev mode).
-    When set, a valid key is required on sensitive endpoints.
+    When KOA_API_KEY is not set, all requests are allowed (dev mode)
+    but a warning header is added to every response.
     """
     if _API_KEY is None:
-        # Dev mode: no authentication required
+        global _auth_warning_logged
+        if not _auth_warning_logged:
+            logger.warning(
+                "\n"
+                "╔══════════════════════════════════════════════════════════════╗\n"
+                "║  WARNING: KOA_API_KEY is not set!                          ║\n"
+                "║  All API endpoints are UNAUTHENTICATED.                    ║\n"
+                "║  This is acceptable for local development only.            ║\n"
+                "║  Set KOA_API_KEY env var before deploying to production.   ║\n"
+                "╚══════════════════════════════════════════════════════════════╝"
+            )
+            _auth_warning_logged = True
         return None
 
     # Check X-API-Key header first
@@ -205,7 +216,7 @@ def _create_api() -> FastAPI:
     _api.add_middleware(
         CORSMiddleware,
         allow_origins=allowed_origins,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
@@ -240,12 +251,7 @@ def _create_api() -> FastAPI:
 
     _api.add_middleware(RateLimitMiddleware)
 
-    # Issue #3: Log warning if no API key is set
-    if _API_KEY is None:
-        logger.warning(
-            "KOA_API_KEY is not set. API endpoints are unauthenticated. "
-            "Set KOA_API_KEY environment variable to enable authentication."
-        )
+
 
     from ..errors import install_error_handler
     install_error_handler(_api)
