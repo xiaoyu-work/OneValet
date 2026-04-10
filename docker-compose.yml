@@ -3,13 +3,13 @@ services:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: koa
-      POSTGRES_PASSWORD: koa
-      POSTGRES_DB: koa
+      POSTGRES_USER: ${POSTGRES_USER:-koa}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-koa}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U koa"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-koa}"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -22,7 +22,7 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: postgresql://koa:koa@db:5432/koa
+      DATABASE_URL: postgresql://${POSTGRES_USER:-koa}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-koa}
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     command: >
@@ -30,6 +30,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
 
 volumes:
   pgdata:
