@@ -10,6 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .error_classifier import LLMErrorKind, classify_llm_error
+from ..llm.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,22 @@ class LLMManagerMixin:
     - ``_context_manager``
     - ``_model_router`` (optional — fallback still works via LLMRegistry singleton)
     """
+
+    # Circuit breakers keyed by provider name (populated lazily)
+    _circuit_breakers: dict = {}
+
+    def _get_circuit_breaker(self, client: Any) -> CircuitBreaker:
+        """Get or create a circuit breaker for the given LLM client."""
+        provider = getattr(client, 'provider', '') or id(client)
+        model = getattr(getattr(client, 'config', None), 'model', '')
+        key = f"{provider}:{model}"
+        if key not in self._circuit_breakers:
+            self._circuit_breakers[key] = CircuitBreaker(
+                failure_threshold=5,
+                recovery_timeout=30.0,
+                provider_name=key,
+            )
+        return self._circuit_breakers[key]
 
     async def _llm_call_with_retry(
         self,
@@ -99,6 +116,14 @@ class LLMManagerMixin:
         Returns the LLMResponse on success, or the last Exception on failure.
         """
         last_error: Optional[Exception] = None
+        cb = self._get_circuit_breaker(client)
+
+        # Fast-fail if circuit is open
+        try:
+            cb.check()
+        except CircuitBreakerOpenError as e:
+            logger.warning(f"[LLM] Circuit open for {e.provider}, skipping retries")
+            return e
         for attempt in range(self._react_config.llm_max_retries + 1):
             try:
                 kwargs: Dict[str, Any] = {"messages": messages, **extra_kwargs}
@@ -115,6 +140,7 @@ class LLMManagerMixin:
                 sr = getattr(response, 'stop_reason', None)
                 content_len = len(getattr(response, 'content', '') or '')
                 logger.info(f"[LLM] Response: stop_reason={sr}, tool_calls={len(tc) if tc else 0}, content_len={content_len}")
+                cb.record_success()
                 return response
 
             except Exception as e:
@@ -150,11 +176,13 @@ class LLMManagerMixin:
                     if attempt == 0:
                         logger.warning("LLM timeout, retrying once")
                         continue
+                    cb.record_failure()
                     break  # let fallback chain handle it
 
                 # Bad request: don't retry (invalid params won't fix themselves)
                 if error_kind == LLMErrorKind.BAD_REQUEST:
                     logger.warning(f"LLM bad request ({e}), not retrying")
+                    cb.record_failure()
                     break
 
                 # Service unavailable / transient / unknown: retry with backoff
@@ -164,6 +192,7 @@ class LLMManagerMixin:
                     await asyncio.sleep(delay)
                     continue
 
+                cb.record_failure()
                 break  # exhausted retries, let fallback chain handle it
 
         return last_error  # type: ignore[return-value]
