@@ -32,19 +32,8 @@ logger = logging.getLogger(__name__)
 
 
 def _detect_carrier(tracking_number: str) -> Optional[str]:
-    """Simple carrier detection from tracking number format."""
-    if not tracking_number:
-        return None
-    tn = tracking_number.upper()
-    if tn.startswith("1Z"):
-        return "ups"
-    if tn.isdigit() and 12 <= len(tn) <= 22:
-        if len(tn) in [12, 15, 20, 22]:
-            return "fedex"
-        if len(tn) in [20, 22]:
-            return "usps"
-    if len(tn) in [10, 11] and tn.isdigit():
-        return "dhl"
+    """Carrier detection is handled by 17TRACK identify API in TrackingProvider.
+    Return None here so tracking.py can call the identify endpoint."""
     return None
 
 
@@ -187,8 +176,8 @@ async def _query_one(
     if not carrier:
         carrier = _detect_carrier(tracking_number)
 
-    # If no provider or no carrier, still save to repo with pending status
-    if not provider or not carrier:
+    # If no provider, save to repo with pending status
+    if not provider:
         if repo:
             await repo.upsert_shipment(
                 tenant_id=tenant_id,
@@ -209,16 +198,8 @@ async def _query_one(
                 "description": description,
             }
             msg = f"Added {tracking_number} to your tracking list."
-            if not carrier:
-                msg += " Carrier could not be auto-detected — please specify it for live updates."
-            if not provider:
-                msg += " Live tracking is temporarily unavailable; status will update later."
+            msg += " Live tracking is temporarily unavailable; status will update later."
             return msg, raw_data
-        if not carrier:
-            return (
-                f"Could not identify carrier for {tracking_number}. Please specify the carrier.",
-                None,
-            )
         return "Shipment tracking is not available right now.", None
 
     result = await provider.track(tracking_number, carrier)

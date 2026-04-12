@@ -61,12 +61,29 @@ class TrackingProvider:
 
         tracking_number = normalize_tracking_number(tracking_number)
         carrier_code = self._get_carrier_code(carrier)
+
+        # Use 17TRACK identify API to detect carrier when not specified
+        if not carrier_code and not carrier:
+            identified = await self._identify_carrier(tracking_number)
+            if identified:
+                carrier_code = identified
+                logger.info(f"17TRACK identified carrier for {tracking_number}: {carrier_code}")
+
         logger.info(f"Tracking {tracking_number} via 17TRACK API")
 
         try:
             result = await self._get_track_info(tracking_number, carrier_code)
 
             if result.get("success"):
+                # Override carrier if identify detected a different one
+                if carrier_code and result.get("carrier_code") and result["carrier_code"] != carrier_code:
+                    correct_name = self._get_carrier_name(carrier_code)
+                    if correct_name:
+                        logger.info(f"Overriding carrier {result.get('carrier_code')} → {carrier_code} ({correct_name}) based on identify")
+                        result["carrier"] = correct_name
+                        result["carrier_code"] = carrier_code
+                        from .carrier_detector import get_tracking_url
+                        result["tracking_url"] = get_tracking_url(correct_name, tracking_number)
                 return result
 
             # If not registered, register the tracking number
@@ -123,6 +140,33 @@ class TrackingProvider:
                 "error": self._get_user_friendly_error("unknown_error"),
                 "tracking_number": tracking_number,
             }
+
+    async def _identify_carrier(self, tracking_number: str) -> Optional[int]:
+        """Use 17TRACK identify API to detect the carrier for a tracking number."""
+        try:
+            async with httpx.AsyncClient() as client:
+                url = f"{self.api_base}/identify"
+                headers = {"17token": self.api_key, "Content-Type": "application/json"}
+                payload = [{"number": tracking_number}]
+
+                response = await client.post(url, headers=headers, json=payload, timeout=10.0)
+                response.raise_for_status()
+                data = response.json()
+
+                if data.get("code") != 0:
+                    return None
+
+                accepted = data.get("data", {}).get("accepted", [])
+                if accepted and accepted[0].get("carrier"):
+                    carrier = accepted[0]["carrier"]
+                    # carrier can be an int or a list of candidates
+                    if isinstance(carrier, list) and carrier:
+                        return carrier[0]
+                    elif isinstance(carrier, int):
+                        return carrier
+        except Exception as e:
+            logger.debug(f"Carrier identify failed for {tracking_number}: {e}")
+        return None
 
     async def _register(self, tracking_number: str, carrier_code: int = None) -> Dict[str, Any]:
         """Register a tracking number with 17TRACK."""
