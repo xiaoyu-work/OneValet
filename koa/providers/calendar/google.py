@@ -246,3 +246,149 @@ class GoogleCalendarProvider(BaseCalendarProvider, OAuthHTTPMixin):
         except Exception as e:
             logger.error(f"Failed to delete event: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
+
+    # ── Push Notifications (Watch) ──
+
+    async def setup_watch(
+        self,
+        webhook_url: str,
+        channel_id: Optional[str] = None,
+        calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """Set up push notifications for calendar event changes.
+
+        Google Calendar watches expire after ~7 days. Call periodically to renew.
+
+        Args:
+            webhook_url: HTTPS callback URL for notifications.
+            channel_id: Unique channel ID (auto-generated if not provided).
+            calendar_id: Calendar to watch (default: primary).
+
+        Returns:
+            {"success": True, "channel_id": ..., "resource_id": ..., "expiration": ...}
+        """
+        import uuid
+
+        if not await self.ensure_valid_token():
+            return {"success": False, "error": "Failed to refresh access token"}
+
+        cid = channel_id or str(uuid.uuid4())
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.api_base_url}/calendars/{calendar_id}/events/watch",
+                    headers=self._get_headers(),
+                    json={
+                        "id": cid,
+                        "type": "web_hook",
+                        "address": webhook_url,
+                    },
+                    timeout=30.0,
+                )
+
+                if resp.status_code == 200:
+                    data = resp.json()
+                    logger.info(f"✅ Google Calendar watch set up (channel={cid})")
+                    return {
+                        "success": True,
+                        "channel_id": data.get("id"),
+                        "resource_id": data.get("resourceId"),
+                        "expiration": int(data.get("expiration", 0)),
+                    }
+                else:
+                    logger.error(f"❌ Calendar watch failed: {resp.text}")
+                    return {"success": False, "error": f"Watch failed: {resp.status_code}"}
+
+        except Exception as e:
+            logger.error(f"❌ Calendar watch error: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    async def stop_watch(
+        self,
+        channel_id: str,
+        resource_id: str,
+    ) -> Dict[str, Any]:
+        """Stop a push notification channel."""
+        if not await self.ensure_valid_token():
+            return {"success": False, "error": "Failed to refresh access token"}
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    "https://www.googleapis.com/calendar/v3/channels/stop",
+                    headers=self._get_headers(),
+                    json={"id": channel_id, "resourceId": resource_id},
+                    timeout=15.0,
+                )
+                return {"success": resp.status_code in (200, 204)}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def get_events_sync_token(
+        self,
+        calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """Get a sync token for incremental event sync."""
+        if not await self.ensure_valid_token():
+            return {"success": False, "error": "Failed to refresh access token"}
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    f"{self.api_base_url}/calendars/{calendar_id}/events",
+                    headers=self._get_headers(),
+                    params={"maxResults": 1, "showDeleted": False},
+                    timeout=15.0,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {"success": True, "sync_token": data.get("nextSyncToken")}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    async def list_events_incremental(
+        self,
+        sync_token: str,
+        calendar_id: str = "primary",
+    ) -> Dict[str, Any]:
+        """Fetch events changed since the last sync token."""
+        if not await self.ensure_valid_token():
+            return {"success": False, "error": "Failed to refresh access token"}
+
+        try:
+            all_events: List[Dict[str, Any]] = []
+            page_token: Optional[str] = None
+
+            while True:
+                params: Dict[str, Any] = {"syncToken": sync_token, "showDeleted": True}
+                if page_token:
+                    params["pageToken"] = page_token
+
+                async with httpx.AsyncClient() as client:
+                    resp = await client.get(
+                        f"{self.api_base_url}/calendars/{calendar_id}/events",
+                        headers=self._get_headers(),
+                        params=params,
+                        timeout=30.0,
+                    )
+
+                if resp.status_code == 410:
+                    # Sync token expired, full sync needed
+                    return {"success": False, "error": "sync_token_expired", "full_sync_required": True}
+
+                resp.raise_for_status()
+                data = resp.json()
+                all_events.extend(data.get("items", []))
+
+                page_token = data.get("nextPageToken")
+                if not page_token:
+                    return {
+                        "success": True,
+                        "events": all_events,
+                        "next_sync_token": data.get("nextSyncToken"),
+                    }
+
+        except Exception as e:
+            logger.error(f"Incremental sync failed: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
