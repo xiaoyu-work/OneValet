@@ -5,6 +5,7 @@ Tests tool selection, argument extraction, response quality, and approval flow f
 - create_event: Create a new calendar event (needs approval)
 - update_event: Update an existing event (needs approval)
 - delete_event: Delete calendar events matching search criteria (needs approval)
+- set_routing_preference: Save the user's default calendar destination
 """
 
 import pytest
@@ -30,6 +31,10 @@ TOOL_SELECTION_CASES = [
     ("Cancel my meeting with Bob", ["delete_event", "query_events"]),
     ("Delete the dentist appointment", ["delete_event", "query_events"]),
     ("Remove all meetings tomorrow", ["delete_event", "query_events"]),
+    # Routing preference cases
+    ("From now on save all events to Google Calendar", ["set_routing_preference"]),
+    ("Use my local calendar by default", ["set_routing_preference"]),
+    ("Switch to Google Calendar for all new events", ["set_routing_preference"]),
 ]
 
 
@@ -112,6 +117,64 @@ async def test_extracts_delete_event_query(conversation):
         assert "dentist" in search_query or search_query, (
             f"Expected search_query containing 'dentist', got '{search_query}'"
         )
+
+
+# ---------------------------------------------------------------------------
+# Routing preference — tool selection and argument extraction
+# ---------------------------------------------------------------------------
+
+
+async def test_routing_preference_tool_selected_for_google(conversation):
+    """Asking to use Google Calendar by default should invoke set_routing_preference."""
+    conv = await conversation()
+    await conv.send_until_tool_called("From now on add all my events to Google Calendar")
+    conv.assert_tool_called("set_routing_preference")
+
+
+async def test_routing_preference_tool_selected_for_local(conversation):
+    """Asking to switch back to local calendar should invoke set_routing_preference."""
+    conv = await conversation()
+    await conv.send_until_tool_called("Use my local calendar by default for everything")
+    conv.assert_tool_called("set_routing_preference")
+
+
+async def test_routing_preference_extracts_surface_calendar(conversation):
+    """set_routing_preference should always receive surface='calendar' for calendar requests."""
+    conv = await conversation()
+    await conv.send_until_tool_called("Default to Google Calendar for future events")
+    conv.assert_tool_called("set_routing_preference")
+
+    args = conv.get_tool_args("set_routing_preference")[0]
+    surface = args.get("surface", "").lower()
+    assert surface == "calendar", (
+        f"Expected surface='calendar', got '{surface}'"
+    )
+
+
+async def test_routing_preference_extracts_google_provider(conversation):
+    """set_routing_preference should receive provider='google' when the user asks for Google Calendar."""
+    conv = await conversation()
+    await conv.send_until_tool_called("Switch to Google Calendar as my default")
+    conv.assert_tool_called("set_routing_preference")
+
+    args = conv.get_tool_args("set_routing_preference")[0]
+    provider = args.get("provider", "").lower()
+    assert "google" in provider, (
+        f"Expected provider containing 'google', got '{provider}'"
+    )
+
+
+async def test_routing_preference_extracts_local_provider(conversation):
+    """set_routing_preference should receive provider='local' when the user asks for local calendar."""
+    conv = await conversation()
+    await conv.send_until_tool_called("Save future events to my local calendar please")
+    conv.assert_tool_called("set_routing_preference")
+
+    args = conv.get_tool_args("set_routing_preference")[0]
+    provider = args.get("provider", "").lower()
+    assert "local" in provider, (
+        f"Expected provider containing 'local', got '{provider}'"
+    )
 
 
 # ---------------------------------------------------------------------------
