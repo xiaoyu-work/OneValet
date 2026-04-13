@@ -186,13 +186,35 @@ async def _parse_datetime_with_llm(time_str: str, llm_client) -> Optional[dateti
         return None
 
 
-def _parse_time_to_datetime(time_str: str) -> datetime:
-    """Parse natural language time to datetime using dateutil."""
+def _parse_time_to_datetime(time_str: str, user_tz: str | None = None) -> datetime:
+    """Parse natural language time to datetime using dateutil.
+
+    When user_tz is provided, the default date/time anchor is midnight
+    in the user's local timezone. This prevents off-by-one-day errors
+    when the user says "April 27" in PST but the server is in UTC.
+    """
     from dateutil import parser as date_parser
 
-    default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    if user_tz:
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(user_tz)
+            default_time = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+        except Exception:
+            default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
     try:
-        return date_parser.parse(time_str, fuzzy=True, default=default_time)
+        parsed = date_parser.parse(time_str, fuzzy=True, default=default_time)
+        # If the parsed result has no tzinfo, attach the user's timezone
+        if parsed.tzinfo is None and user_tz:
+            try:
+                from zoneinfo import ZoneInfo
+                parsed = parsed.replace(tzinfo=ZoneInfo(user_tz))
+            except Exception:
+                pass
+        return parsed
     except Exception:
         raise ValueError(f"Could not parse time: {time_str}")
 
@@ -323,9 +345,11 @@ async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
     end_str = args.get("end", "")
     location = args.get("location", "")
 
+    user_tz = context.metadata.get("timezone") if context.metadata else None
+
     if not end_str and start_str:
         try:
-            start_dt = _parse_time_to_datetime(start_str)
+            start_dt = _parse_time_to_datetime(start_str, user_tz=user_tz)
             end_dt = start_dt + timedelta(hours=1)
             if end_dt.date() == start_dt.date():
                 end_str = end_dt.strftime("%I:%M %p").lstrip("0")
@@ -338,7 +362,7 @@ async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
     start_date = ""
     start_time = ""
     try:
-        start_dt = _parse_time_to_datetime(start_str)
+        start_dt = _parse_time_to_datetime(start_str, user_tz=user_tz)
         start_date = start_dt.strftime("%Y-%m-%d")
         start_time = start_dt.strftime("%I:%M %p").lstrip("0")
     except Exception:
@@ -497,9 +521,10 @@ async def create_event(
         return error
 
     try:
-        start_dt = _parse_time_to_datetime(start)
+        user_tz = context.metadata.get("timezone") if context.metadata else None
+        start_dt = _parse_time_to_datetime(start, user_tz=user_tz)
         if end:
-            end_dt = _parse_time_to_datetime(end)
+            end_dt = _parse_time_to_datetime(end, user_tz=user_tz)
         else:
             end_dt = start_dt + timedelta(hours=1)
 
