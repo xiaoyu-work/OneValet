@@ -139,9 +139,6 @@ class TestTodoToolRouting:
         provider = DummyTodoProvider()
 
         with patch(
-            "koa.builtin_agents.todo.tools._resolve_accounts",
-            new=AsyncMock(side_effect=AssertionError("_resolve_accounts should not be used")),
-        ), patch(
             "koa.builtin_agents.todo.tools._resolve_todo_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -192,13 +189,75 @@ class TestTodoToolRouting:
         assert resolver.await_args.kwargs["target_account"] == "work"
 
     @pytest.mark.asyncio
+    async def test_create_task_does_not_schedule_cron_reminder(self):
+        """create_task must not auto-write to CronService as a side effect of task creation."""
+        provider = DummyTodoProvider()
+        cron_service = AsyncMock()
+
+        ctx = AgentToolContext(
+            tenant_id="user-1",
+            metadata={"koiai_url": "https://koiai.example", "service_key": "svc-key"},
+            context_hints={"cron_service": cron_service},
+        )
+
+        resolver = AsyncMock(return_value=(provider, {"provider": "local"}, None))
+        with patch(
+            "koa.builtin_agents.todo.tools._resolve_todo_provider",
+            new=resolver,
+            create=True,
+        ):
+            result = await create_task.executor(
+                {"title": "Buy milk", "due": "2030-01-01"},
+                ctx,
+            )
+
+        assert "added 'buy milk'" in result.lower()
+        cron_service.add.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_update_task_search_failure_returns_read_error(self):
+        """When search_tasks fails in update_task, the error must be read-oriented."""
+
+        class FailingSearchProvider(DummyTodoProvider):
+            async def search_tasks(self, query, list_id=None):
+                return {"success": False}
+
+        provider = FailingSearchProvider()
+        with patch(
+            "koa.builtin_agents.todo.tools._resolve_todo_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await update_task.executor(
+                {"search_query": "buy milk"},
+                _context(),
+            )
+
+        assert "read" in result.lower() or "retrieve" in result.lower()
+        """When search_tasks fails in delete_task, the error must be read-oriented."""
+
+        class FailingSearchProvider(DummyTodoProvider):
+            async def search_tasks(self, query, list_id=None):
+                return {"success": False}
+
+        provider = FailingSearchProvider()
+        with patch(
+            "koa.builtin_agents.todo.tools._resolve_todo_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await delete_task.executor(
+                {"search_query": "buy milk"},
+                _context(),
+            )
+
+        assert "read" in result.lower() or "retrieve" in result.lower()
+
+    @pytest.mark.asyncio
     async def test_update_task_uses_resolved_provider(self):
         provider = DummyTodoProvider()
 
         with patch(
-            "koa.builtin_agents.todo.tools._resolve_accounts",
-            new=AsyncMock(side_effect=AssertionError("_resolve_accounts should not be used")),
-        ), patch(
             "koa.builtin_agents.todo.tools._resolve_todo_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -216,9 +275,6 @@ class TestTodoToolRouting:
         provider = DummyTodoProvider()
 
         with patch(
-            "koa.builtin_agents.todo.tools._resolve_accounts",
-            new=AsyncMock(side_effect=AssertionError("_resolve_accounts should not be used")),
-        ), patch(
             "koa.builtin_agents.todo.tools._resolve_todo_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -332,9 +388,6 @@ class TestTodoToolRouting:
         provider = OverdueTodoProvider()
 
         with patch(
-            "koa.builtin_agents.todo.tools._resolve_accounts",
-            new=AsyncMock(side_effect=AssertionError("_resolve_accounts should not be used")),
-        ), patch(
             "koa.builtin_agents.todo.tools._resolve_todo_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,

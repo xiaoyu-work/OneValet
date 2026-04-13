@@ -7,7 +7,6 @@ ReminderAgent, TaskManagementAgent, and PlannerAgent.
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Annotated, Dict, List, Optional
 
@@ -26,13 +25,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Shared Helpers
 # =============================================================================
-
-
-async def _resolve_accounts(tenant_id: str):
-    """Resolve all todo accounts for a tenant."""
-    from koa.providers.todo.resolver import TodoAccountResolver
-
-    return await TodoAccountResolver.resolve_accounts(tenant_id, ["all"])
 
 
 def _get_provider(account):
@@ -77,7 +69,7 @@ async def _resolve_todo_provider(
     account = await TodoAccountResolver.resolve_account_for_provider(
         context.tenant_id,
         target.provider,
-        target.account or "primary",
+        target.account,
     )
     if not account:
         return None, None, wrap_routing_error("todo", target.provider, "not_connected")
@@ -304,50 +296,6 @@ async def create_task(
         result = await provider.create_task(title=title, due=due, priority=priority)
 
         if result.get("success"):
-            # Auto-schedule due date reminder
-            if due:
-                cron_service = (
-                    context.context_hints.get("cron_service") if context.context_hints else None
-                )
-                if cron_service:
-                    try:
-                        from dateutil.parser import parse as dateparse
-
-                        due_dt = dateparse(due)
-                        remind_at = due_dt.replace(hour=9, minute=0, second=0)
-                        if remind_at.tzinfo is None:
-                            remind_at = remind_at.replace(tzinfo=timezone.utc)
-                        if remind_at > datetime.now(timezone.utc):
-                            from koa.triggers.cron.models import (
-                                AgentTurnPayload,
-                                AtSchedule,
-                                CronJobCreate,
-                                DeliveryConfig,
-                                DeliveryMode,
-                                SessionTarget,
-                                WakeMode,
-                            )
-
-                            await cron_service.add(
-                                CronJobCreate(
-                                    name=f"Due: {title}",
-                                    description="Task due date reminder",
-                                    user_id=context.tenant_id,
-                                    schedule=AtSchedule(at=remind_at.isoformat()),
-                                    session_target=SessionTarget.ISOLATED,
-                                    wake_mode=WakeMode.NEXT_HEARTBEAT,
-                                    payload=AgentTurnPayload(
-                                        message=f"Remind the user: task '{title}' is due today."
-                                    ),
-                                    delivery=DeliveryConfig(
-                                        mode=DeliveryMode.ANNOUNCE, channel="callback"
-                                    ),
-                                )
-                            )
-                            logger.info(f"Auto-scheduled due-date reminder for task '{title}'")
-                    except Exception as e:
-                        logger.debug(f"Task reminder scheduling failed: {e}")
-
             due_str = f" (due {due})" if due else ""
             return f"Done! I added '{title}' to your tasks{due_str}."
         else:
@@ -402,7 +350,7 @@ async def update_task(
 
         result = await provider.search_tasks(query=search_query)
         if not result.get("success"):
-            return wrap_routing_error("todo", account_obj.get("provider", "todo"), "write_failed")
+            return wrap_routing_error("todo", account_obj.get("provider", "todo"), "read_failed")
 
         all_tasks = _annotate_tasks(result.get("data", []), account_obj)
 
@@ -512,7 +460,7 @@ async def delete_task(
 
         result = await provider.search_tasks(query=search_query)
         if not result.get("success"):
-            return wrap_routing_error("todo", account_obj.get("provider", "todo"), "write_failed")
+            return wrap_routing_error("todo", account_obj.get("provider", "todo"), "read_failed")
 
         all_tasks = _annotate_tasks(result.get("data", []), account_obj)
 
@@ -1084,61 +1032,6 @@ def _format_job_disambiguation(jobs, prompt: str) -> str:
         lines.append(f"{i}. {job.name}" + (f" ({schedule_str})" if schedule_str else ""))
     lines.append(f"\n{prompt}")
     return "\n".join(lines)
-
-
-# =============================================================================
-# Shared fallback search helper
-# =============================================================================
-
-
-async def _fallback_search(accounts, search_query: str, llm_client) -> List[Dict]:
-    """Fallback: list all tasks and filter with LLM."""
-    all_tasks = []
-    for account in accounts:
-        provider = _get_provider(account)
-        if not provider:
-            continue
-        if not await provider.ensure_valid_token():
-            continue
-        try:
-            result = await provider.list_tasks(max_results=50)
-            if result.get("success"):
-                tasks = result.get("data", [])
-                for task in tasks:
-                    task["_provider"] = account.get("provider", "")
-                    task["_account_name"] = account.get("account_name", "")
-                    task["_account_email"] = account.get("email", "")
-                all_tasks.extend(tasks)
-        except Exception:
-            continue
-
-    if not all_tasks or not llm_client:
-        return []
-
-    task_list = [
-        {"index": i, "title": t.get("title", ""), "due": t.get("due", "")}
-        for i, t in enumerate(all_tasks)
-    ]
-
-    prompt = f"""Find tasks matching: "{search_query}"
-
-Tasks: {json.dumps(task_list)}
-
-Return a JSON array of matching indices (0-based), like: [0, 3, 5]"""
-
-    try:
-        result = await llm_client.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            enable_thinking=False,
-        )
-        match = re.search(r"\[[\d,\s]*\]", result.content)
-        if match:
-            indices = json.loads(match.group())
-            return [all_tasks[i] for i in indices if 0 <= i < len(all_tasks)]
-    except Exception as e:
-        logger.error(f"Filter LLM failed: {e}")
-
-    return []
 
 
 # =============================================================================
