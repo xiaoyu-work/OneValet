@@ -38,6 +38,8 @@ async def _resolve_todo_provider(
     context: AgentToolContext,
     target_provider: str | None = None,
     target_account: str | None = None,
+    *,
+    operation: str = "write",
 ):
     from koa.providers.todo.factory import TodoProviderFactory
     from koa.providers.todo.resolver import TodoAccountResolver
@@ -54,7 +56,8 @@ async def _resolve_todo_provider(
         )
     except Exception as e:
         logger.error(f"Failed to resolve todo routing target: {e}", exc_info=True)
-        return None, None, wrap_routing_error("todo", target_provider or "local", "write_failed")
+        error_reason = "read_failed" if operation == "read" else "write_failed"
+        return None, None, wrap_routing_error("todo", target_provider or "local", error_reason)
 
     if target.provider == "local":
         return (
@@ -160,6 +163,7 @@ async def query_tasks(
             context,
             target_provider=target_provider,
             target_account=target_account,
+            operation="read",
         )
         if error:
             return error
@@ -1043,7 +1047,7 @@ def _format_job_disambiguation(jobs, prompt: str) -> str:
 async def check_overdue_tasks(*, context: AgentToolContext) -> str:
     """Check for overdue and today-due tasks. Used by proactive reminders."""
     try:
-        provider, account, error = await _resolve_todo_provider(context)
+        provider, account, error = await _resolve_todo_provider(context, operation="read")
         if error:
             return error
 

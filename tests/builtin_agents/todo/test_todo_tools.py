@@ -152,6 +152,53 @@ class TestTodoToolRouting:
         assert "Found 1 task(s):" in result.text
 
     @pytest.mark.asyncio
+    async def test_query_tasks_routing_resolution_failure_returns_read_error(self):
+        """Routing infrastructure failure inside query_tasks must emit read-oriented messaging."""
+        with patch(
+            "koa.builtin_agents.todo.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
+        ), patch(
+            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+            return_value=object(),
+        ):
+            result = await query_tasks.executor(
+                {"search_query": None},
+                _context(),
+            )
+
+        assert "retrieve" in result.lower() or "read" in result.lower()
+        assert "save it locally" not in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_check_overdue_tasks_routing_resolution_failure_returns_read_error(self):
+        """Routing infrastructure failure inside check_overdue_tasks must emit read-oriented messaging."""
+        with patch(
+            "koa.builtin_agents.todo.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
+        ), patch(
+            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+            return_value=object(),
+        ):
+            result = await check_overdue_tasks.executor({}, _context())
+
+        assert "retrieve" in result.lower() or "read" in result.lower()
+        assert "save it locally" not in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_task_routing_resolution_failure_returns_write_error(self):
+        """Routing infrastructure failure inside create_task must emit write-oriented messaging."""
+        with patch(
+            "koa.builtin_agents.todo.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
+        ), patch(
+            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+            return_value=object(),
+        ):
+            result = await create_task.executor({"title": "Buy milk"}, _context())
+
+        assert "couldn't finish that todo action" in result.lower() or "try again" in result.lower()
+
+    @pytest.mark.asyncio
     async def test_create_task_uses_resolved_provider(self):
         provider = DummyTodoProvider()
 
@@ -234,6 +281,9 @@ class TestTodoToolRouting:
             )
 
         assert "read" in result.lower() or "retrieve" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_delete_task_search_failure_returns_read_error(self):
         """When search_tasks fails in delete_task, the error must be read-oriented."""
 
         class FailingSearchProvider(DummyTodoProvider):

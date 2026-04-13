@@ -80,5 +80,5 @@ in your text response WITHOUT calling any tools.
         remember_important_date,
         manage_reminders,
         set_routing_preference,
-        check_overdue_tasks,
+        check_overdue_tasks,  # proactive/internal-only: called by the overdue-task cron job
     )
