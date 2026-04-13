@@ -84,6 +84,23 @@ class TestResolveSurfaceTarget:
         )
 
     @pytest.mark.asyncio
+    async def test_explicit_account_no_provider_no_preference_falls_back_to_local(self):
+        """explicit_account set, no explicit_provider, preference is None → local + explicit_account."""
+        resolved = await resolve_surface_target(
+            tenant_id="user-1",
+            surface="calendar",
+            backend_client=DummyClient(None),
+            explicit_account="work",
+        )
+
+        assert resolved == ResolvedSurfaceTarget(
+            surface="calendar",
+            provider="local",
+            account="work",
+            source="explicit",
+        )
+
+    @pytest.mark.asyncio
     async def test_falls_back_to_local_default_when_no_preference_saved(self):
         resolved = await resolve_surface_target(
             tenant_id="user-1",

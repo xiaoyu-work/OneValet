@@ -54,16 +54,18 @@ class LocalBackendClient:
         query: str | None = None,
         max_results: int = 10,
     ) -> dict:
+        params: dict = {"tenant_id": tenant_id, "max_results": max_results}
+        if time_min is not None:
+            params["time_min"] = time_min
+        if time_max is not None:
+            params["time_max"] = time_max
+        if query is not None:
+            params["query"] = query
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(
                 f"{self._base_url}/api/internal/events",
-                params={
-                    "tenant_id": tenant_id,
-                    "time_min": time_min,
-                    "time_max": time_max,
-                    "query": query,
-                    "max_results": max_results,
-                },
+                params=params,
                 headers=self._headers,
             )
             resp.raise_for_status()

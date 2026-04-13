@@ -96,6 +96,33 @@ class TestLocalBackendClient:
         assert result["default_provider"] == "google"
 
     @pytest.mark.asyncio
+    async def test_list_local_events_omits_none_filters(self):
+        """None values for time_min, time_max, query must not appear in params."""
+        response = MagicMock()
+        response.json.return_value = {"events": []}
+        response.raise_for_status = MagicMock()
+
+        async_client = AsyncMock()
+        async_client.get.return_value = response
+        async_cm = AsyncMock()
+        async_cm.__aenter__.return_value = async_client
+
+        with patch(
+            "koa.providers.local_backend.httpx.AsyncClient",
+            return_value=async_cm,
+        ):
+            client = LocalBackendClient("https://koiai.example", "svc-key")
+            await client.list_local_events("user-1", max_results=20)
+
+        _, call_kwargs = async_client.get.call_args
+        sent_params = call_kwargs["params"]
+        assert "tenant_id" in sent_params
+        assert "max_results" in sent_params
+        assert "time_min" not in sent_params
+        assert "time_max" not in sent_params
+        assert "query" not in sent_params
+
+    @pytest.mark.asyncio
     async def test_list_local_events_uses_internal_endpoint_filters(self):
         response = MagicMock()
         response.json.return_value = {"events": [{"id": "event-1"}]}
