@@ -30,6 +30,7 @@ htmlcov/
 .idea/
 .vscode/
 .claude/
+.worktrees/
 *.swp
 *.swo
 
