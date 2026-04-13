@@ -28,25 +28,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-async def _get_provider(tenant_id: str):
-    """Resolve the primary calendar account and return (provider, account) or (None, error_msg)."""
-    from koa.providers.calendar.factory import CalendarProviderFactory
-    from koa.providers.calendar.resolver import CalendarAccountResolver
-
-    account = await CalendarAccountResolver.resolve_account(tenant_id, "primary")
-    if not account:
-        return None, None, "No calendar account found. Please connect one first."
-
-    provider = CalendarProviderFactory.create_provider(account)
-    if not provider:
-        return None, None, "Sorry, I can't access that calendar provider yet."
-
-    if not await provider.ensure_valid_token():
-        return None, None, "I lost access to your calendar. Could you reconnect it?"
-
-    return provider, account, None
-
-
 async def _resolve_calendar_provider(
     context: AgentToolContext,
     target_provider: str | None = None,
@@ -336,9 +317,7 @@ async def _preview_create_event(args: dict, context: AgentToolContext) -> str:
     summary = args.get("summary", "")
     start_str = args.get("start", "")
     end_str = args.get("end", "")
-    args.get("description", "")
     location = args.get("location", "")
-    args.get("attendees", "")
 
     if not end_str and start_str:
         try:

@@ -77,9 +77,6 @@ class TestCalendarToolRouting:
         provider = DummyCalendarProvider()
 
         with patch(
-            "koa.builtin_agents.calendar.tools._get_provider",
-            new=AsyncMock(side_effect=AssertionError("_get_provider should not be used")),
-        ), patch(
             "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -101,9 +98,6 @@ class TestCalendarToolRouting:
         provider = DummyCalendarProvider()
 
         with patch(
-            "koa.builtin_agents.calendar.tools._get_provider",
-            new=AsyncMock(side_effect=AssertionError("_get_provider should not be used")),
-        ), patch(
             "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -124,9 +118,6 @@ class TestCalendarToolRouting:
         provider = DummyCalendarProvider()
 
         with patch(
-            "koa.builtin_agents.calendar.tools._get_provider",
-            new=AsyncMock(side_effect=AssertionError("_get_provider should not be used")),
-        ), patch(
             "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
             new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
             create=True,
@@ -282,6 +273,47 @@ class TestCalendarToolRouting:
             result = await query_events.executor(
                 {
                     "time_range": "today",
+                },
+                _context(),
+            )
+
+        assert "couldn't finish that calendar action" in result.lower()
+        assert "save it locally" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_event_wraps_preference_lookup_failures(self):
+        backend_client = AsyncMock()
+        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
+
+        with patch(
+            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
+            return_value=backend_client,
+        ):
+            result = await create_event.executor(
+                {
+                    "summary": "Team lunch",
+                    "start": "2026-04-12T12:00:00",
+                    "end": "2026-04-12T13:00:00",
+                },
+                _context(),
+            )
+
+        assert "couldn't finish that calendar action" in result.lower()
+        assert "save it locally" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_update_event_wraps_preference_lookup_failures(self):
+        backend_client = AsyncMock()
+        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
+
+        with patch(
+            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
+            return_value=backend_client,
+        ):
+            result = await update_event.executor(
+                {
+                    "target": "team sync",
+                    "changes": {"new_title": "Weekly sync"},
                 },
                 _context(),
             )
