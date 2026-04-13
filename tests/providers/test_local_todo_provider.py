@@ -212,7 +212,6 @@ class TestLocalTodoProviderErrorPaths:
 
         assert result["success"] is False
         assert "backend down" in result["error"]
-
     @pytest.mark.asyncio
     async def test_create_task_returns_failure_when_backend_raises(self):
         provider = LocalTodoProvider(tenant_id="user-1", backend_client=FailingBackend())
@@ -239,4 +238,3 @@ class TestLocalTodoProviderErrorPaths:
 
         assert result["success"] is False
         assert "backend down" in result["error"]
-
