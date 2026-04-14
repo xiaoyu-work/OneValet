@@ -8,6 +8,7 @@ Revises: 005
 """
 
 from typing import Sequence, Union
+
 from alembic import op
 
 revision: str = "006"

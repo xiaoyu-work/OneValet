@@ -2,19 +2,20 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from koa.builtin_agents.shared.routing_preferences import set_routing_preference
+from koa.builtin_agents.shared.routing_preferences import (
+    ResolvedSurfaceTarget,
+    set_routing_preference,
+)
 from koa.builtin_agents.todo.agent import TodoAgent
 from koa.builtin_agents.todo.tools import (
-    check_overdue_tasks,
-    _resolve_todo_provider,
     _preview_create_task,
+    _resolve_todo_provider,
+    check_overdue_tasks,
     create_task,
     delete_task,
     query_tasks,
-    set_reminder,
     update_task,
 )
-from koa.builtin_agents.shared.routing_preferences import ResolvedSurfaceTarget
 from koa.models import AgentToolContext, ToolOutput
 
 

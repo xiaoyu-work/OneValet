@@ -2,13 +2,13 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from koa.models import AgentToolContext
 from koa.builtin_agents.shared.routing_preferences import (
     ResolvedSurfaceTarget,
     resolve_surface_target,
     set_routing_preference,
     wrap_routing_error,
 )
+from koa.models import AgentToolContext
 
 
 class DummyClient:

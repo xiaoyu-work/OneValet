@@ -5,16 +5,18 @@ import pytest
 
 from koa.builtin_agents.calendar.agent import CalendarAgent
 from koa.builtin_agents.calendar.tools import (
-    _resolve_calendar_provider,
     _preview_delete_event,
+    _resolve_calendar_provider,
     check_upcoming_events,
     create_event,
     delete_event,
     query_events,
     update_event,
 )
-from koa.builtin_agents.shared.routing_preferences import ResolvedSurfaceTarget
-from koa.builtin_agents.shared.routing_preferences import set_routing_preference
+from koa.builtin_agents.shared.routing_preferences import (
+    ResolvedSurfaceTarget,
+    set_routing_preference,
+)
 from koa.models import AgentToolContext, ToolOutput
 
 

@@ -8,7 +8,7 @@ ReminderAgent, TaskManagementAgent, and PlannerAgent.
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, List, Optional
 
 from koa.builtin_agents.shared.routing_preferences import (
     resolve_surface_target,

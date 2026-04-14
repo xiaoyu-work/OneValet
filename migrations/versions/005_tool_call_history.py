@@ -5,6 +5,7 @@ Revises: 004
 """
 
 from typing import Sequence, Union
+
 from alembic import op
 
 revision: str = "005"
