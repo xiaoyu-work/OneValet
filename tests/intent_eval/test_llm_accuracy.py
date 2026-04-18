@@ -48,7 +48,12 @@ def _make_llm_client():
     model = os.environ.get("KOA_INTENT_EVAL_MODEL") or os.environ.get(
         "KOA_DEFAULT_MODEL", "gpt-4o-mini"
     )
-    return LiteLLMClient(model=model)
+    provider = os.environ.get("KOA_INTENT_EVAL_PROVIDER", "openai")
+    api_version = os.environ.get("KOA_INTENT_EVAL_API_VERSION")
+    kwargs = {"model": model, "provider_name": provider}
+    if api_version:
+        kwargs["api_version"] = api_version
+    return LiteLLMClient(**kwargs)
 
 
 @pytest.mark.asyncio
