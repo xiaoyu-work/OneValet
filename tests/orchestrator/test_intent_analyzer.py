@@ -358,7 +358,7 @@ class TestAnalyze:
     async def test_llm_called_with_correct_params(self):
         response = json.dumps({"intent_type": "single", "domains": ["general"], "sub_tasks": []})
         client = _make_llm_client(response)
-        analyzer = IntentAnalyzer(llm_client=client)
+        analyzer = IntentAnalyzer(llm_client=client, fast_path=None)
 
         await analyzer.analyze("hello")
 

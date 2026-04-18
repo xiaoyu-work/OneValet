@@ -1,0 +1,51 @@
+{"message": "hi", "expected_domains": [["general"]], "expected_type": "single", "tags": ["greeting", "fast_path"]}
+{"message": "hello there", "expected_domains": [["general"]], "expected_type": "single", "tags": ["greeting"]}
+{"message": "thanks!", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "fast_path"]}
+{"message": "ok", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "fast_path"]}
+{"message": "你好", "expected_domains": [["general"]], "expected_type": "single", "tags": ["greeting", "zh", "fast_path"]}
+{"message": "谢谢", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "zh", "fast_path"]}
+{"message": "好的", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "zh", "fast_path"]}
+{"message": "write me a haiku about rain", "expected_domains": [["general"]], "expected_type": "single", "tags": ["creative"]}
+{"message": "what's the capital of France", "expected_domains": [["general"]], "expected_type": "single", "tags": ["factual"]}
+{"message": "send an email to alice@acme.com about the Q3 report", "expected_domains": [["communication"]], "expected_type": "single", "tags": ["email"]}
+{"message": "reply to the latest slack thread in #eng", "expected_domains": [["communication"]], "expected_type": "single", "tags": ["slack"]}
+{"message": "DM bob on discord saying I'll be late", "expected_domains": [["communication"]], "expected_type": "single", "tags": ["discord"]}
+{"message": "帮我给张总发一封邮件", "expected_domains": [["communication"]], "expected_type": "single", "tags": ["email", "zh"]}
+{"message": "add a meeting with Alice tomorrow at 3pm", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["calendar"]}
+{"message": "remind me to call mom in 2 hours", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["reminder"]}
+{"message": "create a todo for the launch checklist", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["todo"]}
+{"message": "give me today's briefing", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["briefing"]}
+{"message": "明天下午三点安排一个会议", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["calendar", "zh"]}
+{"message": "log expense $15 lunch at sweetgreen", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["expense"]}
+{"message": "turn off the living room lights", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["smart_home"]}
+{"message": "track my amazon package", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["package"]}
+{"message": "play my focus playlist on spotify", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["music"]}
+{"message": "generate a picture of a cyberpunk city", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["image"]}
+{"message": "log 午饭 15块", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["expense", "zh"]}
+{"message": "把卧室的灯打开", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["smart_home", "zh"]}
+{"message": "find flights to tokyo next week", "expected_domains": [["travel"]], "expected_type": "single", "tags": ["flights"]}
+{"message": "how do I get to SFO from here", "expected_domains": [["travel"]], "expected_type": "single", "tags": ["directions"]}
+{"message": "coffee shops nearby", "expected_domains": [["travel"]], "expected_type": "single", "tags": ["nearby"]}
+{"message": "what's the air quality in delhi right now", "expected_domains": [["travel"]], "expected_type": "single", "tags": ["air_quality"]}
+{"message": "下周去东京的机票", "expected_domains": [["travel"]], "expected_type": "single", "tags": ["flights", "zh"]}
+{"message": "send alice an email and add a follow-up todo", "expected_domains": [["communication", "productivity"]], "expected_type": "multi", "tags": ["multi"]}
+{"message": "book a flight to NYC and email the itinerary to my boss", "expected_domains": [["travel", "communication"]], "expected_type": "multi", "tags": ["multi", "dependent"]}
+{"message": "log $15 lunch, $12 uber, $5 coffee", "expected_domains": [["lifestyle"]], "expected_type": "single", "tags": ["batch", "single-agent"]}
+{"message": "if the weather is bad tomorrow, remind me to bring an umbrella", "expected_domains": [["productivity"], ["lifestyle"]], "expected_type": "single", "tags": ["conditional"]}
+{"message": "handle that thing we talked about", "expected_domains": [["general"], ["all"]], "expected_type": "single", "expected_clarify": true, "tags": ["ambiguous", "demonstrative"]}
+{"message": "do the usual", "expected_domains": [["general"], ["all"]], "expected_type": "single", "expected_clarify": true, "tags": ["ambiguous"]}
+{"message": "算了", "expected_domains": [["general"]], "expected_type": "single", "tags": ["cancel", "zh", "fast_path"]}
+{"message": "cancel", "expected_domains": [["general"]], "expected_type": "single", "tags": ["cancel", "fast_path"]}
+{"message": "nevermind", "expected_domains": [["general"]], "expected_type": "single", "tags": ["cancel"]}
+{"message": "yes", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "fast_path"]}
+{"message": "no", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "fast_path"]}
+{"message": "bye", "expected_domains": [["general"]], "expected_type": "single", "tags": ["farewell", "fast_path"]}
+{"message": "book me a table at the usual place for 7pm", "expected_domains": [["lifestyle"], ["travel"], ["general"]], "expected_type": "single", "expected_clarify": true, "tags": ["ambiguous", "reference"]}
+{"message": "hola", "expected_domains": [["general"]], "expected_type": "single", "tags": ["greeting", "es", "fast_path"]}
+{"message": "gracias", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "es", "fast_path"]}
+{"message": "merci", "expected_domains": [["general"]], "expected_type": "single", "tags": ["ack", "fr", "fast_path"]}
+{"message": "schedule a cron job to sync my calendar every morning at 7am", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["cron"]}
+{"message": "send me a daily weather briefing at 8am", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["cron", "briefing"]}
+{"message": "remind me about mom's birthday next month", "expected_domains": [["productivity"], ["lifestyle"]], "expected_type": "single", "tags": ["reminder", "date"]}
+{"message": "what time is my next meeting", "expected_domains": [["productivity"]], "expected_type": "single", "tags": ["calendar"]}
+{"message": "find me a good restaurant near the hotel and add it to my itinerary", "expected_domains": [["travel", "productivity"]], "expected_type": "multi", "tags": ["multi"]}

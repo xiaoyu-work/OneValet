@@ -195,6 +195,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         tenant_gate: Optional[Any] = None,
         idempotency_store: Optional[Any] = None,
         task_registry: Optional[Any] = None,
+        intent_feedback_store: Optional[Any] = None,
+        intent_embedding_router: Optional[Any] = None,
+        enable_clarification: bool = True,
     ):
         """
         Initialize Orchestrator.
@@ -282,6 +285,20 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         from ..observability import TaskRegistry as _TR
 
         self.task_registry = task_registry or _TR(self.__class__.__name__)
+
+        # Intent-recognition infrastructure.  See
+        # :mod:`koa.orchestrator.intent_feedback` and
+        # :mod:`koa.orchestrator.intent_embedding` for the full design.
+        # Defaults to an in-memory feedback store so operators get
+        # accuracy metrics out of the box; production should inject a
+        # durable implementation.
+        if intent_feedback_store is None:
+            from .intent_feedback import InMemoryIntentFeedbackStore
+
+            intent_feedback_store = InMemoryIntentFeedbackStore()
+        self.intent_feedback_store = intent_feedback_store
+        self.intent_embedding_router = intent_embedding_router
+        self.enable_clarification = bool(enable_clarification)
 
         # Audit logging
         self._audit = AuditLogger()
@@ -646,14 +663,59 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
             # Step 4: Intent Analysis — classify domains and detect multi-intent
             intent = await self._analyze_intent(message, context)
+            context["intent_analysis"] = intent
             self._audit.log_phase(
                 "intent_analysis",
                 {
                     "intent_type": intent.intent_type,
                     "domains": intent.domains,
                     "sub_tasks": len(intent.sub_tasks) if intent.sub_tasks else 0,
+                    "confidence": intent.confidence,
+                    "needs_clarification": intent.needs_clarification,
+                    "source": intent.source,
                 },
             )
+
+            # Step 4a: Ambiguous → ask the user to clarify instead of guessing.
+            # Guarded by an orchestrator-level flag so operators who don't
+            # want this UX (e.g. fully-automated flows) can opt out.
+            if (
+                getattr(self, "enable_clarification", True)
+                and intent.needs_clarification
+                and intent.source != "fallback"
+            ):
+                clarify_q = (
+                    intent.clarification_question
+                    or "Could you share a bit more detail so I can help correctly?"
+                )
+                logger.info(
+                    "[IntentAnalyzer] needs_clarification=true "
+                    "confidence=%.2f; short-circuiting to clarify path",
+                    intent.confidence,
+                )
+                result = AgentResult(
+                    agent_type=self.__class__.__name__,
+                    status=AgentStatus.COMPLETED,
+                    raw_message=clarify_q,
+                    metadata={
+                        "clarification": True,
+                        "confidence": intent.confidence,
+                        "original_message": message,
+                    },
+                )
+                # Record the classification as a 'clarify' outcome so the
+                # feedback store can learn from it if a follow-up arrives.
+                self._record_intent_feedback(
+                    tenant_id=tenant_id,
+                    intent=intent,
+                    outcome="clarify",
+                )
+                yield AgentEvent(
+                    type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q}
+                )
+                result = await self.post_process(result, context)
+                yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+                return
 
             # Step 4b: Multi-intent → DAG execution
             if intent.intent_type == "multi" and intent.sub_tasks:
@@ -1418,12 +1480,18 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
     ) -> "IntentAnalysis":
         """Analyze user message to determine intent type and domain(s).
 
-        Single lightweight LLM call (~200 tokens).
+        Single lightweight LLM call (~200 tokens).  Pre-empted by the
+        fast-path regex classifier for trivial utterances and, when
+        configured, by the embedding L1 router for messages close to
+        known-intent centroids.
         Falls back to all-domains on failure.
         """
         from .intent_analyzer import IntentAnalyzer
 
-        analyzer = IntentAnalyzer(self.llm_client)
+        analyzer = IntentAnalyzer(
+            self.llm_client,
+            embedding_router=self.intent_embedding_router,
+        )
         history = context.get("conversation_history", [])
         metadata = context.get("metadata", {})
         intent = await analyzer.analyze(
@@ -1433,12 +1501,50 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         )
 
         logger.info(
-            f"[IntentAnalyzer] type={intent.intent_type}, "
-            f"domains={intent.domains}, "
-            f"needs_memory={intent.needs_memory}, "
-            f"sub_tasks={len(intent.sub_tasks)}"
+            "[IntentAnalyzer] source=%s type=%s domains=%s "
+            "needs_memory=%s confidence=%.2f clarify=%s sub_tasks=%d",
+            intent.source,
+            intent.intent_type,
+            intent.domains,
+            intent.needs_memory,
+            intent.confidence,
+            intent.needs_clarification,
+            len(intent.sub_tasks),
         )
         return intent
+
+    def _record_intent_feedback(
+        self,
+        *,
+        tenant_id: str,
+        intent: "IntentAnalysis",
+        outcome: str,
+        parent_id: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Fire-and-forget feedback write.
+
+        Intentionally swallows all exceptions — feedback recording must
+        never block or fail a user request.
+        """
+        store = self.intent_feedback_store
+        if store is None:
+            return
+        try:
+            coro = store.record(
+                tenant_id=tenant_id,
+                user_message=intent.raw_message or "",
+                intent_type=intent.intent_type,
+                domains=list(intent.domains),
+                confidence=float(intent.confidence),
+                source=intent.source,
+                outcome=outcome,
+                parent_id=parent_id,
+                extra=extra,
+            )
+            self.task_registry.create_task(coro, name="intent_feedback")
+        except Exception as exc:
+            logger.debug("intent feedback record failed: %s", exc)
 
     async def _execute_dag(
         self,
@@ -2072,6 +2178,31 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         tenant_id = context["tenant_id"]
         session_id = context.get("session_id", tenant_id)
         user_message = context.get("message", "")
+
+        # Record intent classification outcome (fire-and-forget).
+        # Status → outcome mapping:
+        #   COMPLETED → completed; FAILED / CANCELLED → error/cancelled.
+        # "clarify" outcomes are emitted separately on the short-circuit
+        # path; this block handles everything that reaches execution.
+        intent_for_feedback = context.get("intent_analysis")
+        if intent_for_feedback is not None:
+            try:
+                status_name = getattr(result.status, "value", str(result.status)).lower()
+                if "cancel" in status_name:
+                    outcome = "cancelled"
+                elif "fail" in status_name or "error" in status_name:
+                    outcome = "error"
+                else:
+                    outcome = "completed"
+                self._record_intent_feedback(
+                    tenant_id=tenant_id,
+                    intent=intent_for_feedback,
+                    outcome=outcome,
+                    extra={"session_id": session_id},
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("post_process feedback record failed: %s", exc)
+
         status_value = (
             result.status.value if hasattr(result.status, "value") else str(result.status)
         )
