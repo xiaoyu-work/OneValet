@@ -175,17 +175,32 @@ class TestParseResult:
 
         assert result.domains == ["productivity"]
 
-    def test_all_invalid_domains_fallback_to_all(self):
+    def test_general_stripped_when_combined_with_specific(self):
+        """LLM safety-net 'general' must be dropped when a specific domain is present."""
+        data = {
+            "intent_type": "single",
+            "domains": ["productivity", "general"],
+            "sub_tasks": [],
+        }
+        result = self.analyzer._parse_result(data, "test")
+        assert result.domains == ["productivity"]
+
+    def test_general_kept_when_alone(self):
+        data = {"intent_type": "single", "domains": ["general"], "sub_tasks": []}
+        result = self.analyzer._parse_result(data, "test")
+        assert result.domains == ["general"]
+
+    def test_all_invalid_domains_fallback_to_general(self):
         data = {"intent_type": "single", "domains": ["fake1", "fake2"], "sub_tasks": []}
         result = self.analyzer._parse_result(data, "test")
 
-        assert result.domains == ["all"]
+        assert result.domains == ["general"]
 
-    def test_missing_domains_defaults_to_all(self):
+    def test_missing_domains_defaults_to_general(self):
         data = {"intent_type": "single"}
         result = self.analyzer._parse_result(data, "test")
 
-        assert result.domains == ["all"]
+        assert result.domains == ["general"]
 
     def test_invalid_subtask_domain_defaults_to_general(self):
         data = {

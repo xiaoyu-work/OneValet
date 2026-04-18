@@ -92,7 +92,13 @@ Domains:
 - productivity: calendar, todo/reminders, briefing, notion, google workspace, cloud storage, github, cron/scheduling
 - lifestyle: expenses/budget, smart home, package tracking, spotify/music, youtube, image generation, important dates
 - travel: trip planning, maps/directions/navigation, nearby places, air quality
-- general: greeting, chitchat, creative writing, general knowledge (no agent needed)
+- general: greeting, chitchat, creative writing, pure factual/knowledge Q&A that NO agent is needed to answer
+
+Domain selection rules:
+- Pick the MOST SPECIFIC domain(s) for the task. Do NOT add "general" as a safety-net alongside a specific domain.
+- Only use "general" when no specialised agent is needed (greetings, chitchat, factual questions answerable from general knowledge).
+- "general" MUST appear alone — never combine it with communication / productivity / lifestyle / travel.
+- A scheduled reminder is productivity, even if the content references weather or other topics — don't add "general" or "lifestyle" unless a second agent must be invoked.
 
 needs_memory rules:
 - true: when the user references personal history, preferences, past conversations, or context that may be stored in memory (e.g. "that restaurant I mentioned", "my usual flight", "like last time")
@@ -407,7 +413,14 @@ class IntentAnalyzer:
             slots = {}
 
         # Validate domains
-        domains = [d for d in domains if d in VALID_DOMAINS] or ["all"]
+        domains = [d for d in domains if d in VALID_DOMAINS]
+        # If model appended "general" as a safety-net alongside specific
+        # domains, drop it — "general" means "no agent needed" and must
+        # never coexist with a specialised domain.
+        if len(domains) > 1 and "general" in domains:
+            domains = [d for d in domains if d != "general"]
+        if not domains:
+            domains = ["general"]
 
         sub_tasks: List[SubTask] = []
         if intent_type == "multi":
