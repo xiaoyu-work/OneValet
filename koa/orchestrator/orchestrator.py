@@ -1312,29 +1312,19 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             except Exception as e:
                 logger.warning(f"Failed to auto-recall memories: {e}")
 
-        # Episode prefetch.
-        # Two paths:
-        #   (a) Upstream (koi-backend worker) already populated
-        #       `context["recalled_episodes"]` before calling us — we just
-        #       render.  This is the preferred path for deployments where
-        #       orchestrator doesn't own the DB pool.
-        #   (b) Orchestrator has both a db pool and an embedder wired — in
-        #       that case we can do the kNN ourselves, keeping the engine
-        #       self-contained.
+        # Episode prefetch via Momex (subkind="behavioral_pattern" or
+        # "weekly_reflection" items tagged kind=episode). We dedupe against
+        # the main "relevant memories" block since Momex is the shared index.
         episodes = context.get("recalled_episodes") or []
-        if not episodes and needs_memory and self.database is not None:
+        if not episodes and needs_memory and self.momex is not None:
             try:
-                from ..memory.lifecycle.episode_store import find_similar
-                from ..memory.embedding import get_embedder
+                from ..memory.lifecycle.episode_memory import EpisodeMemory
                 tenant_id = context.get("tenant_id", "")
                 if tenant_id and user_message:
+                    episode_memory = EpisodeMemory(self.momex)
                     episodes = await asyncio.wait_for(
-                        find_similar(
-                            self.database,
-                            tenant_id,
-                            user_message,
-                            k=5,
-                            embedder=get_embedder(),
+                        episode_memory.recall_episodes(
+                            tenant_id, user_message, limit=5,
                         ),
                         timeout=3.0,
                     )
@@ -1348,9 +1338,15 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         if episodes:
             lines: List[str] = []
             for ep in episodes[:5]:
-                date_s = ep.get("local_date") or ep.get("started_at") or ""
-                title = ep.get("title") or "(untitled)"
-                summary = (ep.get("summary") or "").strip().replace("\n", " ")
+                meta = ep.get("metadata") or {}
+                date_s = (
+                    meta.get("local_date")
+                    or meta.get("start_ts")
+                    or ep.get("timestamp")
+                    or ""
+                )
+                title = meta.get("title") or meta.get("subkind") or "(episode)"
+                summary = (ep.get("text") or ep.get("summary") or "").strip().replace("\n", " ")
                 if len(summary) > 240:
                     summary = summary[:237] + "..."
                 lines.append(f"- [{date_s}] {title}: {summary}")

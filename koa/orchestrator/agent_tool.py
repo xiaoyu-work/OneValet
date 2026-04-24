@@ -134,13 +134,20 @@ async def execute_agent_tool(
     if supabase_storage and "cloud_storage_provider" not in enriched_hints:
         enriched_hints["cloud_storage_provider"] = supabase_storage.for_tenant(tenant_id)
 
-    # Database pool (for agents that query koi-backend tables directly —
-    # SensingAgents, reflection agents, entity resolver, etc).
+    # Database pool (for agents that query koa-local tables directly —
+    # SensingAgents, entity resolver, etc).
     db = getattr(orchestrator, "database", None)
     if db is not None and "db" not in enriched_hints:
         enriched_hints["db"] = db
 
-    # Shared embedder for pgvector kNN (episodes, entities).  Singleton;
+    # MomexMemory instance — episodic memory lives here (see
+    # koa.memory.lifecycle.episode_memory). Reflection agents and the
+    # orchestrator prefetch both consume this.
+    momex = getattr(orchestrator, "momex", None)
+    if momex is not None and "momex" not in enriched_hints:
+        enriched_hints["momex"] = momex
+
+    # Shared embedder for pgvector kNN on non-Momex code paths.  Singleton;
     # returns None if no API key configured, letting callers fall back to
     # keyword search transparently.
     if "embedder" not in enriched_hints:

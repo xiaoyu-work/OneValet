@@ -1,15 +1,17 @@
-"""DailyLogAggregator — builds one ``daily_logs`` row per user per local day.
+"""DailyLogAggregator — builds a daily_log *episode* per user per local day.
 
-This is a *pure-SQL* step: no LLM.  It rolls up the day's messages, tool
-calls, calendar events, user_state, health samples, and sensing output into
-a single compact JSONB blob that the WeeklyReflector will consume later.
+This is a *pure-SQL* rollup (no LLM). It reads the day's messages, tool
+calls, calendar events, user_state, health samples and motion segments,
+produces a compact JSON-shaped summary, and writes that summary to Momex
+as an episode with ``subkind="daily_log"`` via :class:`EpisodeMemory`.
 
-Running this nightly means the weekly reflection only needs to read 7 rows
-per user (one per day), not thousands of messages.  That's how we keep
-weekly reflection cost bounded regardless of engagement depth.
+Running this nightly means the weekly reflector only needs to pull ~7
+episodes per user (one per day) to see the whole week, instead of scanning
+raw sensor rows.
 
 Cron suggestion: 02:00 in the user's local timezone, processes yesterday.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,17 +22,26 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
-async def aggregate_day(db, user_id: str, local_date: date, tz_name: str) -> Dict[str, Any]:
-    """Build and upsert the daily_logs row for ``local_date``.  Returns the
-    aggregated dict (also what was written)."""
+async def aggregate_day(
+    db,
+    user_id: str,
+    local_date: date,
+    tz_name: str,
+    *,
+    episode_memory=None,
+) -> Dict[str, Any]:
+    """Build the daily rollup and, if ``episode_memory`` is provided, write
+    it to Momex as a daily_log episode. Returns the raw payload regardless.
+    """
     start_utc, end_utc = _local_day_bounds(local_date, tz_name)
 
     messages = await _message_summary(db, user_id, start_utc, end_utc)
     tools = await _tool_summary(db, user_id, start_utc, end_utc)
     calendar = await _calendar_summary(db, user_id, start_utc, end_utc)
     reminders = await _reminder_summary(db, user_id, start_utc, end_utc)
+    health = await _health_summary(db, user_id, start_utc, end_utc)
+    motion = await _motion_summary(db, user_id, start_utc, end_utc)
     state = await _state_summary(db, user_id, local_date)
-    top_entities = await _top_entities(db, user_id, start_utc, end_utc)
 
     payload: Dict[str, Any] = {
         "local_date": local_date.isoformat(),
@@ -39,11 +50,30 @@ async def aggregate_day(db, user_id: str, local_date: date, tz_name: str) -> Dic
         "tools": tools,
         "calendar": calendar,
         "reminders": reminders,
+        "health": health,
+        "motion": motion,
         "state": state,
-        "top_entities": top_entities,
     }
 
-    await _upsert_daily_log(db, user_id, local_date, payload)
+    if episode_memory is not None:
+        summary_text = _render_summary(payload)
+        try:
+            await episode_memory.write_episode(
+                tenant_id=user_id,
+                summary=summary_text,
+                subkind="daily_log",
+                start_ts=start_utc,
+                end_ts=end_utc,
+                source="sensing",
+                extras={
+                    "local_date": local_date.isoformat(),
+                    "timezone": tz_name,
+                    "payload": payload,
+                },
+            )
+        except Exception as e:
+            logger.error("daily_log episode write failed: %s", e)
+
     return payload
 
 
@@ -66,7 +96,6 @@ async def _message_summary(db, user_id: str, start: datetime, end: datetime) -> 
 
 
 async def _tool_summary(db, user_id: str, start: datetime, end: datetime) -> Dict[str, Any]:
-    """Approximate tool usage via agent_invocations (existing table)."""
     try:
         rows = await db.fetch(
             """SELECT agent_name, COUNT(*) AS c
@@ -83,16 +112,17 @@ async def _tool_summary(db, user_id: str, start: datetime, end: datetime) -> Dic
 
 
 async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) -> Dict[str, Any]:
-    """Combine internal_calendar + local_calendar_events for the day."""
     out: Dict[str, Any] = {"events": [], "count": 0}
     try:
         internal = await db.fetch(
-            """SELECT title, starts_at, ends_at FROM internal_calendar
+            """SELECT title, starts_at FROM internal_calendar
                WHERE user_id = $1 AND starts_at >= $2 AND starts_at < $3
                ORDER BY starts_at LIMIT 50""",
             user_id, start, end,
         )
-        out["events"].extend([{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "internal"} for r in internal])
+        out["events"].extend(
+            [{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "internal"} for r in internal]
+        )
     except Exception as e:
         logger.debug("internal_calendar query skipped: %s", e)
 
@@ -103,7 +133,9 @@ async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) ->
                ORDER BY starts_at LIMIT 50""",
             user_id, start, end,
         )
-        out["events"].extend([{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "eventkit"} for r in local])
+        out["events"].extend(
+            [{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "eventkit"} for r in local]
+        )
     except Exception as e:
         logger.debug("local_calendar_events query skipped: %s", e)
 
@@ -130,6 +162,47 @@ async def _reminder_summary(db, user_id: str, start: datetime, end: datetime) ->
         return {}
 
 
+async def _health_summary(db, user_id: str, start: datetime, end: datetime) -> Dict[str, Any]:
+    try:
+        rows = await db.fetch(
+            """SELECT type,
+                      COUNT(*) AS c,
+                      COALESCE(SUM(value), 0) AS total,
+                      AVG(value) AS avg
+               FROM health_samples
+               WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
+               GROUP BY type""",
+            user_id, start, end,
+        )
+        return {
+            r["type"]: {
+                "count": r["c"],
+                "total": float(r["total"]) if r["total"] is not None else 0.0,
+                "avg": float(r["avg"]) if r["avg"] is not None else None,
+            }
+            for r in rows
+        }
+    except Exception as e:
+        logger.debug("_health_summary failed: %s", e)
+        return {}
+
+
+async def _motion_summary(db, user_id: str, start: datetime, end: datetime) -> Dict[str, Any]:
+    try:
+        rows = await db.fetch(
+            """SELECT activity,
+                      SUM(EXTRACT(EPOCH FROM (ended_at - started_at))) AS seconds
+               FROM motion_segments
+               WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
+               GROUP BY activity""",
+            user_id, start, end,
+        )
+        return {r["activity"]: int(float(r["seconds"] or 0)) for r in rows}
+    except Exception as e:
+        logger.debug("_motion_summary failed: %s", e)
+        return {}
+
+
 async def _state_summary(db, user_id: str, local_date: date) -> Dict[str, Any]:
     try:
         row = await db.fetchrow(
@@ -144,24 +217,51 @@ async def _state_summary(db, user_id: str, local_date: date) -> Dict[str, Any]:
         return {}
 
 
-async def _top_entities(db, user_id: str, start: datetime, end: datetime) -> List[str]:
-    """Heuristic: pick top message mentions.  For now we rely on the weekly
-    reflector to do NER; here we just forward an empty list."""
-    # TODO: once an entity extractor lands, populate this.
-    return []
+def _render_summary(payload: Dict[str, Any]) -> str:
+    """Human-readable one-paragraph summary used as the episode text
+    (what Momex indexes for vector search)."""
+    parts: List[str] = []
+    local_date = payload.get("local_date", "")
+    parts.append(f"Daily log {local_date}")
+
+    state = payload.get("state") or {}
+    if state:
+        bits = []
+        if state.get("sleep_minutes"):
+            bits.append(f"sleep {int(state['sleep_minutes'])}m")
+        if state.get("sleep_score") is not None:
+            bits.append(f"sleep score {state['sleep_score']}")
+        if state.get("steps"):
+            bits.append(f"{int(state['steps'])} steps")
+        if state.get("mood"):
+            bits.append(f"mood={state['mood']}")
+        if state.get("primary_location"):
+            bits.append(f"@{state['primary_location']}")
+        if bits:
+            parts.append("; ".join(bits))
+
+    cal = payload.get("calendar") or {}
+    events = cal.get("events") or []
+    if events:
+        titles = [e.get("title") or "" for e in events[:5] if e.get("title")]
+        if titles:
+            parts.append("events: " + ", ".join(titles))
+
+    rem = payload.get("reminders") or {}
+    if rem.get("completed"):
+        parts.append("done: " + ", ".join(rem["completed"][:5]))
+
+    msgs = payload.get("messages") or {}
+    if msgs.get("total"):
+        parts.append(f"{msgs['total']} messages")
+
+    return ". ".join(parts)
 
 
-async def _upsert_daily_log(db, user_id: str, local_date: date, payload: Dict[str, Any]):
-    try:
-        await db.execute(
-            """INSERT INTO daily_logs (user_id, local_date, payload)
-               VALUES ($1, $2, $3::jsonb)
-               ON CONFLICT (user_id, local_date)
-               DO UPDATE SET payload = EXCLUDED.payload, updated_at = NOW()""",
-            user_id, local_date, json.dumps(payload, default=str),
-        )
-    except Exception as e:
-        logger.error("daily_logs upsert failed: %s", e)
+async def _upsert_daily_log(*args, **kwargs):  # back-compat shim (no-op)
+    """Retained for any external caller; the daily_logs table no longer
+    exists — the rollup is stored as a Momex episode now."""
+    return None
 
 
 def _local_day_bounds(local_date: date, tz_name: str):

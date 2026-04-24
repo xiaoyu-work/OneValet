@@ -662,6 +662,11 @@ class Koa:
         return self._database
 
     @property
+    def momex(self):
+        """Access the MomexMemory wrapper (may be None before initialization)."""
+        return self._momex
+
+    @property
     def config(self) -> dict:
         """Return a copy of the raw configuration dict."""
         return dict(self._config)
