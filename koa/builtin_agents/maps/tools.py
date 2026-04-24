@@ -40,6 +40,12 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
             data = response.json()
 
         if data["status"] != "OK" or not data.get("results"):
+            logger.error(
+                "Geocoding returned non-OK: status=%s error_message=%s location=%r",
+                data.get("status"),
+                data.get("error_message"),
+                location,
+            )
             return None
 
         result = data["results"][0]
@@ -49,8 +55,16 @@ async def _geocode_location(location: str) -> Optional[Dict[str, Any]]:
             "lng": coords["lng"],
             "formatted_address": result["formatted_address"],
         }
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            "Geocoding HTTP error: status=%s body=%s location=%r",
+            e.response.status_code,
+            e.response.text[:500],
+            location,
+        )
+        return None
     except Exception as e:
-        logger.error(f"Geocoding failed: {e}")
+        logger.error("Geocoding failed: %s location=%r", e, location, exc_info=True)
         return None
 
 
@@ -228,7 +242,13 @@ async def search_places(
         return ToolOutput(text=text_result, media=media)
 
     except httpx.HTTPStatusError as e:
-        logger.error(f"Google Places API HTTP error: {e.response.status_code}")
+        # Internal diagnostic log — include response body + request for debugging (not shown to user).
+        logger.error(
+            "Google Places API HTTP error: status=%s body=%s request_body=%s",
+            e.response.status_code,
+            e.response.text[:1000],
+            json.dumps(request_body)[:500],
+        )
         if e.response.status_code == 400:
             return "Invalid search query. Try being more specific?"
         elif e.response.status_code in [401, 403]:
