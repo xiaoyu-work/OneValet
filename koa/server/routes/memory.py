@@ -8,7 +8,7 @@ behalf of the user-facing clients without needing to speak Momex directly.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -24,7 +24,8 @@ def _require_momex(app):
     momex = getattr(app, "momex", None)
     if momex is None:
         raise KoaError(
-            E.SERVICE_UNAVAILABLE, "Momex memory not initialised",
+            E.SERVICE_UNAVAILABLE,
+            "Momex memory not initialised",
             details={"service": "momex"},
         )
     return momex
@@ -50,11 +51,16 @@ async def list_episodes(
         # "Most recent" semantics — let Momex surface whatever is freshest in
         # the embedding space under a generic temporal probe.
         items = await em.recall_recent_episodes(
-            user_id, subkind=subkind or "daily_log", limit=limit,
+            user_id,
+            subkind=subkind or "daily_log",
+            limit=limit,
         )
     else:
         items = await em.recall_episodes(
-            user_id, query, limit=limit, subkind=subkind,
+            user_id,
+            query,
+            limit=limit,
+            subkind=subkind,
         )
 
     return {"user_id": user_id, "count": len(items), "episodes": items}

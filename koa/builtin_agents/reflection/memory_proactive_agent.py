@@ -13,6 +13,7 @@ Candidate sources:
   * Momex episodes (kind_hint=routine_break) from the last 7 days → checkin.
   * user_state flags in the last 3 days with "low_sleep" 3/3 → wellbeing.
 """
+
 from __future__ import annotations
 
 import logging
@@ -85,12 +86,17 @@ async def _select_candidate(
                     continue
                 title = meta.get("title") or "One year ago"
                 body = (it.get("text") or "")[:160]
-                candidates.append((90, {
-                    "kind": "anniversary",
-                    "title": "One year ago today",
-                    "body": f"{title}. {body}",
-                    "payload": {"type": "anniversary"},
-                }))
+                candidates.append(
+                    (
+                        90,
+                        {
+                            "kind": "anniversary",
+                            "title": "One year ago today",
+                            "body": f"{title}. {body}",
+                            "payload": {"type": "anniversary"},
+                        },
+                    )
+                )
                 break
         except Exception as e:
             logger.debug("anniversary check failed: %s", e)
@@ -118,12 +124,17 @@ async def _select_candidate(
                 if ld is None or ld < window_start:
                     continue
                 title = meta.get("title") or "Recent change"
-                candidates.append((60, {
-                    "kind": "checkin",
-                    "title": "Everything ok?",
-                    "body": f"Noticed a change recently: {title}.",
-                    "payload": {"type": "routine_break"},
-                }))
+                candidates.append(
+                    (
+                        60,
+                        {
+                            "kind": "checkin",
+                            "title": "Everything ok?",
+                            "body": f"Noticed a change recently: {title}.",
+                            "payload": {"type": "routine_break"},
+                        },
+                    )
+                )
                 break
         except Exception as e:
             logger.debug("routine_break check failed: %s", e)
@@ -135,19 +146,25 @@ async def _select_candidate(
                 """SELECT flags FROM user_state
                    WHERE user_id = $1 AND local_date >= $2 AND local_date <= $3
                    ORDER BY local_date DESC""",
-                user_id, today - timedelta(days=2), today,
+                user_id,
+                today - timedelta(days=2),
+                today,
             )
             low_sleep_days = sum(
-                1 for r in rows
-                if r.get("flags") and "low_sleep" in (r["flags"] or [])
+                1 for r in rows if r.get("flags") and "low_sleep" in (r["flags"] or [])
             )
             if low_sleep_days >= 3:
-                candidates.append((70, {
-                    "kind": "wellbeing",
-                    "title": "Noticed you've been running light on sleep",
-                    "body": "Want me to keep today low-key and push non-urgent reminders to tomorrow?",
-                    "payload": {"type": "low_sleep_streak", "days": low_sleep_days},
-                }))
+                candidates.append(
+                    (
+                        70,
+                        {
+                            "kind": "wellbeing",
+                            "title": "Noticed you've been running light on sleep",
+                            "body": "Want me to keep today low-key and push non-urgent reminders to tomorrow?",
+                            "payload": {"type": "low_sleep_streak", "days": low_sleep_days},
+                        },
+                    )
+                )
         except Exception as e:
             logger.debug("low_sleep check failed: %s", e)
 
@@ -155,4 +172,3 @@ async def _select_candidate(
         return None
     candidates.sort(key=lambda t: t[0], reverse=True)
     return candidates[0][1]
-

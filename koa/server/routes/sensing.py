@@ -33,9 +33,7 @@ router = APIRouter()
 def _require_db(app):
     db = getattr(app, "database", None)
     if db is None:
-        raise KoaError(
-            E.SERVICE_UNAVAILABLE, "Database not initialised", details={"service": "db"}
-        )
+        raise KoaError(E.SERVICE_UNAVAILABLE, "Database not initialised", details={"service": "db"})
     return db
 
 
@@ -65,6 +63,7 @@ def _jsonify(v: Any) -> Optional[str]:
 
 
 # ---------------------------------------------------------------- Models
+
 
 class _BaseIngest(BaseModel):
     user_id: str
@@ -140,6 +139,7 @@ class EventKitIngest(_BaseIngest):
 
 
 # ---------------------------------------------------------------- Endpoints
+
 
 @router.post("/api/sensing/healthkit", dependencies=[Depends(verify_api_key)])
 async def ingest_healthkit(req: HealthKitIngest) -> Dict[str, Any]:
@@ -335,7 +335,8 @@ async def health_daily_summary(
 ):
     """Return a single-day health summary computed on the fly from
     ``health_samples``. ``date`` is YYYY-MM-DD (UTC); defaults to today UTC."""
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
 
     db = _require_db(require_app())
     if date:
@@ -352,15 +353,23 @@ async def health_daily_summary(
         """SELECT type, value, started_at, ended_at
            FROM health_samples
            WHERE user_id = $1 AND started_at >= $2 AND started_at < $3""",
-        user_id, start, end,
+        user_id,
+        start,
+        end,
     )
 
     out: Dict[str, Any] = {
         "date": d.isoformat(),
-        "steps": 0, "active_energy_kcal": 0, "sleep_minutes": 0,
-        "mindful_minutes": 0, "workout_minutes": 0,
-        "hrv_avg_ms": None, "resting_hr": None, "heart_rate_avg": None,
-        "mood": None, "sample_count": len(rows),
+        "steps": 0,
+        "active_energy_kcal": 0,
+        "sleep_minutes": 0,
+        "mindful_minutes": 0,
+        "workout_minutes": 0,
+        "hrv_avg_ms": None,
+        "resting_hr": None,
+        "heart_rate_avg": None,
+        "mood": None,
+        "sample_count": len(rows),
     }
     avg_buckets: Dict[str, List[float]] = {}
     for r in rows:
@@ -388,7 +397,8 @@ async def health_daily_summary(
     try:
         st = await db.fetchrow(
             "SELECT mood FROM user_state WHERE user_id = $1 AND local_date = $2",
-            user_id, d,
+            user_id,
+            d,
         )
         if st and st["mood"]:
             out["mood"] = st["mood"]
@@ -400,7 +410,7 @@ async def health_daily_summary(
 
 @router.get("/api/sensing/healthkit/state", dependencies=[Depends(verify_api_key)])
 async def health_recent_state(user_id: str, days: int = 7):
-    from datetime import date as _date, timedelta
+    from datetime import timedelta
 
     if days < 1 or days > 90:
         raise KoaError(E.VALIDATION, "days must be 1..90")
@@ -415,15 +425,14 @@ async def health_recent_state(user_id: str, days: int = 7):
                FROM user_state
                WHERE user_id = $1 AND local_date >= $2 AND local_date <= $3
                ORDER BY local_date""",
-            user_id, start, today,
+            user_id,
+            start,
+            today,
         )
     except Exception as e:
         logger.debug("user_state fetch failed: %s", e)
         rows = []
     return {
         "days": days,
-        "state": [
-            {**dict(r), "local_date": r["local_date"].isoformat()}
-            for r in rows
-        ],
+        "state": [{**dict(r), "local_date": r["local_date"].isoformat()} for r in rows],
     }

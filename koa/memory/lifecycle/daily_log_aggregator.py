@@ -14,10 +14,9 @@ Cron suggestion: 02:00 in the user's local timezone, processes yesterday.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +84,9 @@ async def _message_summary(db, user_id: str, start: datetime, end: datetime) -> 
                FROM messages
                WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
                GROUP BY role""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         by_role = {r["role"]: {"count": r["c"], "chars": r["chars"]} for r in rows}
         total = sum(r["c"] for r in rows)
@@ -103,7 +104,9 @@ async def _tool_summary(db, user_id: str, start: datetime, end: datetime) -> Dic
                WHERE user_id = $1 AND created_at >= $2 AND created_at < $3
                GROUP BY agent_name
                ORDER BY c DESC LIMIT 20""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         return {r["agent_name"]: r["c"] for r in rows}
     except Exception as e:
@@ -118,10 +121,15 @@ async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) ->
             """SELECT title, starts_at FROM internal_calendar
                WHERE user_id = $1 AND starts_at >= $2 AND starts_at < $3
                ORDER BY starts_at LIMIT 50""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         out["events"].extend(
-            [{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "internal"} for r in internal]
+            [
+                {"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "internal"}
+                for r in internal
+            ]
         )
     except Exception as e:
         logger.debug("internal_calendar query skipped: %s", e)
@@ -131,10 +139,15 @@ async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) ->
             """SELECT title, starts_at FROM local_calendar_events
                WHERE user_id = $1 AND starts_at >= $2 AND starts_at < $3
                ORDER BY starts_at LIMIT 50""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         out["events"].extend(
-            [{"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "eventkit"} for r in local]
+            [
+                {"title": r["title"], "starts_at": r["starts_at"].isoformat(), "source": "eventkit"}
+                for r in local
+            ]
         )
     except Exception as e:
         logger.debug("local_calendar_events query skipped: %s", e)
@@ -152,7 +165,9 @@ async def _reminder_summary(db, user_id: str, start: datetime, end: datetime) ->
                    OR (due_at >= $2 AND due_at < $3)
                )
                LIMIT 50""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         completed = [r["title"] for r in rows if r["completed"]]
         due = [r["title"] for r in rows if not r["completed"]]
@@ -172,7 +187,9 @@ async def _health_summary(db, user_id: str, start: datetime, end: datetime) -> D
                FROM health_samples
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
                GROUP BY type""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         return {
             r["type"]: {
@@ -195,7 +212,9 @@ async def _motion_summary(db, user_id: str, start: datetime, end: datetime) -> D
                FROM motion_segments
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
                GROUP BY activity""",
-            user_id, start, end,
+            user_id,
+            start,
+            end,
         )
         return {r["activity"]: int(float(r["seconds"] or 0)) for r in rows}
     except Exception as e:
@@ -209,7 +228,8 @@ async def _state_summary(db, user_id: str, local_date: date) -> Dict[str, Any]:
             """SELECT sleep_minutes, sleep_score, steps, activity_minutes,
                       stress_score, mood, primary_location, flags, source_data
                FROM user_state WHERE user_id = $1 AND local_date = $2""",
-            user_id, local_date,
+            user_id,
+            local_date,
         )
         return dict(row) if row else {}
     except Exception as e:
@@ -267,6 +287,7 @@ async def _upsert_daily_log(*args, **kwargs):  # back-compat shim (no-op)
 def _local_day_bounds(local_date: date, tz_name: str):
     try:
         from zoneinfo import ZoneInfo
+
         tz = ZoneInfo(tz_name) if tz_name and tz_name != "UTC" else timezone.utc
     except Exception:
         tz = timezone.utc

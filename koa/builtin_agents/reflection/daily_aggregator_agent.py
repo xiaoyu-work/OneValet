@@ -4,6 +4,7 @@ Thin @valet wrapper around ``aggregate_day`` from the memory lifecycle
 package. Scheduled once per user per local night (e.g. 00:30 local time)
 via CronService; see ``koa.builtin_agents.reflection.cron_seed``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -38,7 +39,11 @@ class DailyAggregatorAgent(StandardAgent):
         episode_memory = EpisodeMemory(momex) if momex is not None else None
         try:
             payload = await aggregate_day(
-                db, user_id, target, tz_name, episode_memory=episode_memory,
+                db,
+                user_id,
+                target,
+                tz_name,
+                episode_memory=episode_memory,
             )
         except Exception as e:
             logger.exception("daily aggregate failed for %s %s: %s", user_id, target, e)
@@ -50,4 +55,3 @@ class DailyAggregatorAgent(StandardAgent):
             message_count=(payload or {}).get("messages", {}).get("total", 0),
             summary=f"Aggregated {target.isoformat()} for user.",
         )
-

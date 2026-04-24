@@ -5,6 +5,7 @@ Triggered by CronService at Monday 03:00 local per user. Wraps
 result is fed back into the standard ``true_memory_proposals`` pipeline.
 Episodes are persisted as Momex entries with ``kind=episode``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -53,7 +54,10 @@ class WeeklyReflectorAgent(StandardAgent):
         episode_memory = EpisodeMemory(momex)
 
         reflection = await run_weekly_reflection(
-            user_id, week_end, llm_call=_llm_call, episode_memory=episode_memory,
+            user_id,
+            week_end,
+            llm_call=_llm_call,
+            episode_memory=episode_memory,
         )
         if reflection is None:
             return self.make_result(status="skipped", reason="no_data_or_llm_failed")
@@ -75,4 +79,3 @@ class WeeklyReflectorAgent(StandardAgent):
             highlight=reflection.highlight,
             episodes_written=reflection.episodes_written,
         )
-

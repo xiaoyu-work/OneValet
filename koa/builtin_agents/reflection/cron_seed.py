@@ -17,6 +17,7 @@ sensing.memory_proactive      MemoryProactiveAgent   0 9 * * *    (09:00)
 Users can later edit schedules via the /cron REST endpoints; habit_discovery
 may re-write them based on observed active hours.
 """
+
 from __future__ import annotations
 
 import logging

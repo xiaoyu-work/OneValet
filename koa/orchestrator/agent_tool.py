@@ -153,6 +153,7 @@ async def execute_agent_tool(
     if "embedder" not in enriched_hints:
         try:
             from ..memory.embedding import get_embedder
+
             embedder = get_embedder()
             if embedder is not None:
                 enriched_hints["embedder"] = embedder

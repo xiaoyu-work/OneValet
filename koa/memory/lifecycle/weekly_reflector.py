@@ -154,13 +154,16 @@ async def run_weekly_reflection(
 
 # ---------------------------------------------------------------- internals
 
+
 async def _fetch_daily_log_episodes(
     episode_memory, user_id: str, start: date, end: date
 ) -> List[Dict[str, Any]]:
     """Pull the last ~7 daily_log episodes via Momex recall."""
     try:
         items = await episode_memory.recall_recent_episodes(
-            user_id, subkind="daily_log", limit=14,
+            user_id,
+            subkind="daily_log",
+            limit=14,
         )
     except Exception as e:
         logger.error("recall daily_log episodes failed: %s", e)
@@ -177,11 +180,13 @@ async def _fetch_daily_log_episodes(
             ld = None
         if ld and (ld < start or ld > end):
             continue
-        out.append({
-            "local_date": ld.isoformat() if ld else None,
-            "text": item.get("text") or "",
-            "payload": meta.get("payload") or {},
-        })
+        out.append(
+            {
+                "local_date": ld.isoformat() if ld else None,
+                "text": item.get("text") or "",
+                "payload": meta.get("payload") or {},
+            }
+        )
     out.sort(key=lambda x: x.get("local_date") or "")
     return out
 
@@ -190,23 +195,36 @@ def _build_user_prompt(user_id: str, start: date, end: date, rows: List[Dict[str
     compact = []
     for r in rows:
         p = r.get("payload") or {}
-        compact.append({
-            "date": r.get("local_date"),
-            "text": r.get("text", "")[:500],
-            "messages": p.get("messages", {}).get("total", 0),
-            "tools": p.get("tools", {}),
-            "calendar": [e.get("title") for e in (p.get("calendar", {}) or {}).get("events", [])][:10],
-            "reminders_done": (p.get("reminders", {}) or {}).get("completed", [])[:10],
-            "health": p.get("health", {}),
-            "motion": p.get("motion", {}),
-            "state": {
-                k: v for k, v in (p.get("state") or {}).items()
-                if v is not None and k in (
-                    "sleep_minutes", "sleep_score", "steps", "activity_minutes",
-                    "stress_score", "mood", "primary_location", "flags",
-                )
-            },
-        })
+        compact.append(
+            {
+                "date": r.get("local_date"),
+                "text": r.get("text", "")[:500],
+                "messages": p.get("messages", {}).get("total", 0),
+                "tools": p.get("tools", {}),
+                "calendar": [
+                    e.get("title") for e in (p.get("calendar", {}) or {}).get("events", [])
+                ][:10],
+                "reminders_done": (p.get("reminders", {}) or {}).get("completed", [])[:10],
+                "health": p.get("health", {}),
+                "motion": p.get("motion", {}),
+                "state": {
+                    k: v
+                    for k, v in (p.get("state") or {}).items()
+                    if v is not None
+                    and k
+                    in (
+                        "sleep_minutes",
+                        "sleep_score",
+                        "steps",
+                        "activity_minutes",
+                        "stress_score",
+                        "mood",
+                        "primary_location",
+                        "flags",
+                    )
+                },
+            }
+        )
     return (
         f"Week: {start} to {end}\n"
         f"Daily activity logs (pre-aggregated, one entry per day):\n"
@@ -298,17 +316,19 @@ def _clean_facts(raw_facts: List[Any]) -> List[Dict[str, Any]]:
         key = str(f.get("fact_key", "")).strip()
         if not key:
             continue
-        out.append({
-            "operation": "upsert",
-            "namespace": ns,
-            "fact_key": key,
-            "value": f.get("value"),
-            "summary": str(f.get("summary", ""))[:300],
-            "confidence": _clamp_float(f.get("confidence", 0.5), 0.0, 1.0),
-            "source_type": "weekly_reflection",
-            "how_to_apply": str(f.get("how_to_apply", ""))[:400],
-            "why": "Inferred by weekly reflector from aggregated activity.",
-        })
+        out.append(
+            {
+                "operation": "upsert",
+                "namespace": ns,
+                "fact_key": key,
+                "value": f.get("value"),
+                "summary": str(f.get("summary", ""))[:300],
+                "confidence": _clamp_float(f.get("confidence", 0.5), 0.0, 1.0),
+                "source_type": "weekly_reflection",
+                "how_to_apply": str(f.get("how_to_apply", ""))[:400],
+                "why": "Inferred by weekly reflector from aggregated activity.",
+            }
+        )
     return out
 
 

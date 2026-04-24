@@ -513,12 +513,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             ``AgentResult`` — no LLM calls are made and no tools run.
         """
         from ..observability import bind_request_context, new_request_id, trace_span
-        from .graceful_response import generate_graceful_error
 
         metadata = metadata or {}
-        caller_idempotency_key = (
-            (metadata or {}).get("idempotency_key")
-            or (metadata or {}).get("X-Idempotency-Key")
+        caller_idempotency_key = (metadata or {}).get("idempotency_key") or (metadata or {}).get(
+            "X-Idempotency-Key"
         )
         # Bind request/tenant ContextVars so concurrent requests on the
         # same orchestrator instance don't corrupt each other's tracing.
@@ -710,9 +708,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                     intent=intent,
                     outcome="clarify",
                 )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q}
-                )
+                yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q})
                 result = await self.post_process(result, context)
                 yield AgentEvent(type=EventType.EXECUTION_END, data=result)
                 return
@@ -746,7 +742,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
             # Step 5 & 6: Build tool schemas and LLM messages in parallel
             tool_schemas_task = self._build_tool_schemas(tenant_id, domains=intent.domains)
-            messages_task = self._build_llm_messages(context, message, needs_memory=intent.needs_memory)
+            messages_task = self._build_llm_messages(
+                context, message, needs_memory=intent.needs_memory
+            )
             tool_schemas, messages = await asyncio.gather(tool_schemas_task, messages_task)
 
             # Step 5b: Inject notify_user tool for conditional cron delivery
@@ -830,7 +828,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                                 final_response = exec_data.get("final_response", "")
                             yield event
                     except _ReactLoopLLMError as retry_err:
-                        logger.error(f"[Orchestrator] Fallback model also failed: {retry_err.original}")
+                        logger.error(
+                            f"[Orchestrator] Fallback model also failed: {retry_err.original}"
+                        )
                         from .error_classifier import error_code_for_kind
 
                         yield AgentEvent(
@@ -930,11 +930,14 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
             # Step 9: Post-process
             self._audit.log_phase(
-                "post_process", {"has_proposals": bool(result.metadata.get("true_memory_proposals"))}
+                "post_process",
+                {"has_proposals": bool(result.metadata.get("true_memory_proposals"))},
             )
             result = await self.post_process(result, context)
             self._audit.end_request(
-                status=result.status.value if hasattr(result.status, "value") else str(result.status),
+                status=result.status.value
+                if hasattr(result.status, "value")
+                else str(result.status),
                 token_usage=result.metadata.get("token_usage"),
             )
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
@@ -1319,12 +1322,15 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         if not episodes and needs_memory and self.momex is not None:
             try:
                 from ..memory.lifecycle.episode_memory import EpisodeMemory
+
                 tenant_id = context.get("tenant_id", "")
                 if tenant_id and user_message:
                     episode_memory = EpisodeMemory(self.momex)
                     episodes = await asyncio.wait_for(
                         episode_memory.recall_episodes(
-                            tenant_id, user_message, limit=5,
+                            tenant_id,
+                            user_message,
+                            limit=5,
                         ),
                         timeout=3.0,
                     )
@@ -1339,12 +1345,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             lines: List[str] = []
             for ep in episodes[:5]:
                 meta = ep.get("metadata") or {}
-                date_s = (
-                    meta.get("local_date")
-                    or meta.get("start_ts")
-                    or ep.get("timestamp")
-                    or ""
-                )
+                date_s = meta.get("local_date") or meta.get("start_ts") or ep.get("timestamp") or ""
                 title = meta.get("title") or meta.get("subkind") or "(episode)"
                 summary = (ep.get("text") or ep.get("summary") or "").strip().replace("\n", " ")
                 if len(summary) > 240:
