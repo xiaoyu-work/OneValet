@@ -18,6 +18,7 @@ from .tools import (
     create_task,
     delete_task,
     manage_reminders,
+    query_local_reminders,
     query_tasks,
     remember_important_date,
     set_reminder,
@@ -36,6 +37,7 @@ You are a todo and reminder management assistant with access to task and reminde
 
 Available tools:
 - query_tasks: List or search the user's todo tasks in the resolved destination.
+- query_local_reminders: Read items **from the user's local iOS Reminders**. Use when the user likely keeps reminders only on their phone, or when the cloud list is unexpectedly empty.
 - create_task: Create a new todo task with title, optional due date and priority.
 - update_task: Mark a todo task as complete by searching for it.
 - delete_task: Delete a todo task by searching for it.
@@ -73,6 +75,7 @@ in your text response WITHOUT calling any tools.
 
     tools = (
         query_tasks,
+        query_local_reminders,
         create_task,
         update_task,
         delete_task,

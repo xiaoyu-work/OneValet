@@ -1095,3 +1095,45 @@ async def check_overdue_tasks(*, context: AgentToolContext) -> str:
     except Exception as e:
         logger.error(f"check_overdue_tasks failed: {e}", exc_info=True)
         return "Sorry, I couldn't check your tasks right now."
+
+
+@tool
+async def query_local_reminders(
+    only_open: Annotated[
+        bool, "If True, exclude reminders already marked completed. Default True."
+    ] = True,
+    max_results: Annotated[int, "Max reminders to return. Default 20."] = 20,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Read items from the user's **local iOS Reminders** (synced via the
+    Koi app).  Complements cloud todo providers by covering Reminders lists
+    that only exist on-device."""
+    db = context.context_hints.get("db") if context.context_hints else None
+    if db is None:
+        return "Local reminders are not available right now."
+
+    from .reminders_sync import pull_reminders
+
+    try:
+        rows = await pull_reminders(db, context.tenant_id)
+    except Exception as e:
+        logger.warning("query_local_reminders failed: %s", e)
+        return "Couldn't read local reminders right now."
+
+    if only_open:
+        rows = [r for r in rows if not r.get("completed_at")]
+    rows = rows[: max(1, int(max_results))]
+
+    if not rows:
+        return "No open reminders on this device."
+
+    lines = []
+    for r in rows:
+        title = r.get("title") or "(Untitled)"
+        due = r.get("due_at")
+        due_str = f" — due {due.isoformat()}" if due else ""
+        lst = r.get("list_name") or ""
+        tag = f" [{lst}]" if lst else ""
+        lines.append(f"📝 {title}{tag}{due_str}")
+    return "\n".join(lines)

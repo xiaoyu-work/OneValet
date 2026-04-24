@@ -18,6 +18,7 @@ from .tools import (
     create_event,
     delete_event,
     query_events,
+    query_local_events,
     update_event,
 )
 
@@ -33,6 +34,7 @@ You are a calendar management assistant with access to the user's calendar.
 
 Available tools:
 - query_events: Search and list calendar events by time range or keywords.
+- query_local_events: Read events **from the user's local iOS Calendar** (EventKit). Use when the user likely keeps an event only on their phone, or when query_events returns nothing unexpected.
 - create_event: Create a new calendar event (requires title and start time).
 - update_event: Update an existing event (reschedule, rename, change location).
 - delete_event: Delete calendar events matching search criteria.
@@ -61,6 +63,7 @@ ASK the user for it in your text response WITHOUT calling any tools.
 
     tools = (
         query_events,
+        query_local_events,
         create_event,
         update_event,
         delete_event,

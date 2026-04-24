@@ -967,3 +967,53 @@ async def check_upcoming_events(
     except Exception as e:
         logger.error(f"check_upcoming_events failed: {e}", exc_info=True)
         return "Sorry, I couldn't check your upcoming events right now."
+
+
+@tool
+async def query_local_events(
+    hours_ahead: Annotated[
+        int, "Window size in hours starting from now. Default 48."
+    ] = 48,
+    calendar_name: Annotated[
+        Optional[str], "Optional filter to a single local calendar name."
+    ] = None,
+    *,
+    context: AgentToolContext,
+) -> str:
+    """Read events from the user's **local iOS Calendar** (EventKit), synced
+    via the Koi app.  Complements the cloud providers (Google/iCloud) by
+    covering calendars that only exist on-device.  Returns a compact list."""
+    db = context.context_hints.get("db") if context.context_hints else None
+    if db is None:
+        return "Local calendar is not available right now."
+
+    from .eventkit_adapter import fetch_upcoming_local
+
+    try:
+        calendars = [calendar_name] if calendar_name else None
+        events = await fetch_upcoming_local(
+            db,
+            context.tenant_id,
+            hours_ahead=max(1, int(hours_ahead)),
+            calendars=calendars,
+        )
+    except Exception as e:
+        logger.warning("query_local_events failed: %s", e)
+        return "Couldn't read local calendar right now."
+
+    if not events:
+        return f"No local calendar events in the next {hours_ahead} hours."
+
+    lines = []
+    for e in events[:15]:
+        title = e.get("title") or "(Untitled)"
+        start = e.get("start") or ""
+        cal = e.get("calendar") or ""
+        loc = e.get("location") or ""
+        tag = f" [{cal}]" if cal else ""
+        line = f"📅 {title}{tag} — {start}"
+        if loc:
+            line += f"\n   📍 {loc}"
+        lines.append(line)
+    return "\n".join(lines)
+
