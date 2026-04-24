@@ -33,6 +33,22 @@ embedding:
   # api_version: '2024-02-01'           # Azure only
 
 # ---------------------------------------------------------------------------
+# Image Generation (optional, operator-provided)
+# ---------------------------------------------------------------------------
+# When set, the operator provides one set of image generation credentials
+# shared by all tenants (the "app provides the feature" model). If omitted,
+# the image agent falls back to per-tenant CredentialStore entries (BYOK).
+# Per-tenant entries always take precedence over this global config.
+#
+# image:
+#   provider: azure                      # openai | azure | gemini | seedream
+#   api_key: ${AZURE_OPENAI_API_KEY}
+#   endpoint: ${AZURE_OPENAI_ENDPOINT}   # azure / seedream
+#   deployment: gpt-image-2              # azure only (name of Azure deployment)
+#   api_version: '2024-02-01'            # azure only
+#   # model: gpt-image-1                 # openai / gemini / seedream
+
+# ---------------------------------------------------------------------------
 # System Prompt (optional)
 # ---------------------------------------------------------------------------
 # Customize the assistant personality.

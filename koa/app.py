@@ -149,6 +149,12 @@ class Koa:
 
         AccountResolver.set_default_store(self._credential_store)
 
+        # Register operator-provided image provider config (if any). Called
+        # unconditionally so that reloading with `image:` removed clears stale state.
+        from .providers.image.resolver import ImageProviderResolver
+
+        ImageProviderResolver.set_global_config(cfg.get("image"))
+
         # 4. MomexMemory
         from .memory.momex import MomexMemory
 

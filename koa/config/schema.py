@@ -11,6 +11,19 @@ logger = logging.getLogger(__name__)
 
 _VALID_PROVIDERS = {"openai", "anthropic", "azure", "dashscope", "gemini", "ollama"}
 
+# Providers supported by the image generation subsystem. Intentionally distinct
+# from the LLM provider set (no anthropic/dashscope/ollama for image yet).
+_VALID_IMAGE_PROVIDERS = {"openai", "azure", "gemini", "seedream"}
+
+# Per-provider required fields for the optional top-level `image:` section.
+# `api_key` is always required when `image` is present.
+_IMAGE_PROVIDER_REQUIRED_FIELDS = {
+    "azure": ("endpoint",),
+    "seedream": (),  # endpoint has a sane default
+    "openai": (),
+    "gemini": (),
+}
+
 
 class ConfigValidationError(Exception):
     """Raised when config validation fails."""
@@ -47,6 +60,26 @@ def validate_config(cfg: Dict[str, Any]) -> List[str]:
             f"'database' must be a PostgreSQL connection URL "
             f"(starts with postgresql://), got '{db[:30]}...'"
         )
+
+    # Image (optional, operator-provided global config for image generation)
+    image = cfg.get("image")
+    if image is not None:
+        if not isinstance(image, dict):
+            errors.append("'image' must be a mapping")
+        else:
+            provider = (image.get("provider") or "").lower()
+            if not provider:
+                errors.append("'image.provider' is required when 'image' section is set")
+            elif provider not in _VALID_IMAGE_PROVIDERS:
+                errors.append(
+                    f"'image.provider' must be one of {sorted(_VALID_IMAGE_PROVIDERS)}, "
+                    f"got '{image.get('provider')}'"
+                )
+            if not image.get("api_key"):
+                errors.append("'image.api_key' is required when 'image' section is set")
+            for field in _IMAGE_PROVIDER_REQUIRED_FIELDS.get(provider, ()):
+                if not image.get(field):
+                    errors.append(f"'image.{field}' is required for provider '{provider}'")
 
     # Model routing (optional)
     routing = cfg.get("model_routing")
