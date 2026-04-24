@@ -134,6 +134,24 @@ async def execute_agent_tool(
     if supabase_storage and "cloud_storage_provider" not in enriched_hints:
         enriched_hints["cloud_storage_provider"] = supabase_storage.for_tenant(tenant_id)
 
+    # Database pool (for agents that query koi-backend tables directly —
+    # SensingAgents, reflection agents, entity resolver, etc).
+    db = getattr(orchestrator, "database", None)
+    if db is not None and "db" not in enriched_hints:
+        enriched_hints["db"] = db
+
+    # Shared embedder for pgvector kNN (episodes, entities).  Singleton;
+    # returns None if no API key configured, letting callers fall back to
+    # keyword search transparently.
+    if "embedder" not in enriched_hints:
+        try:
+            from ..memory.embedding import get_embedder
+            embedder = get_embedder()
+            if embedder is not None:
+                enriched_hints["embedder"] = embedder
+        except Exception as e:
+            logger.debug("embedder not available: %s", e)
+
     # Pass structured handoff via context_hints
     enriched_hints["session_working_memory"] = handoff.session_memory
     enriched_hints["handoff"] = {

@@ -1312,6 +1312,54 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
             except Exception as e:
                 logger.warning(f"Failed to auto-recall memories: {e}")
 
+        # Episode prefetch.
+        # Two paths:
+        #   (a) Upstream (koi-backend worker) already populated
+        #       `context["recalled_episodes"]` before calling us — we just
+        #       render.  This is the preferred path for deployments where
+        #       orchestrator doesn't own the DB pool.
+        #   (b) Orchestrator has both a db pool and an embedder wired — in
+        #       that case we can do the kNN ourselves, keeping the engine
+        #       self-contained.
+        episodes = context.get("recalled_episodes") or []
+        if not episodes and needs_memory and self.database is not None:
+            try:
+                from ..memory.lifecycle.episode_store import find_similar
+                from ..memory.embedding import get_embedder
+                tenant_id = context.get("tenant_id", "")
+                if tenant_id and user_message:
+                    episodes = await asyncio.wait_for(
+                        find_similar(
+                            self.database,
+                            tenant_id,
+                            user_message,
+                            k=5,
+                            embedder=get_embedder(),
+                        ),
+                        timeout=3.0,
+                    )
+                    if episodes:
+                        context["recalled_episodes"] = episodes
+            except asyncio.TimeoutError:
+                logger.debug("Episode prefetch timed out (3s), skipping")
+            except Exception as e:
+                logger.debug("Episode prefetch failed: %s", e)
+
+        if episodes:
+            lines: List[str] = []
+            for ep in episodes[:5]:
+                date_s = ep.get("local_date") or ep.get("started_at") or ""
+                title = ep.get("title") or "(untitled)"
+                summary = (ep.get("summary") or "").strip().replace("\n", " ")
+                if len(summary) > 240:
+                    summary = summary[:237] + "..."
+                lines.append(f"- [{date_s}] {title}: {summary}")
+            if lines:
+                system_parts.append(
+                    "\n[Recalled Episodes — past events relevant to the user's message]\n"
+                    + "\n".join(lines)
+                )
+
         messages.append(
             {
                 "role": "system",
