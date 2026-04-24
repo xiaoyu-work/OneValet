@@ -201,3 +201,19 @@ async def get_cron_job_runs(job_id: str, limit: int = 20):
     service = _require_cron_service(app)
     runs = await service.get_runs(job_id, limit=limit)
     return [r.to_dict() for r in runs]
+
+
+@router.post("/api/cron/seed-sensing", dependencies=[Depends(verify_api_key)])
+async def seed_sensing_cron(tenant_id: str, tz: str | None = None):
+    """Idempotently seed per-user sensing/reflection cron jobs.
+
+    Called by koi-backend on user registration (and optionally reconcilers).
+    Returns the list of job names that were newly created — empty if the
+    user already had all three seeds.
+    """
+    from ...builtin_agents.reflection.cron_seed import ensure_sensing_cron_jobs
+
+    app = require_app()
+    service = _require_cron_service(app)
+    created = await ensure_sensing_cron_jobs(service, tenant_id, tz=tz)
+    return {"tenant_id": tenant_id, "created": created}
