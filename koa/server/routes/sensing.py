@@ -436,3 +436,31 @@ async def health_recent_state(user_id: str, days: int = 7):
         "days": days,
         "state": [{**dict(r), "local_date": r["local_date"].isoformat()} for r in rows],
     }
+
+
+# ---------------------------------------------------------------------------
+# Calendar sync trigger (manual/backfill)
+# ---------------------------------------------------------------------------
+
+
+class CalendarSyncReq(BaseModel):
+    user_id: str = Field(..., description="Tenant id whose bound calendars should be synced.")
+
+
+@router.post("/api/sensing/calendar/sync", dependencies=[Depends(verify_api_key)])
+async def trigger_calendar_sync(req: CalendarSyncReq) -> Dict[str, Any]:
+    """Run a one-shot CalendarSync pass for a single tenant.
+
+    Useful for first-time backfill, debugging, or letting the iOS client
+    request an immediate refresh after binding a new account. The daily
+    background loop in CalendarSyncService runs independently.
+    """
+    app = require_app()
+    svc = getattr(app, "calendar_sync", None)
+    if svc is None:
+        raise KoaError(
+            E.SERVICE_UNAVAILABLE,
+            "CalendarSyncService not available",
+            details={"service": "calendar_sync"},
+        )
+    return await svc.sync_tenant(req.user_id)

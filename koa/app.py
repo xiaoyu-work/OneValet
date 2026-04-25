@@ -106,6 +106,7 @@ class Koa:
         self._model_router = None
         self._cron_service = None
         self._shipment_poller = None
+        self._calendar_sync = None
         self._mcp_manager = None
 
     async def _ensure_initialized(self) -> None:
@@ -391,6 +392,20 @@ class Koa:
         # self._shipment_poller = ShipmentPoller(db=self._database, notification=callback_notification)
         # await self._shipment_poller.start()
 
+        # CalendarSyncService — daily mirror of bound calendar accounts (Google,
+        # Outlook, ...) into tenant_default.local_calendar_events with iCalUID
+        # dedup, so the local CalendarAgent can answer schedule questions.
+        try:
+            from .services.calendar_sync import CalendarSyncService
+
+            self._calendar_sync = CalendarSyncService(
+                db=self._database,
+                credential_store=self._credential_store,
+            )
+            await self._calendar_sync.start()
+        except Exception as e:
+            logger.warning(f"CalendarSyncService failed to start: {e}")
+
         # Register executors with TriggerEngine
         orchestrator_executor = OrchestratorExecutor(self._orchestrator)
         self._trigger_engine.register_executor("orchestrator", orchestrator_executor)
@@ -667,6 +682,11 @@ class Koa:
         return self._momex
 
     @property
+    def calendar_sync(self):
+        """Access the CalendarSyncService (may be None before initialization)."""
+        return self._calendar_sync
+
+    @property
     def config(self) -> dict:
         """Return a copy of the raw configuration dict."""
         return dict(self._config)
@@ -678,6 +698,8 @@ class Koa:
         try:
             if self._shipment_poller:
                 await self._shipment_poller.stop()
+            if self._calendar_sync:
+                await self._calendar_sync.stop()
             if self._cron_service:
                 await self._cron_service.stop()
             if self._mcp_manager:
@@ -701,6 +723,7 @@ class Koa:
             self._model_router = None
             self._cron_service = None
             self._shipment_poller = None
+            self._calendar_sync = None
             self._mcp_manager = None
             logger.info("Koa shut down")
 
