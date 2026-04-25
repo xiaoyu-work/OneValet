@@ -29,7 +29,7 @@ async def fetch_upcoming_local(
     now = datetime.now(timezone.utc)
     until = now + timedelta(hours=hours_ahead)
     q = """SELECT event_id, title, starts_at, ends_at, location, calendar_name, all_day
-           FROM local_calendar_events
+           FROM tenant_default.local_calendar_events
            WHERE user_id = $1 AND starts_at <= $3 AND ends_at >= $2"""
     args: List[Any] = [user_id, now, until]
     if calendars:

@@ -143,7 +143,7 @@ async def _select_candidate(
     if db is not None:
         try:
             rows = await db.fetch(
-                """SELECT flags FROM user_state
+                """SELECT flags FROM tenant_default.user_state
                    WHERE user_id = $1 AND local_date >= $2 AND local_date <= $3
                    ORDER BY local_date DESC""",
                 user_id,

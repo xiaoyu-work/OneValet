@@ -28,7 +28,7 @@ class MotionAgent(SensingAgent):
     async def analyze(self, db: Any, user_id: str, local_date: date, tz_name: str) -> SensingResult:
         try:
             row = await db.fetchrow(
-                """SELECT COUNT(*) AS n FROM motion_segments
+                """SELECT COUNT(*) AS n FROM tenant_default.motion_segments
                    WHERE user_id = $1 AND started_at::date = $2""",
                 user_id, local_date,
             )

@@ -136,7 +136,7 @@ async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) ->
 
     try:
         local = await db.fetch(
-            """SELECT title, starts_at FROM local_calendar_events
+            """SELECT title, starts_at FROM tenant_default.local_calendar_events
                WHERE user_id = $1 AND starts_at >= $2 AND starts_at < $3
                ORDER BY starts_at LIMIT 50""",
             user_id,
@@ -159,7 +159,7 @@ async def _calendar_summary(db, user_id: str, start: datetime, end: datetime) ->
 async def _reminder_summary(db, user_id: str, start: datetime, end: datetime) -> Dict[str, Any]:
     try:
         rows = await db.fetch(
-            """SELECT title, completed FROM local_reminders
+            """SELECT title, completed FROM tenant_default.local_reminders
                WHERE user_id = $1 AND (
                    (completed AND completed_at >= $2 AND completed_at < $3)
                    OR (due_at >= $2 AND due_at < $3)
@@ -184,7 +184,7 @@ async def _health_summary(db, user_id: str, start: datetime, end: datetime) -> D
                       COUNT(*) AS c,
                       COALESCE(SUM(value), 0) AS total,
                       AVG(value) AS avg
-               FROM health_samples
+               FROM tenant_default.health_samples
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
                GROUP BY type""",
             user_id,
@@ -209,7 +209,7 @@ async def _motion_summary(db, user_id: str, start: datetime, end: datetime) -> D
         rows = await db.fetch(
             """SELECT activity,
                       SUM(EXTRACT(EPOCH FROM (ended_at - started_at))) AS seconds
-               FROM motion_segments
+               FROM tenant_default.motion_segments
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3
                GROUP BY activity""",
             user_id,
@@ -227,7 +227,7 @@ async def _state_summary(db, user_id: str, local_date: date) -> Dict[str, Any]:
         row = await db.fetchrow(
             """SELECT sleep_minutes, sleep_score, steps, activity_minutes,
                       stress_score, mood, primary_location, flags, source_data
-               FROM user_state WHERE user_id = $1 AND local_date = $2""",
+               FROM tenant_default.user_state WHERE user_id = $1 AND local_date = $2""",
             user_id,
             local_date,
         )

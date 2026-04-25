@@ -23,7 +23,7 @@ async def pull_reminders(
     """Return local reminders modified since ``since`` (or all if None)."""
     q = """SELECT reminder_id, title, notes, due_at, completed_at, list_name,
                   priority, updated_at
-           FROM local_reminders
+           FROM tenant_default.local_reminders
            WHERE user_id = $1"""
     args: List[Any] = [user_id]
     if since is not None:

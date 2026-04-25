@@ -351,7 +351,7 @@ async def health_daily_summary(
 
     rows = await db.fetch(
         """SELECT type, value, started_at, ended_at
-           FROM health_samples
+           FROM tenant_default.health_samples
            WHERE user_id = $1 AND started_at >= $2 AND started_at < $3""",
         user_id,
         start,
@@ -396,7 +396,7 @@ async def health_daily_summary(
 
     try:
         st = await db.fetchrow(
-            "SELECT mood FROM user_state WHERE user_id = $1 AND local_date = $2",
+            "SELECT mood FROM tenant_default.user_state WHERE user_id = $1 AND local_date = $2",
             user_id,
             d,
         )
@@ -422,7 +422,7 @@ async def health_recent_state(user_id: str, days: int = 7):
             """SELECT local_date, sleep_minutes, sleep_score, hrv_ms, resting_hr,
                       steps, activity_minutes, stress_score, mood, primary_location,
                       focus_mode, flags
-               FROM user_state
+               FROM tenant_default.user_state
                WHERE user_id = $1 AND local_date >= $2 AND local_date <= $3
                ORDER BY local_date""",
             user_id,

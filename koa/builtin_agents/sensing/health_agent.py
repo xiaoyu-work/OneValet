@@ -144,7 +144,7 @@ async def _fetch_samples(db, user_id: str, start_utc: datetime, end_utc: datetim
     try:
         rows = await db.fetch(
             """SELECT type, started_at, ended_at, value, unit, metadata
-               FROM health_samples
+               FROM tenant_default.health_samples
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3""",
             user_id, start_utc, end_utc,
         )
@@ -157,7 +157,7 @@ async def _fetch_samples(db, user_id: str, start_utc: datetime, end_utc: datetim
 async def _fetch_baselines(db, user_id: str, local_date: date) -> Dict[str, Any]:
     try:
         rows = await db.fetch(
-            """SELECT resting_hr, hrv_ms FROM user_state
+            """SELECT resting_hr, hrv_ms FROM tenant_default.user_state
                WHERE user_id = $1 AND local_date < $2
                ORDER BY local_date DESC LIMIT 14""",
             user_id, local_date,
@@ -176,7 +176,7 @@ async def _fetch_baselines(db, user_id: str, local_date: date) -> Dict[str, Any]
 async def _count_recent_flag(db, user_id: str, local_date: date, flag: str, window_days: int) -> int:
     try:
         row = await db.fetchrow(
-            """SELECT COUNT(*) AS c FROM user_state
+            """SELECT COUNT(*) AS c FROM tenant_default.user_state
                WHERE user_id = $1
                  AND local_date >= $2 AND local_date <= $3
                  AND flags @> ARRAY[$4]::text[]""",

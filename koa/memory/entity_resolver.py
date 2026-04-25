@@ -58,7 +58,7 @@ async def resolve_person(
     try:
         contact_rows = await db.fetch(
             """SELECT id, display_name, phones, emails
-               FROM device_contacts
+               FROM tenant_default.device_contacts
                WHERE user_id = $1 AND display_name ILIKE $2
                ORDER BY length(display_name) ASC
                LIMIT $3""",
