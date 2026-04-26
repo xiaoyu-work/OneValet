@@ -149,16 +149,28 @@ class CalendarSyncService:
                 )
                 continue
 
-            for creds in creds_list or []:
+            for entry in creds_list or []:
+                # CredentialStore.list returns {service, account_name, credentials, ...}.
+                # Unwrap to the inner provider credentials dict (which has access_token etc.).
+                inner = entry.get("credentials") or {}
+                if not isinstance(inner, dict) or not inner.get("access_token"):
+                    logger.debug(
+                        "CalendarSync: skipping %s/%s (no access_token)",
+                        service,
+                        entry.get("account_name"),
+                    )
+                    continue
+                inner = dict(inner)
+                inner.setdefault("account_name", entry.get("account_name") or "primary")
                 try:
-                    n = await self._sync_account(tenant_id, service, creds)
+                    n = await self._sync_account(tenant_id, service, inner)
                     accounts_synced += 1
                     events_synced += n
                 except Exception as e:
                     logger.error(
                         "CalendarSync: account %s/%s for %s failed: %s",
                         service,
-                        creds.get("account_name"),
+                        inner.get("account_name"),
                         tenant_id,
                         e,
                         exc_info=True,
