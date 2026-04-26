@@ -13,6 +13,7 @@ Usage:
     result = await app.chat("user1", "What's the weather in Tokyo?")
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -82,6 +83,11 @@ class Koa:
     def __init__(self, config: str):
         self._config = _load_config(config)
         self._initialized = False
+        # Guards _ensure_initialized() against concurrent re-entry on cold start.
+        # Without this, parallel requests (e.g. Pond dashboard prefetch fires ~12 GETs at once)
+        # all see _initialized=False, race past the early return, and run init multiple times —
+        # producing "Database not initialized" 500s and "Overwriting LLM client" warnings.
+        self._init_lock: Optional[asyncio.Lock] = None
 
         # Validate config schema
         errors = validate_config(self._config)
@@ -110,9 +116,26 @@ class Koa:
         self._mcp_manager = None
 
     async def _ensure_initialized(self) -> None:
-        """Lazy initialization — runs once on first chat()/stream() call."""
+        """Lazy initialization — runs once on first chat()/stream() call.
+
+        Uses double-checked locking so concurrent callers (e.g. dashboard prefetch
+        firing many requests in parallel) all wait for the single in-flight init
+        rather than racing through it. Lock is created lazily because Koa() may
+        be constructed outside an event loop.
+        """
         if self._initialized:
             return
+
+        if self._init_lock is None:
+            self._init_lock = asyncio.Lock()
+
+        async with self._init_lock:
+            if self._initialized:
+                return
+            await self._do_initialize()
+
+    async def _do_initialize(self) -> None:
+        """Run the actual initialization steps. Caller must hold _init_lock."""
 
         cfg = self._config
         llm_cfg = cfg["llm"]

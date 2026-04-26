@@ -2,6 +2,7 @@
 
 import logging
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request, Security
@@ -201,9 +202,43 @@ def get_app_instance() -> Optional[Koa]:
 # --- FastAPI app creation (after all helpers are defined to avoid circular imports) ---
 
 
+def _eager_load_app() -> Optional[Koa]:
+    """Load Koa eagerly at startup. Returns the instance or None if not configured."""
+    if _app is None:
+        _try_load_app()
+    return _app
+
+
 def _create_api() -> FastAPI:
     """Create and configure the FastAPI app with routes."""
-    _api = FastAPI(title="Koa", version="0.1.1")
+
+    @asynccontextmanager
+    async def lifespan(_api_app: FastAPI):
+        """Eagerly initialize Koa at startup so the first request doesn't pay
+        the cold-start cost (DB pool, LLM clients, orchestrator, agent registry,
+        background services). Without this, the ~12 parallel dashboard prefetch
+        requests fired after a deploy all queue behind a single lazy init and
+        some race past it, producing 500s.
+        """
+        instance = _eager_load_app()
+        if instance is not None:
+            try:
+                await instance._ensure_initialized()
+                logger.info("Koa eagerly initialized at startup")
+            except Exception as e:
+                # Don't crash the server — fall back to lazy init on first request.
+                logger.warning(f"Eager init failed, will retry lazily: {e}")
+        try:
+            yield
+        finally:
+            shutdown_target = globals().get("_app")
+            if shutdown_target is not None:
+                try:
+                    await shutdown_target.shutdown()
+                except Exception as e:
+                    logger.warning(f"Error during app shutdown: {e}")
+
+    _api = FastAPI(title="Koa", version="0.1.1", lifespan=lifespan)
 
     # Issue #2: Configurable CORS origins from env var
     allowed_origins_str = os.getenv(
