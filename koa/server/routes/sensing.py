@@ -250,8 +250,8 @@ async def ingest_eventkit(req: EventKitIngest) -> Dict[str, Any]:
             """
             INSERT INTO tenant_default.local_calendar_events
                 (user_id, event_id, calendar_name, title, starts_at, ends_at,
-                 all_day, location, notes, attendees, metadata, updated_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb, NOW())
+                 all_day, location, notes, attendees, metadata, source, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,'eventkit', NOW())
             ON CONFLICT (user_id, event_id) DO UPDATE SET
                 calendar_name = EXCLUDED.calendar_name,
                 title = EXCLUDED.title,
@@ -262,6 +262,7 @@ async def ingest_eventkit(req: EventKitIngest) -> Dict[str, Any]:
                 notes = EXCLUDED.notes,
                 attendees = EXCLUDED.attendees,
                 metadata = EXCLUDED.metadata,
+                source = 'eventkit',
                 updated_at = NOW()
             """,
             req.user_id,

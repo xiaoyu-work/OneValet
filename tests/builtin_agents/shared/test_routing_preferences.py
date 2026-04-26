@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -11,12 +11,10 @@ from koa.builtin_agents.shared.routing_preferences import (
 from koa.models import AgentToolContext
 
 
-class DummyClient:
-    def __init__(self, preference=None):
-        self.preference = preference
-
-    async def get_routing_preference(self, tenant_id, surface):
-        return self.preference
+def _make_db(preference_row=None):
+    db = AsyncMock()
+    db.fetchrow.return_value = preference_row
+    return db
 
 
 class TestResolveSurfaceTarget:
@@ -25,12 +23,7 @@ class TestResolveSurfaceTarget:
         resolved = await resolve_surface_target(
             tenant_id="user-1",
             surface="calendar",
-            backend_client=DummyClient(
-                {
-                    "default_provider": "local",
-                    "default_account": None,
-                }
-            ),
+            db=_make_db({"default_provider": "local", "default_account": None}),
             explicit_provider="google",
             explicit_account="primary",
         )
@@ -47,12 +40,7 @@ class TestResolveSurfaceTarget:
         resolved = await resolve_surface_target(
             tenant_id="user-1",
             surface="todo",
-            backend_client=DummyClient(
-                {
-                    "default_provider": "google",
-                    "default_account": "work",
-                }
-            ),
+            db=_make_db({"default_provider": "google", "default_account": "work"}),
         )
 
         assert resolved == ResolvedSurfaceTarget(
@@ -67,12 +55,7 @@ class TestResolveSurfaceTarget:
         resolved = await resolve_surface_target(
             tenant_id="user-1",
             surface="todo",
-            backend_client=DummyClient(
-                {
-                    "default_provider": "google",
-                    "default_account": "primary",
-                }
-            ),
+            db=_make_db({"default_provider": "google", "default_account": "primary"}),
             explicit_account="work",
         )
 
@@ -85,11 +68,10 @@ class TestResolveSurfaceTarget:
 
     @pytest.mark.asyncio
     async def test_explicit_account_no_provider_no_preference_falls_back_to_local(self):
-        """explicit_account set, no explicit_provider, preference is None → local + explicit_account."""
         resolved = await resolve_surface_target(
             tenant_id="user-1",
             surface="calendar",
-            backend_client=DummyClient(None),
+            db=_make_db(None),
             explicit_account="work",
         )
 
@@ -105,7 +87,7 @@ class TestResolveSurfaceTarget:
         resolved = await resolve_surface_target(
             tenant_id="user-1",
             surface="reminder",
-            backend_client=DummyClient(None),
+            db=_make_db(None),
         )
 
         assert resolved == ResolvedSurfaceTarget(
@@ -115,41 +97,59 @@ class TestResolveSurfaceTarget:
             source="default",
         )
 
+    @pytest.mark.asyncio
+    async def test_no_db_falls_back_to_local_default(self):
+        """If db is unavailable, resolver shouldn't crash — fall back to local."""
+        resolved = await resolve_surface_target(
+            tenant_id="user-1",
+            surface="calendar",
+            db=None,
+        )
+
+        assert resolved == ResolvedSurfaceTarget(
+            surface="calendar",
+            provider="local",
+            account=None,
+            source="default",
+        )
+
 
 class TestSetRoutingPreferenceTool:
     @pytest.mark.asyncio
-    async def test_calls_backend_client_from_context(self):
-        ctx = AgentToolContext(
-            tenant_id="user-1",
-            metadata={"koiai_url": "https://koiai.example", "service_key": "svc-key"},
-        )
-        backend_client = AsyncMock()
-        backend_client.set_routing_preference.return_value = {
-            "surface": "calendar",
+    async def test_upserts_preference_via_db_from_context_hints(self):
+        db = AsyncMock()
+        db.fetchrow.return_value = {
             "default_provider": "google",
             "default_account": "primary",
         }
-
-        with patch(
-            "koa.builtin_agents.shared.routing_preferences.LocalBackendClient.from_context",
-            return_value=backend_client,
-        ):
-            result = await set_routing_preference.executor(
-                {
-                    "surface": "calendar",
-                    "provider": "google",
-                    "account": "primary",
-                },
-                ctx,
-            )
-
-        backend_client.set_routing_preference.assert_awaited_once_with(
-            "user-1",
-            "calendar",
-            "google",
-            "primary",
+        ctx = AgentToolContext(
+            tenant_id="user-1",
+            context_hints={"db": db},
         )
+
+        result = await set_routing_preference.executor(
+            {
+                "surface": "calendar",
+                "provider": "google",
+                "account": "primary",
+            },
+            ctx,
+        )
+
+        db.fetchrow.assert_awaited_once()
+        call_args = db.fetchrow.call_args
+        # positional args: sql, tenant_id, surface, provider, account
+        assert call_args.args[1:] == ("user-1", "calendar", "google", "primary")
         assert result == "Okay — I'll use google by default for calendar."
+
+    @pytest.mark.asyncio
+    async def test_returns_friendly_error_when_db_missing(self):
+        ctx = AgentToolContext(tenant_id="user-1", context_hints={})
+        result = await set_routing_preference.executor(
+            {"surface": "calendar", "provider": "google"},
+            ctx,
+        )
+        assert "couldn't save" in result.lower()
 
 
 class TestWrapRoutingError:

@@ -39,11 +39,12 @@ async def _resolve_calendar_provider(
     from koa.providers.calendar.resolver import CalendarAccountResolver
 
     backend_client = LocalBackendClient.from_context(context)
+    db = (context.context_hints or {}).get("db")
     try:
         target = await resolve_surface_target(
             tenant_id=context.tenant_id,
             surface="calendar",
-            backend_client=backend_client,
+            db=db,
             explicit_provider=target_provider,
             explicit_account=target_account,
         )
@@ -53,8 +54,13 @@ async def _resolve_calendar_provider(
         return None, None, wrap_routing_error("calendar", target_provider or "local", error_reason)
 
     if target.provider == "local":
+        if db is None:
+            logger.error("LocalCalendarProvider requested but no db in context_hints")
+            return None, None, wrap_routing_error(
+                "calendar", "local", "read_failed" if operation == "read" else "write_failed"
+            )
         return (
-            LocalCalendarProvider(context.tenant_id, backend_client),
+            LocalCalendarProvider(context.tenant_id, db),
             {"provider": "local", "account_name": "local"},
             None,
         )

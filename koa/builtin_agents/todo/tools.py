@@ -45,12 +45,13 @@ async def _resolve_todo_provider(
     from koa.providers.todo.resolver import TodoAccountResolver
 
     backend_client = LocalBackendClient.from_context(context)
+    db = (context.context_hints or {}).get("db")
 
     try:
         target = await resolve_surface_target(
             tenant_id=context.tenant_id,
             surface="todo",
-            backend_client=backend_client,
+            db=db,
             explicit_provider=target_provider,
             explicit_account=target_account,
         )
