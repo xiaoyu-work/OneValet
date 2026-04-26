@@ -359,3 +359,31 @@ async def delete_event(
         event_id,
     )
     return {"deleted": True}
+
+
+# ── Trigger calendar sync ────────────────────────────────────────────────
+
+
+class CalendarSyncReq(BaseModel):
+    tenant_id: str
+
+
+@router.post(
+    "/api/internal/calendar/sync",
+    dependencies=[Depends(verify_service_key)],
+)
+async def trigger_calendar_sync(req: CalendarSyncReq) -> Dict[str, Any]:
+    """Run a one-shot CalendarSync pass for ``tenant_id``.
+
+    Service-key-protected sibling to ``/api/sensing/calendar/sync``
+    (which uses the weaker X-API-Key auth). Called by koi-backend's
+    Google/Outlook push-notification webhooks: instead of writing
+    events into a now-defunct Supabase table, the gateway just nudges
+    koa to re-poll the source calendar so its
+    ``local_calendar_events`` table stays current.
+    """
+    app = require_app()
+    svc = getattr(app, "calendar_sync", None)
+    if svc is None:
+        raise HTTPException(503, "CalendarSyncService not available")
+    return await svc.sync_tenant(req.tenant_id)
