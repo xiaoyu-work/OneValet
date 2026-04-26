@@ -73,6 +73,11 @@ def _row_to_event(row: dict) -> Dict[str, Any]:
         "notes": row.get("notes"),
         "attendees": json.loads(row["attendees"]) if row.get("attendees") else None,
         "metadata": json.loads(row["metadata"]) if row.get("metadata") else None,
+        "color": row.get("color"),
+        "recurrence_rule": row.get("recurrence_rule"),
+        "reminder_minutes": list(row["reminder_minutes"])
+        if row.get("reminder_minutes") is not None
+        else None,
         "source": row.get("source", "local"),
         "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
     }
@@ -94,7 +99,9 @@ async def list_events(
 
     sql = [
         "SELECT user_id, event_id, calendar_name, title, starts_at, ends_at,",
-        "       all_day, location, notes, attendees, metadata, source, updated_at",
+        "       all_day, location, notes, attendees, metadata,",
+        "       color, recurrence_rule, reminder_minutes,",
+        "       source, updated_at",
         "FROM tenant_default.local_calendar_events",
         "WHERE user_id = $1",
     ]
@@ -134,6 +141,9 @@ class EventCreate(BaseModel):
     calendar_name: Optional[str] = None
     attendees: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+    color: Optional[str] = None
+    recurrence_rule: Optional[str] = None
+    reminder_minutes: Optional[List[int]] = None
     event_id: Optional[str] = Field(
         None,
         description="If omitted, a 'local:<uuid>' id is generated. Always written with source='local'.",
@@ -157,8 +167,11 @@ async def create_event(req: EventCreate) -> Dict[str, Any]:
         """
         INSERT INTO tenant_default.local_calendar_events
             (user_id, event_id, calendar_name, title, starts_at, ends_at,
-             all_day, location, notes, attendees, metadata, source, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,'local',NOW())
+             all_day, location, notes, attendees, metadata,
+             color, recurrence_rule, reminder_minutes,
+             source, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,
+                $12,$13,$14,'local',NOW())
         ON CONFLICT (user_id, event_id) DO UPDATE SET
             calendar_name = EXCLUDED.calendar_name,
             title = EXCLUDED.title,
@@ -169,6 +182,9 @@ async def create_event(req: EventCreate) -> Dict[str, Any]:
             notes = EXCLUDED.notes,
             attendees = EXCLUDED.attendees,
             metadata = EXCLUDED.metadata,
+            color = EXCLUDED.color,
+            recurrence_rule = EXCLUDED.recurrence_rule,
+            reminder_minutes = EXCLUDED.reminder_minutes,
             source = 'local',
             updated_at = NOW()
         """,
@@ -183,12 +199,17 @@ async def create_event(req: EventCreate) -> Dict[str, Any]:
         req.description,
         json.dumps(req.attendees) if req.attendees is not None else None,
         json.dumps(req.metadata) if req.metadata is not None else None,
+        req.color,
+        req.recurrence_rule,
+        req.reminder_minutes,
     )
 
     row = await db.fetchrow(
         """
         SELECT user_id, event_id, calendar_name, title, starts_at, ends_at,
-               all_day, location, notes, attendees, metadata, source, updated_at
+               all_day, location, notes, attendees, metadata,
+               color, recurrence_rule, reminder_minutes,
+               source, updated_at
         FROM tenant_default.local_calendar_events
         WHERE user_id = $1 AND event_id = $2
         """,
@@ -212,6 +233,9 @@ class EventUpdate(BaseModel):
     calendar_name: Optional[str] = None
     attendees: Optional[List[Dict[str, Any]]] = None
     metadata: Optional[Dict[str, Any]] = None
+    color: Optional[str] = None
+    recurrence_rule: Optional[str] = None
+    reminder_minutes: Optional[List[int]] = None
 
 
 @router.patch(
@@ -263,12 +287,20 @@ async def update_event(event_id: str, req: EventUpdate) -> Dict[str, Any]:
     if req.metadata is not None:
         add("metadata", json.dumps(req.metadata))
         sets[-1] = sets[-1] + "::jsonb"
+    if req.color is not None:
+        add("color", req.color)
+    if req.recurrence_rule is not None:
+        add("recurrence_rule", req.recurrence_rule)
+    if req.reminder_minutes is not None:
+        add("reminder_minutes", req.reminder_minutes)
 
     if not sets:
         # Nothing to change — just return current row.
         row = await db.fetchrow(
             "SELECT user_id, event_id, calendar_name, title, starts_at, ends_at, "
-            "all_day, location, notes, attendees, metadata, source, updated_at "
+            "all_day, location, notes, attendees, metadata, "
+            "color, recurrence_rule, reminder_minutes, "
+            "source, updated_at "
             "FROM tenant_default.local_calendar_events "
             "WHERE user_id = $1 AND event_id = $2",
             req.tenant_id,
@@ -284,7 +316,9 @@ async def update_event(event_id: str, req: EventUpdate) -> Dict[str, Any]:
         + ", ".join(sets)
         + f" WHERE user_id = ${len(args) - 1} AND event_id = ${len(args)} "
         "RETURNING user_id, event_id, calendar_name, title, starts_at, ends_at, "
-        "all_day, location, notes, attendees, metadata, source, updated_at"
+        "all_day, location, notes, attendees, metadata, "
+        "color, recurrence_rule, reminder_minutes, "
+        "source, updated_at"
     )
     row = await db.fetchrow(sql, *args)
     return {"updated": True, "event": _row_to_event(dict(row))}
