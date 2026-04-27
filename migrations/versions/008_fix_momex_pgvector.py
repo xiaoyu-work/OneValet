@@ -29,7 +29,8 @@ EMBEDDING_SIZE = 1536
 def upgrade() -> None:
     # ── Step 1: Move pgvector to extensions schema ──────────────────────
     # ALTER EXTENSION SET SCHEMA is non-destructive (no CASCADE data loss).
-    op.execute(text("""
+    op.execute(
+        text("""
         DO $$
         DECLARE
             current_schema TEXT;
@@ -49,14 +50,16 @@ def upgrade() -> None:
                 RAISE NOTICE 'pgvector already in extensions — no-op';
             END IF;
         END $$;
-    """))
+    """)
+    )
 
     # ── Step 2: Repair tenant_default (re-create anything CASCADE may
     #            have dropped when we tested earlier) ────────────────────
     _create_momex_tables("tenant_default")
 
     # ── Step 3: Repair every per-user tenant schema ─────────────────────
-    op.execute(text("""
+    op.execute(
+        text("""
         DO $$
         DECLARE
             s TEXT;
@@ -68,7 +71,8 @@ def upgrade() -> None:
                 RAISE NOTICE 'Will repair MOMEX tables in schema: %', s;
             END LOOP;
         END $$;
-    """))
+    """)
+    )
     # The DO block above is just for logging; actual table creation is
     # done per-schema via _repair_tenant_schemas() helper below.
     _repair_tenant_schemas()
@@ -83,6 +87,7 @@ def downgrade() -> None:
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
+
 
 def _create_momex_tables(schema: str) -> None:
     """Create all 9 MOMEX tables + indexes in the given schema."""
@@ -108,8 +113,7 @@ def _create_momex_tables(schema: str) -> None:
         );
     """)
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_start_timestamp "
-        "ON Messages(start_timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_messages_start_timestamp ON Messages(start_timestamp);"
     )
     op.execute("""
         CREATE TABLE IF NOT EXISTS SemanticRefs (
@@ -126,10 +130,7 @@ def _create_momex_tables(schema: str) -> None:
                 REFERENCES SemanticRefs(semref_id) ON DELETE CASCADE
         );
     """)
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_semantic_ref_index_term "
-        "ON SemanticRefIndex(term);"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_semantic_ref_index_term ON SemanticRefIndex(term);")
 
     # Tables with vector columns (these previously failed)
     op.execute(f"""
@@ -153,12 +154,10 @@ def _create_momex_tables(schema: str) -> None:
         );
     """)
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_property_index_prop_name "
-        "ON PropertyIndex(prop_name);"
+        "CREATE INDEX IF NOT EXISTS idx_property_index_prop_name ON PropertyIndex(prop_name);"
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_property_index_value_str "
-        "ON PropertyIndex(value_str);"
+        "CREATE INDEX IF NOT EXISTS idx_property_index_value_str ON PropertyIndex(value_str);"
     )
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_property_index_combined "
@@ -172,13 +171,9 @@ def _create_momex_tables(schema: str) -> None:
             PRIMARY KEY (term, alias)
         );
     """)
+    op.execute("CREATE INDEX IF NOT EXISTS idx_related_aliases_term ON RelatedTermsAliases(term);")
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_related_aliases_term "
-        "ON RelatedTermsAliases(term);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_related_aliases_alias "
-        "ON RelatedTermsAliases(alias);"
+        "CREATE INDEX IF NOT EXISTS idx_related_aliases_alias ON RelatedTermsAliases(alias);"
     )
 
     op.execute(f"""
@@ -201,7 +196,9 @@ def _repair_tenant_schemas() -> None:
     # We use a DO block to iterate schemas, but alembic op.execute()
     # can't easily loop + call Python.  Instead we generate all the
     # DDL in a single PL/pgSQL block.
-    op.execute(text("""
+    op.execute(
+        text(
+            """
         DO $$
         DECLARE
             s TEXT;
@@ -233,7 +230,9 @@ def _repair_tenant_schemas() -> None:
                     id SERIAL PRIMARY KEY,
                     msg_id INTEGER NOT NULL REFERENCES Messages(msg_id) ON DELETE CASCADE,
                     chunk_ordinal INTEGER NOT NULL,
-                    embedding vector(""" + str(EMBEDDING_SIZE) + """) NOT NULL,
+                    embedding vector("""
+            + str(EMBEDDING_SIZE)
+            + """) NOT NULL,
                     UNIQUE (msg_id, chunk_ordinal))';
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS PropertyIndex (
@@ -251,7 +250,9 @@ def _repair_tenant_schemas() -> None:
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS RelatedTermsFuzzy (
                     term TEXT NOT NULL PRIMARY KEY,
-                    term_embedding vector(""" + str(EMBEDDING_SIZE) + """) NOT NULL)';
+                    term_embedding vector("""
+            + str(EMBEDDING_SIZE)
+            + """) NOT NULL)';
 
                 EXECUTE 'CREATE TABLE IF NOT EXISTS IngestedSources (
                     source_id TEXT PRIMARY KEY,
@@ -260,4 +261,6 @@ def _repair_tenant_schemas() -> None:
                 RAISE NOTICE 'Repaired MOMEX tables in schema: %', s;
             END LOOP;
         END $$;
-    """))
+    """
+        )
+    )

@@ -29,6 +29,7 @@ async def test_half_open_probe_lock_prevents_thundering_herd():
     cb = CircuitBreaker(failure_threshold=1, recovery_timeout=0.01, jitter=0.0)
     cb.record_failure()
     import time
+
     time.sleep(0.02)
     # Trigger transition OPEN -> HALF_OPEN.
     try:
@@ -37,6 +38,7 @@ async def test_half_open_probe_lock_prevents_thundering_herd():
         pass
     # Force HALF_OPEN if still OPEN (timing-dependent).
     from koa.llm.circuit_breaker import CircuitState
+
     if cb.state != CircuitState.HALF_OPEN:
         cb._state = CircuitState.HALF_OPEN
 
@@ -44,6 +46,7 @@ async def test_half_open_probe_lock_prevents_thundering_herd():
     assert lock is not None
     # check() now rejects because a probe is in flight.
     from koa.llm.circuit_breaker import CircuitBreakerOpenError
+
     with pytest.raises(CircuitBreakerOpenError):
         cb.check()
     cb.release_probe()

@@ -120,32 +120,22 @@ def upgrade() -> None:
 
     # 5. Indexes
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_start_timestamp "
-        "ON Messages(start_timestamp);"
+        "CREATE INDEX IF NOT EXISTS idx_messages_start_timestamp ON Messages(start_timestamp);"
+    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_semantic_ref_index_term ON SemanticRefIndex(term);")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_property_index_prop_name ON PropertyIndex(prop_name);"
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_semantic_ref_index_term "
-        "ON SemanticRefIndex(term);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_property_index_prop_name "
-        "ON PropertyIndex(prop_name);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_property_index_value_str "
-        "ON PropertyIndex(value_str);"
+        "CREATE INDEX IF NOT EXISTS idx_property_index_value_str ON PropertyIndex(value_str);"
     )
     op.execute(
         "CREATE INDEX IF NOT EXISTS idx_property_index_combined "
         "ON PropertyIndex(prop_name, value_str);"
     )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_related_aliases_term ON RelatedTermsAliases(term);")
     op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_related_aliases_term "
-        "ON RelatedTermsAliases(term);"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_related_aliases_alias "
-        "ON RelatedTermsAliases(alias);"
+        "CREATE INDEX IF NOT EXISTS idx_related_aliases_alias ON RelatedTermsAliases(alias);"
     )
 
     # Reset search_path

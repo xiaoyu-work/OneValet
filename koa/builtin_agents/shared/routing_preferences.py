@@ -12,6 +12,7 @@ If no preference is set, the resolver falls back to ``provider="local"``
 default lets the agent answer "what's on my calendar" without any
 external integrations needing to be wired up.
 """
+
 from __future__ import annotations
 
 import logging
@@ -156,10 +157,7 @@ def wrap_routing_error(surface: str, provider: str, reason: str) -> str:
             f"Tell me to use local instead, or connect a supported account in Settings."
         )
     if reason == "read_failed":
-        return (
-            f"I couldn't retrieve your {surface} data right now. "
-            f"Please try again in a moment."
-        )
+        return f"I couldn't retrieve your {surface} data right now. Please try again in a moment."
     return (
         f"I couldn't finish that {surface} action right now. "
         f"Please try again, or tell me to save it locally."

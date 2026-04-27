@@ -50,7 +50,9 @@ def configure_tracing(
         try:
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint)))
+            provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=otlp_endpoint))
+            )
         except ImportError:  # pragma: no cover
             logger.warning("opentelemetry-exporter-otlp not installed; skipping exporter")
     trace.set_tracer_provider(provider)

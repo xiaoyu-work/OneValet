@@ -375,7 +375,11 @@ class GoogleCalendarProvider(BaseCalendarProvider, OAuthHTTPMixin):
 
                 if resp.status_code == 410:
                     # Sync token expired, full sync needed
-                    return {"success": False, "error": "sync_token_expired", "full_sync_required": True}
+                    return {
+                        "success": False,
+                        "error": "sync_token_expired",
+                        "full_sync_required": True,
+                    }
 
                 resp.raise_for_status()
                 data = resp.json()

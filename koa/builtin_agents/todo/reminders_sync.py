@@ -8,6 +8,7 @@ Phase-3 stub.  Real implementation must:
   2. Merge with koi todos by external_id ('eventkit:<reminder_id>').
   3. Push koi-originated todos back to the device via EventKitModule save.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timezone

@@ -8,12 +8,14 @@ TODO (Phase 1 follow-up):
   * Detect routine breaks ("user was at 'elsewhere' all day Tuesday;
     usually at work") → propose a fact.
 """
+
 from __future__ import annotations
 
 from datetime import date
 from typing import Any
 
 from koa import valet
+
 from .base import SensingAgent, SensingResult
 
 

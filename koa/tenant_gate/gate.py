@@ -20,7 +20,7 @@ from typing import AsyncIterator, Optional
 from ..observability.metrics import counter
 from .backends import GateBackend, InMemoryGateBackend
 from .budget import BudgetLimits, BudgetTracker, TokenCost
-from .rate_limiter import SlidingWindowLimiter, TokenBucketLimiter
+from .rate_limiter import TokenBucketLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,9 @@ class GateRejected(Exception):
         self.reason = reason
         self.retry_after = retry_after
         self.tenant_id = tenant_id
-        super().__init__(f"Tenant {tenant_id!r} rejected: {reason} (retry_after={retry_after:.1f}s)")
+        super().__init__(
+            f"Tenant {tenant_id!r} rejected: {reason} (retry_after={retry_after:.1f}s)"
+        )
 
 
 @dataclass
@@ -93,11 +95,14 @@ class GateTicket:
         self._usage.completion_tokens += completion_tokens
         self._usage.cost_usd += cost_usd
         if self._gate._budget is not None:
-            await self._gate._budget.record(self.tenant_id, TokenCost(
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                cost_usd=cost_usd,
-            ))
+            await self._gate._budget.record(
+                self.tenant_id,
+                TokenCost(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    cost_usd=cost_usd,
+                ),
+            )
 
     @property
     def total_usage(self) -> TokenCost:

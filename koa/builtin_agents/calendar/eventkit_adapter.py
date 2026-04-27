@@ -8,6 +8,7 @@ Phase-3 stub: signatures + contracts pinned; the CalendarAgent's LLM tool
 layer can import `fetch_upcoming_local(db, user_id, window)` and merge the
 result with Composio data before constructing the prompt context.
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone

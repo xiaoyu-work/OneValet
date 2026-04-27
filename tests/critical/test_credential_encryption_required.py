@@ -2,7 +2,7 @@
 
 import pytest
 
-from koa.credentials.encryption import CredentialEncryptor, CredentialEncryptionError
+from koa.credentials.encryption import CredentialEncryptionError, CredentialEncryptor
 
 
 def test_passthrough_when_not_required():
@@ -40,9 +40,7 @@ def test_roundtrip_when_key_set():
 def test_sanitize_for_log_redacts_secrets():
     from koa.credentials.encryption import sanitize_for_log
 
-    sanitized = sanitize_for_log(
-        {"username": "u", "password": "p", "nested": {"api_key": "k"}}
-    )
+    sanitized = sanitize_for_log({"username": "u", "password": "p", "nested": {"api_key": "k"}})
     assert sanitized["username"] == "u"
     assert sanitized["password"] == "***REDACTED***"
     assert sanitized["nested"]["api_key"] == "***REDACTED***"

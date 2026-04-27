@@ -1,6 +1,7 @@
 """P1-8: TaskRegistry graceful shutdown cancels outstanding tasks."""
 
 import asyncio
+
 import pytest
 
 from koa.observability.task_registry import TaskRegistry

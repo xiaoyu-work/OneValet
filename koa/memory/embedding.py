@@ -21,6 +21,7 @@ rest of the stack is using:
 ``build_embedder()`` returns ``None`` if no API key is configured so
 callers can gracefully fall back to keyword search.
 """
+
 from __future__ import annotations
 
 import logging
@@ -81,7 +82,11 @@ def build_embedder() -> Optional[Embedder]:
             if not data:
                 return None
             first = data[0]
-            vec = first.get("embedding") if isinstance(first, dict) else getattr(first, "embedding", None)
+            vec = (
+                first.get("embedding")
+                if isinstance(first, dict)
+                else getattr(first, "embedding", None)
+            )
             if vec is None:
                 return None
             return list(vec)

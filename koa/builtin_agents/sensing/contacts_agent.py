@@ -6,12 +6,14 @@ TODO (Phase 1 follow-up):
   * Resolve "Mom/Dad/Jay" references in messages → contact.fingerprint.
   * Surface relationship annotations into user_profile.
 """
+
 from __future__ import annotations
 
 from datetime import date
 from typing import Any
 
 from koa import valet
+
 from .base import SensingAgent, SensingResult
 
 

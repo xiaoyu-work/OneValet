@@ -56,18 +56,18 @@ class _InMemoryRegistry:
         with self._lock:
             return {
                 "counters": {
-                    f"{n}{{{','.join(f'{k}={v}' for k, v in sorted(l))}}}": v
-                    for (n, l), v in self._counters.items()
+                    f"{n}{{{','.join(f'{k}={v}' for k, v in sorted(labels))}}}": v
+                    for (n, labels), v in self._counters.items()
                 },
                 "histograms": {
-                    f"{n}{{{','.join(f'{k}={v}' for k, v in sorted(l))}}}": {
+                    f"{n}{{{','.join(f'{k}={v}' for k, v in sorted(labels))}}}": {
                         "count": c,
                         "sum": s,
                         "min": mn,
                         "max": mx,
                         "avg": s / c if c else 0.0,
                     }
-                    for (n, l), (c, s, mn, mx) in self._hist.items()
+                    for (n, labels), (c, s, mn, mx) in self._hist.items()
                 },
             }
 

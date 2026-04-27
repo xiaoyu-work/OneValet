@@ -274,7 +274,8 @@ async def create_task(
         Optional[str], "Priority level: low, medium, high, or urgent (optional)."
     ] = None,
     account: Annotated[
-        Optional[str], "Deprecated compatibility alias for target_account when the user specifies one."
+        Optional[str],
+        "Deprecated compatibility alias for target_account when the user specifies one.",
     ] = None,
     target_provider: Annotated[
         Optional[str], "Optional explicit provider like local, google, or todoist."
@@ -540,7 +541,9 @@ async def _preview_set_reminder(args: dict, context) -> str:
         "when": args.get("human_readable_time") or args.get("schedule_datetime", ""),
         "options": ["approve", "edit", "decline"],
     }
-    return "⏰ **Reminder draft**\n\n<!-- inline_card:" + json.dumps(card, ensure_ascii=False) + " -->"
+    return (
+        "⏰ **Reminder draft**\n\n<!-- inline_card:" + json.dumps(card, ensure_ascii=False) + " -->"
+    )
 
 
 async def _preview_important_date(args: dict, context) -> str:

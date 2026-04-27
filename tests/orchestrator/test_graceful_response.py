@@ -11,7 +11,6 @@ from koa.orchestrator.graceful_response import (
     get_fallback_message,
 )
 
-
 # ── FALLBACK_MESSAGES pool ──
 
 

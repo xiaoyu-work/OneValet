@@ -36,8 +36,12 @@ def upgrade() -> None:
             UNIQUE (tenant_id, service_name)
         )
     """)
-    op.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant_id ON subscriptions (tenant_id)")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions (tenant_id, status)")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant_id ON subscriptions (tenant_id)"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions (tenant_id, status)"
+    )
 
 
 def downgrade() -> None:

@@ -10,9 +10,10 @@ Phase-3 stub.  Strategy:
   3. If multiple candidates, return all with confidence scores and let the
      caller's LLM disambiguate via a follow-up question.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 
 async def resolve_person(
@@ -39,7 +40,9 @@ async def resolve_person(
                  SELECT LOWER(a) FROM unnest(COALESCE(aliases, ARRAY[]::text[])) a
              ))
            LIMIT $3""",
-        user_id, mention, limit,
+        user_id,
+        mention,
+        limit,
     )
     results = [
         {
@@ -62,18 +65,22 @@ async def resolve_person(
                WHERE user_id = $1 AND display_name ILIKE $2
                ORDER BY length(display_name) ASC
                LIMIT $3""",
-            user_id, f"%{mention}%", limit - len(results),
+            user_id,
+            f"%{mention}%",
+            limit - len(results),
         )
     except Exception:
         contact_rows = []
     for r in contact_rows:
-        results.append({
-            "entity_id": None,
-            "display_name": r["display_name"],
-            "emails": r["emails"] or [],
-            "phones": r["phones"] or [],
-            "confidence": 0.6,
-        })
+        results.append(
+            {
+                "entity_id": None,
+                "display_name": r["display_name"],
+                "emails": r["emails"] or [],
+                "phones": r["phones"] or [],
+                "confidence": 0.6,
+            }
+        )
     return results[:limit]
 
 

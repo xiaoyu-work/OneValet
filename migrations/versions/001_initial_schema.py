@@ -4,6 +4,7 @@ Revision ID: 001
 Revises: None
 Create Date: 2026-03-01
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -27,10 +28,7 @@ def upgrade() -> None:
             PRIMARY KEY (tenant_id, service, account_name)
         )
     """)
-    op.execute(
-        "CREATE INDEX idx_credentials_email "
-        "ON credentials ((credentials_json->>'email'))"
-    )
+    op.execute("CREATE INDEX idx_credentials_email ON credentials ((credentials_json->>'email'))")
 
     # ── 2. oauth_states ──
     op.execute("""

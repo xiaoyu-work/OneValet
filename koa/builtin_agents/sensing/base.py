@@ -13,11 +13,12 @@ Design notes:
     aligns with how humans think about days ("I slept badly last night")
     and sidesteps the partial-day ambiguity of live queries.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from koa.standard_agent import StandardAgent
@@ -34,6 +35,7 @@ class SensingResult:
     ``proposals`` piggy-backs on the existing true_memory_proposals pipe.
     ``flags`` ends up in user_state.flags for downstream fan-out.
     """
+
     user_state_fields: Dict[str, Any] = field(default_factory=dict)
     proposals: List[Dict[str, Any]] = field(default_factory=list)
     flags: List[str] = field(default_factory=list)
@@ -93,7 +95,9 @@ class SensingAgent(StandardAgent):
         if not db or not user_id:
             logger.warning(
                 "%s: missing db or user_id (db=%s user_id=%s); skipping run",
-                type(self).__name__, bool(db), bool(user_id),
+                type(self).__name__,
+                bool(db),
+                bool(user_id),
             )
             return self.make_result(status="skipped", reason="no_context")
 
@@ -126,15 +130,25 @@ class SensingAgent(StandardAgent):
 
     async def _upsert_user_state(self, db, user_id: str, local_date: date, fields: Dict[str, Any]):
         allowed = {
-            "timezone", "sleep_minutes", "sleep_score", "hrv_ms", "resting_hr",
-            "steps", "activity_minutes", "stress_score", "mood",
-            "primary_location", "focus_mode", "flags", "source_data",
+            "timezone",
+            "sleep_minutes",
+            "sleep_score",
+            "hrv_ms",
+            "resting_hr",
+            "steps",
+            "activity_minutes",
+            "stress_score",
+            "mood",
+            "primary_location",
+            "focus_mode",
+            "flags",
+            "source_data",
         }
         clean = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not clean:
             return
         cols = ["user_id", "local_date"] + list(clean.keys())
-        placeholders = [f"${i+1}" for i in range(len(cols))]
+        placeholders = [f"${i + 1}" for i in range(len(cols))]
         values = [user_id, local_date] + list(clean.values())
         set_clauses = [f"{k} = EXCLUDED.{k}" for k in clean.keys()]
         sql = (

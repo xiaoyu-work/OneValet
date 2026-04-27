@@ -182,9 +182,7 @@ class InMemoryIntentFeedbackStore:
             return {"total": 0}
         pos = sum(1 for r in items if r.outcome == OUTCOME_COMPLETED)
         neg = sum(
-            1
-            for r in items
-            if r.outcome in {OUTCOME_CANCELLED, OUTCOME_RETRIED, OUTCOME_ERROR}
+            1 for r in items if r.outcome in {OUTCOME_CANCELLED, OUTCOME_RETRIED, OUTCOME_ERROR}
         )
         neutral = total - pos - neg
         by_source: Dict[str, int] = {}

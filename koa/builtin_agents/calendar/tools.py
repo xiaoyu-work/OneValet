@@ -17,7 +17,6 @@ from koa.builtin_agents.shared.routing_preferences import (
 )
 from koa.models import AgentToolContext, ToolOutput
 from koa.providers.calendar.local import LocalCalendarProvider
-from koa.providers.local_backend import LocalBackendClient
 from koa.tool_decorator import tool
 
 logger = logging.getLogger(__name__)
@@ -38,7 +37,6 @@ async def _resolve_calendar_provider(
     from koa.providers.calendar.factory import CalendarProviderFactory
     from koa.providers.calendar.resolver import CalendarAccountResolver
 
-    backend_client = LocalBackendClient.from_context(context)
     db = (context.context_hints or {}).get("db")
     try:
         target = await resolve_surface_target(
@@ -56,8 +54,12 @@ async def _resolve_calendar_provider(
     if target.provider == "local":
         if db is None:
             logger.error("LocalCalendarProvider requested but no db in context_hints")
-            return None, None, wrap_routing_error(
-                "calendar", "local", "read_failed" if operation == "read" else "write_failed"
+            return (
+                None,
+                None,
+                wrap_routing_error(
+                    "calendar", "local", "read_failed" if operation == "read" else "write_failed"
+                ),
             )
         return (
             LocalCalendarProvider(context.tenant_id, db),
@@ -204,10 +206,13 @@ def _parse_time_to_datetime(time_str: str, user_tz: str | None = None) -> dateti
     if user_tz:
         try:
             from zoneinfo import ZoneInfo
+
             tz = ZoneInfo(user_tz)
             default_time = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
         except Exception:
-            default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            default_time = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
     else:
         default_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -217,6 +222,7 @@ def _parse_time_to_datetime(time_str: str, user_tz: str | None = None) -> dateti
         if parsed.tzinfo is None and user_tz:
             try:
                 from zoneinfo import ZoneInfo
+
                 parsed = parsed.replace(tzinfo=ZoneInfo(user_tz))
             except Exception:
                 pass
@@ -271,7 +277,9 @@ async def query_events(
         )
 
         if not result.get("success"):
-            return wrap_routing_error("calendar", account.get("provider", "calendar"), "read_failed")
+            return wrap_routing_error(
+                "calendar", account.get("provider", "calendar"), "read_failed"
+            )
 
         events = result.get("data", [])
         events.sort(key=_event_sort_key)
@@ -566,7 +574,9 @@ async def create_event(
                 response += f"\n{event_link}"
             return response
         else:
-            return wrap_routing_error("calendar", account.get("provider", "calendar"), "write_failed")
+            return wrap_routing_error(
+                "calendar", account.get("provider", "calendar"), "write_failed"
+            )
 
     except Exception as e:
         logger.error(f"Failed to create event: {e}", exc_info=True)
@@ -651,7 +661,9 @@ async def update_event(
             max_results=10,
         )
         if not result.get("success"):
-            return wrap_routing_error("calendar", account.get("provider", "calendar"), "write_failed")
+            return wrap_routing_error(
+                "calendar", account.get("provider", "calendar"), "write_failed"
+            )
 
         target_event = None
 
@@ -777,7 +789,9 @@ async def update_event(
             else:
                 return f'Done! I\'ve updated "{event_title}".'
         else:
-            return wrap_routing_error("calendar", account.get("provider", "calendar"), "write_failed")
+            return wrap_routing_error(
+                "calendar", account.get("provider", "calendar"), "write_failed"
+            )
 
     except Exception as e:
         logger.error(f"Failed to update event: {e}", exc_info=True)
@@ -942,7 +956,9 @@ async def check_upcoming_events(
         )
 
         if not result.get("success"):
-            return wrap_routing_error("calendar", account.get("provider", "calendar"), "read_failed")
+            return wrap_routing_error(
+                "calendar", account.get("provider", "calendar"), "read_failed"
+            )
 
         events = result.get("data", [])
         if not events:
@@ -977,9 +993,7 @@ async def check_upcoming_events(
 
 @tool
 async def query_local_events(
-    hours_ahead: Annotated[
-        int, "Window size in hours starting from now. Default 48."
-    ] = 48,
+    hours_ahead: Annotated[int, "Window size in hours starting from now. Default 48."] = 48,
     calendar_name: Annotated[
         Optional[str], "Optional filter to a single local calendar name."
     ] = None,
@@ -1022,4 +1036,3 @@ async def query_local_events(
             line += f"\n   📍 {loc}"
         lines.append(line)
     return "\n".join(lines)
-

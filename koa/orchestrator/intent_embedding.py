@@ -35,9 +35,9 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
-from .intent_analyzer import IntentAnalysis, VALID_DOMAINS
+from .intent_analyzer import VALID_DOMAINS, IntentAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +141,7 @@ class EmbeddingRouter:
             raise RuntimeError(f"Embedding backend failed during fit: {exc}") from exc
         if len(vectors) != len(flat_texts):
             raise RuntimeError(
-                f"Embedding backend returned {len(vectors)} vectors "
-                f"for {len(flat_texts)} texts"
+                f"Embedding backend returned {len(vectors)} vectors for {len(flat_texts)} texts"
             )
 
         centroids: Dict[str, List[float]] = {}

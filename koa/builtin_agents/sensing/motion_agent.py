@@ -7,6 +7,7 @@ TODO (Phase 1 follow-up):
       - first_movement_at, last_movement_at → daily routine fingerprint
   * Write a "daily routine shape" fact when it stabilizes across a week.
 """
+
 from __future__ import annotations
 
 import logging
@@ -14,6 +15,7 @@ from datetime import date
 from typing import Any
 
 from koa import valet
+
 from .base import SensingAgent, SensingResult
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,8 @@ class MotionAgent(SensingAgent):
             row = await db.fetchrow(
                 """SELECT COUNT(*) AS n FROM tenant_default.motion_segments
                    WHERE user_id = $1 AND started_at::date = $2""",
-                user_id, local_date,
+                user_id,
+                local_date,
             )
             n = int(row["n"]) if row else 0
         except Exception as e:

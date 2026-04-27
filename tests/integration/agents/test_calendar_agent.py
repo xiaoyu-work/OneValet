@@ -146,9 +146,7 @@ async def test_routing_preference_extracts_surface_calendar(conversation):
 
     args = conv.get_tool_args("set_routing_preference")[0]
     surface = args.get("surface", "").lower()
-    assert surface == "calendar", (
-        f"Expected surface='calendar', got '{surface}'"
-    )
+    assert surface == "calendar", f"Expected surface='calendar', got '{surface}'"
 
 
 async def test_routing_preference_extracts_google_provider(conversation):
@@ -159,9 +157,7 @@ async def test_routing_preference_extracts_google_provider(conversation):
 
     args = conv.get_tool_args("set_routing_preference")[0]
     provider = args.get("provider", "").lower()
-    assert "google" in provider, (
-        f"Expected provider containing 'google', got '{provider}'"
-    )
+    assert "google" in provider, f"Expected provider containing 'google', got '{provider}'"
 
 
 async def test_routing_preference_extracts_local_provider(conversation):
@@ -172,9 +168,7 @@ async def test_routing_preference_extracts_local_provider(conversation):
 
     args = conv.get_tool_args("set_routing_preference")[0]
     provider = args.get("provider", "").lower()
-    assert "local" in provider, (
-        f"Expected provider containing 'local', got '{provider}'"
-    )
+    assert "local" in provider, f"Expected provider containing 'local', got '{provider}'"
 
 
 # ---------------------------------------------------------------------------

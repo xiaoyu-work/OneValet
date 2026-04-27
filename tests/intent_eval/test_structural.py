@@ -14,13 +14,11 @@ from koa.orchestrator.intent_analyzer import (
     CLARIFY_CONFIDENCE_THRESHOLD,
     FastPathClassifier,
     IntentAnalyzer,
-    IntentAnalysis,
 )
-from koa.orchestrator.intent_embedding import DEFAULT_EXEMPLARS, EmbeddingRouter
+from koa.orchestrator.intent_embedding import EmbeddingRouter
 from koa.orchestrator.intent_feedback import InMemoryIntentFeedbackStore
 
 from .harness import domain_match, load_fixtures
-
 
 # ---------------------------------------------------------------------------
 # Fast-path classifier
@@ -29,7 +27,19 @@ from .harness import domain_match, load_fixtures
 
 def test_fast_path_matches_greetings_acks_cancel():
     fp = FastPathClassifier()
-    for msg in ["hi", "hello", "hey!", "thanks", "ok", "好的", "你好", "谢谢", "算了", "cancel", "bye"]:
+    for msg in [
+        "hi",
+        "hello",
+        "hey!",
+        "thanks",
+        "ok",
+        "好的",
+        "你好",
+        "谢谢",
+        "算了",
+        "cancel",
+        "bye",
+    ]:
         out = fp.classify(msg)
         assert out is not None, f"fast-path should classify {msg!r}"
         assert out.domains == ["general"]
@@ -138,8 +148,12 @@ async def test_embedding_router_refuses_low_confidence():
     from koa.orchestrator.intent_embedding import Exemplar
 
     await router.fit(
-        [Exemplar("a", "communication"), Exemplar("b", "communication"),
-         Exemplar("c", "travel"), Exemplar("d", "travel")]
+        [
+            Exemplar("a", "communication"),
+            Exemplar("b", "communication"),
+            Exemplar("c", "travel"),
+            Exemplar("d", "travel"),
+        ]
     )
     # "a b c d" is equidistant from both centroids — must refuse.
     assert await router.classify("a b c d") is None

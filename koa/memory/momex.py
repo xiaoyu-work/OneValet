@@ -231,9 +231,7 @@ class MomexMemory:
                     self._memories.pop(tenant_id, None)
                     return int(result) if isinstance(result, int) else -1
                 except Exception as exc:
-                    logger.warning(
-                        "delete_for_tenant via %s failed: %s", method_name, exc
-                    )
+                    logger.warning("delete_for_tenant via %s failed: %s", method_name, exc)
                     break
         raise NotImplementedError(
             "Underlying momex backend does not support delete-all. "
@@ -262,6 +260,4 @@ class MomexMemory:
             except Exception as exc:
                 logger.warning("forget_older_than failed: %s", exc)
                 raise
-        raise NotImplementedError(
-            "Underlying momex backend does not support age-based pruning."
-        )
+        raise NotImplementedError("Underlying momex backend does not support age-based pruning.")

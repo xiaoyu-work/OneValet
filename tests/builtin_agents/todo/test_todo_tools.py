@@ -160,12 +160,15 @@ class TestTodoToolRouting:
     @pytest.mark.asyncio
     async def test_query_tasks_routing_resolution_failure_returns_read_error(self):
         """Routing infrastructure failure inside query_tasks must emit read-oriented messaging."""
-        with patch(
-            "koa.builtin_agents.todo.tools.resolve_surface_target",
-            new=AsyncMock(side_effect=RuntimeError("backend down")),
-        ), patch(
-            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
-            return_value=object(),
+        with (
+            patch(
+                "koa.builtin_agents.todo.tools.resolve_surface_target",
+                new=AsyncMock(side_effect=RuntimeError("backend down")),
+            ),
+            patch(
+                "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+                return_value=object(),
+            ),
         ):
             result = await query_tasks.executor(
                 {"search_query": None},
@@ -178,12 +181,15 @@ class TestTodoToolRouting:
     @pytest.mark.asyncio
     async def test_check_overdue_tasks_routing_resolution_failure_returns_read_error(self):
         """Routing infrastructure failure inside check_overdue_tasks must emit read-oriented messaging."""
-        with patch(
-            "koa.builtin_agents.todo.tools.resolve_surface_target",
-            new=AsyncMock(side_effect=RuntimeError("backend down")),
-        ), patch(
-            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
-            return_value=object(),
+        with (
+            patch(
+                "koa.builtin_agents.todo.tools.resolve_surface_target",
+                new=AsyncMock(side_effect=RuntimeError("backend down")),
+            ),
+            patch(
+                "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+                return_value=object(),
+            ),
         ):
             result = await check_overdue_tasks.executor({}, _context())
 
@@ -193,12 +199,15 @@ class TestTodoToolRouting:
     @pytest.mark.asyncio
     async def test_create_task_routing_resolution_failure_returns_write_error(self):
         """Routing infrastructure failure inside create_task must emit write-oriented messaging."""
-        with patch(
-            "koa.builtin_agents.todo.tools.resolve_surface_target",
-            new=AsyncMock(side_effect=RuntimeError("backend down")),
-        ), patch(
-            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
-            return_value=object(),
+        with (
+            patch(
+                "koa.builtin_agents.todo.tools.resolve_surface_target",
+                new=AsyncMock(side_effect=RuntimeError("backend down")),
+            ),
+            patch(
+                "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+                return_value=object(),
+            ),
         ):
             result = await create_task.executor({"title": "Buy milk"}, _context())
 
@@ -346,39 +355,48 @@ class TestTodoToolRouting:
     async def test_resolve_todo_provider_uses_provider_specific_account_resolution(self):
         provider = DummyTodoProvider()
 
-        with patch(
-            "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
-            return_value=object(),
-            create=True,
-        ), patch(
-            "koa.builtin_agents.todo.tools.resolve_surface_target",
-            new=AsyncMock(
-                return_value=ResolvedSurfaceTarget(
-                    surface="todo",
-                    provider="google",
-                    account="work",
-                    source="saved",
-                )
+        with (
+            patch(
+                "koa.builtin_agents.todo.tools.LocalBackendClient.from_context",
+                return_value=object(),
+                create=True,
             ),
-        ), patch(
-            "koa.providers.todo.factory.TodoProviderFactory.get_supported_providers",
-            return_value=["google", "todoist", "microsoft"],
-        ), patch(
-            "koa.providers.todo.resolver.TodoAccountResolver.resolve_account_for_provider",
-            new=AsyncMock(
-                return_value={
-                    "provider": "google",
-                    "account_name": "work",
-                    "email": "user@example.com",
-                }
+            patch(
+                "koa.builtin_agents.todo.tools.resolve_surface_target",
+                new=AsyncMock(
+                    return_value=ResolvedSurfaceTarget(
+                        surface="todo",
+                        provider="google",
+                        account="work",
+                        source="saved",
+                    )
+                ),
             ),
-        ), patch(
-            "koa.providers.todo.resolver.TodoAccountResolver.resolve_account",
-            new=AsyncMock(side_effect=AssertionError("generic resolve_account should not be used")),
-            create=True,
-        ), patch(
-            "koa.builtin_agents.todo.tools._get_provider",
-            return_value=provider,
+            patch(
+                "koa.providers.todo.factory.TodoProviderFactory.get_supported_providers",
+                return_value=["google", "todoist", "microsoft"],
+            ),
+            patch(
+                "koa.providers.todo.resolver.TodoAccountResolver.resolve_account_for_provider",
+                new=AsyncMock(
+                    return_value={
+                        "provider": "google",
+                        "account_name": "work",
+                        "email": "user@example.com",
+                    }
+                ),
+            ),
+            patch(
+                "koa.providers.todo.resolver.TodoAccountResolver.resolve_account",
+                new=AsyncMock(
+                    side_effect=AssertionError("generic resolve_account should not be used")
+                ),
+                create=True,
+            ),
+            patch(
+                "koa.builtin_agents.todo.tools._get_provider",
+                return_value=provider,
+            ),
         ):
             resolved_provider, account, error = await _resolve_todo_provider(_context())
 

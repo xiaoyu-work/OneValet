@@ -111,9 +111,7 @@ class CredentialEncryptor:
         """Encrypt a credential dict to an encrypted string."""
         if not self._enabled:
             if self._require:
-                raise CredentialEncryptionError(
-                    "Encryption required but encryptor is not enabled."
-                )
+                raise CredentialEncryptionError("Encryption required but encryptor is not enabled.")
             return data
 
         plaintext = json.dumps(data).encode("utf-8")
@@ -152,8 +150,7 @@ class CredentialEncryptor:
         if not data.startswith(_ENCRYPTED_PREFIX):
             if self._require:
                 raise CredentialEncryptionError(
-                    "Plaintext credential string encountered while "
-                    "encryption is required."
+                    "Plaintext credential string encountered while encryption is required."
                 )
             try:
                 return json.loads(data)

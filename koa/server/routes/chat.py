@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from koa.streaming.models import EventType, AgentEvent
+from koa.streaming.models import AgentEvent, EventType
 
 from ..app import require_app, verify_api_key
 from ..models import ChatRequest, ChatResponse
@@ -71,6 +71,7 @@ async def chat(req: ChatRequest):
     except Exception as e:
         logger.error(f"Chat endpoint error: {e}", exc_info=True)
         from koa.orchestrator.graceful_response import get_fallback_message
+
         return ChatResponse(
             response=get_fallback_message(),
             status="error",
@@ -108,19 +109,24 @@ async def stream(req: ChatRequest):
         except Exception as e:
             logger.error(f"Orchestrator error: {e}", exc_info=True)
             from koa.orchestrator.graceful_response import get_fallback_message
+
             fallback_msg = get_fallback_message()
-            await queue.put(AgentEvent(
-                type=EventType.ERROR,
-                data={
-                    "code": "internal_error",
-                    "error": str(e),
-                    "error_type": type(e).__name__,
-                },
-            ))
-            await queue.put(AgentEvent(
-                type=EventType.MESSAGE_CHUNK,
-                data={"chunk": fallback_msg},
-            ))
+            await queue.put(
+                AgentEvent(
+                    type=EventType.ERROR,
+                    data={
+                        "code": "internal_error",
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                    },
+                )
+            )
+            await queue.put(
+                AgentEvent(
+                    type=EventType.MESSAGE_CHUNK,
+                    data={"chunk": fallback_msg},
+                )
+            )
         finally:
             await queue.put(_SENTINEL)
             # Fire callback after orchestrator completes

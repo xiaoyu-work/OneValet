@@ -4,6 +4,7 @@ Revision ID: 003
 Revises: 002
 Create Date: 2026-03-05
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -24,10 +25,7 @@ def upgrade() -> None:
             extracted_at    TIMESTAMPTZ DEFAULT NOW()
         )
     """)
-    op.execute(
-        "CREATE INDEX idx_tenant_extractions_tenant "
-        "ON tenant_extractions (tenant_id)"
-    )
+    op.execute("CREATE INDEX idx_tenant_extractions_tenant ON tenant_extractions (tenant_id)")
 
 
 def downgrade() -> None:

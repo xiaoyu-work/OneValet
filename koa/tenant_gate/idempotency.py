@@ -73,9 +73,7 @@ class IdempotencyRecord:
 class IdempotencyStore(Protocol):
     """Pluggable backend for idempotent tool-call dedup."""
 
-    async def begin(
-        self, key: str, ttl_seconds: float
-    ) -> Tuple[bool, Optional[IdempotencyRecord]]:  # noqa: E501
+    async def begin(self, key: str, ttl_seconds: float) -> Tuple[bool, Optional[IdempotencyRecord]]:  # noqa: E501
         """Claim ``key`` atomically.
 
         Returns ``(is_new, existing_record)``.  ``is_new=True`` means the

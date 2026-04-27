@@ -23,6 +23,7 @@ These are not medical signals.  They exist only to give downstream agents
 a quick "how is the user doing?" scalar.  The assistant should never claim
 clinical meaning from them.
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,7 +69,11 @@ class HealthAgent(SensingAgent):
 
         baseline = await _fetch_baselines(db, user_id, local_date)
         stress = _stress_score(
-            resting_hr, hrv, mindful_minutes, local_date.weekday() < 5, baseline,
+            resting_hr,
+            hrv,
+            mindful_minutes,
+            local_date.weekday() < 5,
+            baseline,
         )
 
         flags: List[str] = []
@@ -97,21 +102,25 @@ class HealthAgent(SensingAgent):
 
         proposals: List[Dict[str, Any]] = []
         # Only promote to true_memory when a pattern has stabilized.
-        recent_low_sleep = await _count_recent_flag(db, user_id, local_date, "low_sleep", window_days=7)
+        recent_low_sleep = await _count_recent_flag(
+            db, user_id, local_date, "low_sleep", window_days=7
+        )
         if recent_low_sleep >= 3:
-            proposals.append(make_proposal(
-                namespace="health",
-                fact_key="recurring_low_sleep",
-                value=True,
-                summary=f"User has slept <5h on {recent_low_sleep} of the past 7 days.",
-                how_to_apply=(
-                    "Be gentler and shorter in morning briefings. Avoid suggesting "
-                    "high-energy commitments before noon. Ask once whether to "
-                    "defer noncritical reminders."
-                ),
-                confidence=0.8,
-                why="Observed via HealthKit sleep samples for 3+ of the past 7 days.",
-            ))
+            proposals.append(
+                make_proposal(
+                    namespace="health",
+                    fact_key="recurring_low_sleep",
+                    value=True,
+                    summary=f"User has slept <5h on {recent_low_sleep} of the past 7 days.",
+                    how_to_apply=(
+                        "Be gentler and shorter in morning briefings. Avoid suggesting "
+                        "high-energy commitments before noon. Ask once whether to "
+                        "defer noncritical reminders."
+                    ),
+                    confidence=0.8,
+                    why="Observed via HealthKit sleep samples for 3+ of the past 7 days.",
+                )
+            )
 
         notes = (
             f"HealthAgent: sleep={sleep_minutes}min score={sleep_score} "
@@ -129,9 +138,11 @@ class HealthAgent(SensingAgent):
 # Pure helpers — trivially unit-testable without instantiating the agent.
 # ---------------------------------------------------------------------------
 
+
 def _local_day_bounds(local_date: date, tz_name: str):
     try:
         from zoneinfo import ZoneInfo
+
         tz = ZoneInfo(tz_name) if tz_name and tz_name != "UTC" else timezone.utc
     except Exception:
         tz = timezone.utc
@@ -140,13 +151,17 @@ def _local_day_bounds(local_date: date, tz_name: str):
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
 
-async def _fetch_samples(db, user_id: str, start_utc: datetime, end_utc: datetime) -> List[Dict[str, Any]]:
+async def _fetch_samples(
+    db, user_id: str, start_utc: datetime, end_utc: datetime
+) -> List[Dict[str, Any]]:
     try:
         rows = await db.fetch(
             """SELECT type, started_at, ended_at, value, unit, metadata
                FROM tenant_default.health_samples
                WHERE user_id = $1 AND started_at >= $2 AND started_at < $3""",
-            user_id, start_utc, end_utc,
+            user_id,
+            start_utc,
+            end_utc,
         )
         return [dict(r) for r in rows]
     except Exception as e:
@@ -160,7 +175,8 @@ async def _fetch_baselines(db, user_id: str, local_date: date) -> Dict[str, Any]
             """SELECT resting_hr, hrv_ms FROM tenant_default.user_state
                WHERE user_id = $1 AND local_date < $2
                ORDER BY local_date DESC LIMIT 14""",
-            user_id, local_date,
+            user_id,
+            local_date,
         )
         rhrs = [r["resting_hr"] for r in rows if r["resting_hr"] is not None]
         hrvs = [r["hrv_ms"] for r in rows if r["hrv_ms"] is not None]
@@ -173,7 +189,9 @@ async def _fetch_baselines(db, user_id: str, local_date: date) -> Dict[str, Any]
         return {}
 
 
-async def _count_recent_flag(db, user_id: str, local_date: date, flag: str, window_days: int) -> int:
+async def _count_recent_flag(
+    db, user_id: str, local_date: date, flag: str, window_days: int
+) -> int:
     try:
         row = await db.fetchrow(
             """SELECT COUNT(*) AS c FROM tenant_default.user_state

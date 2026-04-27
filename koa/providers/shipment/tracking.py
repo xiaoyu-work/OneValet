@@ -76,13 +76,20 @@ class TrackingProvider:
 
             if result.get("success"):
                 # Override carrier if identify detected a different one
-                if carrier_code and result.get("carrier_code") and result["carrier_code"] != carrier_code:
+                if (
+                    carrier_code
+                    and result.get("carrier_code")
+                    and result["carrier_code"] != carrier_code
+                ):
                     correct_name = self._get_carrier_name(carrier_code)
                     if correct_name:
-                        logger.info(f"Overriding carrier {result.get('carrier_code')} → {carrier_code} ({correct_name}) based on identify")
+                        logger.info(
+                            f"Overriding carrier {result.get('carrier_code')} → {carrier_code} ({correct_name}) based on identify"
+                        )
                         result["carrier"] = correct_name
                         result["carrier_code"] = carrier_code
                         from .carrier_detector import get_tracking_url
+
                         result["tracking_url"] = get_tracking_url(correct_name, tracking_number)
                 return result
 

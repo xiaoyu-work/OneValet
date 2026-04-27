@@ -18,6 +18,7 @@ def _get_backend_url() -> str:
     # 2. Try callbacks.notify_url from loaded config (strip path to get base URL)
     try:
         from koa.server.app import _app
+
         if _app and _app.config:
             notify_url = (_app.config.get("callbacks") or {}).get("notify_url", "")
             if notify_url:

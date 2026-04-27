@@ -4,6 +4,7 @@ Revision ID: 010
 Revises: 009
 Create Date: 2026-04-03
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -25,10 +26,7 @@ def upgrade() -> None:
             PRIMARY KEY (tenant_id)
         )
     """)
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS idx_agent_plans_status "
-        "ON agent_plans(status)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS idx_agent_plans_status ON agent_plans(status)")
 
 
 def downgrade() -> None:

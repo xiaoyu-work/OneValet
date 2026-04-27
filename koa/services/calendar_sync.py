@@ -144,9 +144,7 @@ class CalendarSyncService:
             try:
                 creds_list = await self._credential_store.list(tenant_id, service=service)
             except Exception as e:
-                logger.warning(
-                    "CalendarSync: failed to list %s for %s: %s", service, tenant_id, e
-                )
+                logger.warning("CalendarSync: failed to list %s for %s: %s", service, tenant_id, e)
                 continue
 
             for entry in creds_list or []:
@@ -197,9 +195,7 @@ class CalendarSyncService:
         )
         return [r["tenant_id"] for r in rows or []]
 
-    async def _sync_account(
-        self, tenant_id: str, service: str, creds: dict
-    ) -> int:
+    async def _sync_account(self, tenant_id: str, service: str, creds: dict) -> int:
         """Fetch + upsert events for a single calendar account. Returns count written."""
         provider_name = _SERVICE_TO_PROVIDER.get(service)
         if not provider_name:
@@ -217,7 +213,9 @@ class CalendarSyncService:
         # the async DB write as a fire-and-forget task.
         callback = self._make_persist_callback(tenant_id, service, account_name)
 
-        provider = CalendarProviderFactory.create_provider(creds_for_factory, on_token_refreshed=callback)
+        provider = CalendarProviderFactory.create_provider(
+            creds_for_factory, on_token_refreshed=callback
+        )
         if not provider:
             logger.warning(
                 "CalendarSync: factory returned no provider for %s/%s", service, account_name
@@ -312,11 +310,7 @@ class CalendarSyncService:
         # Namespace the local event_id so different sources never collide
         event_id = f"{source}:{calendar_id}:{provider_event_id}"
 
-        ical_uid = (
-            raw_event.get("ical_uid")
-            or raw_event.get("iCalUID")
-            or raw_event.get("uid")
-        )
+        ical_uid = raw_event.get("ical_uid") or raw_event.get("iCalUID") or raw_event.get("uid")
 
         title = raw_event.get("summary") or raw_event.get("title") or "(No title)"
         location = raw_event.get("location") or None

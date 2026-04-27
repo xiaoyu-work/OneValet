@@ -63,7 +63,11 @@ class DeleteFailingCalendarProvider(DummyCalendarProvider):
 def _context() -> AgentToolContext:
     return AgentToolContext(
         tenant_id="user-1",
-        metadata={"timezone": "UTC", "koiai_url": "https://koiai.example", "service_key": "svc-key"},
+        metadata={
+            "timezone": "UTC",
+            "koiai_url": "https://koiai.example",
+            "service_key": "svc-key",
+        },
     )
 
 
@@ -140,13 +144,16 @@ class TestCalendarToolRouting:
     async def test_delete_event_uses_resolved_provider(self):
         provider = DummyCalendarProvider()
 
-        with patch(
-            "koa.builtin_agents.calendar.search_helper.search_calendar_events",
-            side_effect=AssertionError("search_calendar_events should not be used"),
-        ), patch(
-            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
-            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
-            create=True,
+        with (
+            patch(
+                "koa.builtin_agents.calendar.search_helper.search_calendar_events",
+                side_effect=AssertionError("search_calendar_events should not be used"),
+            ),
+            patch(
+                "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+                new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+                create=True,
+            ),
         ):
             result = await delete_event.executor(
                 {
@@ -163,13 +170,16 @@ class TestCalendarToolRouting:
     async def test_preview_delete_event_uses_resolved_provider(self):
         provider = DummyCalendarProvider()
 
-        with patch(
-            "koa.builtin_agents.calendar.search_helper.search_calendar_events",
-            side_effect=AssertionError("search_calendar_events should not be used"),
-        ), patch(
-            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
-            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
-            create=True,
+        with (
+            patch(
+                "koa.builtin_agents.calendar.search_helper.search_calendar_events",
+                side_effect=AssertionError("search_calendar_events should not be used"),
+            ),
+            patch(
+                "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+                new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+                create=True,
+            ),
         ):
             result = await _preview_delete_event(
                 {
@@ -187,33 +197,37 @@ class TestCalendarToolRouting:
     async def test_resolve_calendar_provider_uses_provider_specific_account_resolution(self):
         provider = DummyCalendarProvider()
 
-        with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=object(),
-            create=True,
-        ), patch(
-            "koa.builtin_agents.calendar.tools.resolve_surface_target",
-            new=AsyncMock(
-                return_value=ResolvedSurfaceTarget(
-                    surface="calendar",
-                    provider="google",
-                    account="work",
-                    source="saved",
-                )
+        with (
+            patch(
+                "koa.builtin_agents.calendar.tools.resolve_surface_target",
+                new=AsyncMock(
+                    return_value=ResolvedSurfaceTarget(
+                        surface="calendar",
+                        provider="google",
+                        account="work",
+                        source="saved",
+                    )
+                ),
             ),
-        ), patch(
-            "koa.providers.calendar.factory.CalendarProviderFactory.get_supported_providers",
-            return_value=["google"],
-        ), patch(
-            "koa.providers.calendar.resolver.CalendarAccountResolver.resolve_account_for_provider",
-            new=AsyncMock(return_value={"provider": "google", "account_name": "work"}),
-        ), patch(
-            "koa.providers.calendar.resolver.CalendarAccountResolver.resolve_account",
-            new=AsyncMock(side_effect=AssertionError("generic resolve_account should not be used")),
-            create=True,
-        ), patch(
-            "koa.providers.calendar.factory.CalendarProviderFactory.create_provider",
-            return_value=provider,
+            patch(
+                "koa.providers.calendar.factory.CalendarProviderFactory.get_supported_providers",
+                return_value=["google"],
+            ),
+            patch(
+                "koa.providers.calendar.resolver.CalendarAccountResolver.resolve_account_for_provider",
+                new=AsyncMock(return_value={"provider": "google", "account_name": "work"}),
+            ),
+            patch(
+                "koa.providers.calendar.resolver.CalendarAccountResolver.resolve_account",
+                new=AsyncMock(
+                    side_effect=AssertionError("generic resolve_account should not be used")
+                ),
+                create=True,
+            ),
+            patch(
+                "koa.providers.calendar.factory.CalendarProviderFactory.create_provider",
+                return_value=provider,
+            ),
         ):
             resolved_provider, account, error = await _resolve_calendar_provider(_context())
 
@@ -266,12 +280,9 @@ class TestCalendarToolRouting:
 
     @pytest.mark.asyncio
     async def test_query_events_wraps_preference_lookup_failures(self):
-        backend_client = AsyncMock()
-        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
-
         with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=backend_client,
+            "koa.builtin_agents.calendar.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
         ):
             result = await query_events.executor(
                 {
@@ -285,12 +296,9 @@ class TestCalendarToolRouting:
 
     @pytest.mark.asyncio
     async def test_preview_delete_event_wraps_preference_lookup_failures(self):
-        backend_client = AsyncMock()
-        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
-
         with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=backend_client,
+            "koa.builtin_agents.calendar.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
         ):
             result = await _preview_delete_event(
                 {
@@ -305,12 +313,9 @@ class TestCalendarToolRouting:
 
     @pytest.mark.asyncio
     async def test_check_upcoming_events_wraps_preference_lookup_failures(self):
-        backend_client = AsyncMock()
-        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
-
         with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=backend_client,
+            "koa.builtin_agents.calendar.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
         ):
             result = await check_upcoming_events.executor({}, _context())
 
@@ -319,12 +324,9 @@ class TestCalendarToolRouting:
 
     @pytest.mark.asyncio
     async def test_create_event_wraps_preference_lookup_failures(self):
-        backend_client = AsyncMock()
-        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
-
         with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=backend_client,
+            "koa.builtin_agents.calendar.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
         ):
             result = await create_event.executor(
                 {
@@ -340,12 +342,9 @@ class TestCalendarToolRouting:
 
     @pytest.mark.asyncio
     async def test_update_event_wraps_preference_lookup_failures(self):
-        backend_client = AsyncMock()
-        backend_client.get_routing_preference.side_effect = RuntimeError("backend down")
-
         with patch(
-            "koa.builtin_agents.calendar.tools.LocalBackendClient.from_context",
-            return_value=backend_client,
+            "koa.builtin_agents.calendar.tools.resolve_surface_target",
+            new=AsyncMock(side_effect=RuntimeError("backend down")),
         ):
             result = await update_event.executor(
                 {

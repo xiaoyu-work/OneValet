@@ -172,9 +172,7 @@ class MCPSDKClient(MCPClient):
                 self._session.list_resources(), timeout=_call_timeout(self.config)
             )
         except asyncio.TimeoutError:
-            logger.warning(
-                "MCP list_resources timed out for server %s", self.config.name
-            )
+            logger.warning("MCP list_resources timed out for server %s", self.config.name)
             return []
         except Exception:
             # Server may not support resources
@@ -196,9 +194,7 @@ class MCPSDKClient(MCPClient):
                 self._session.list_prompts(), timeout=_call_timeout(self.config)
             )
         except asyncio.TimeoutError:
-            logger.warning(
-                "MCP list_prompts timed out for server %s", self.config.name
-            )
+            logger.warning("MCP list_prompts timed out for server %s", self.config.name)
             return []
         except Exception:
             # Server may not support prompts

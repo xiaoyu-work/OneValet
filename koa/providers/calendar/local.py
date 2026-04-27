@@ -12,6 +12,7 @@ can be updated/deleted via the agent. Google-mirrored or EventKit-ingested
 rows must be mutated on the source calendar; the agent will surface a
 helpful error rather than trash its local cache.
 """
+
 from __future__ import annotations
 
 import json

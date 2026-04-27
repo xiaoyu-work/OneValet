@@ -4,6 +4,7 @@ Instead of hard-deleting cron jobs, we now set deleted_at to the
 current timestamp and enabled=false. This preserves history and
 allows potential restoration of deleted reminders.
 """
+
 from typing import Sequence, Union
 
 from alembic import op

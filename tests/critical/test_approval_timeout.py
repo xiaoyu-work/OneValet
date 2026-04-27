@@ -1,6 +1,5 @@
 """P1-10: Approval store TTL + batch ordering."""
 
-import asyncio
 import pytest
 
 from koa.orchestrator.approval import (
@@ -13,9 +12,7 @@ from koa.orchestrator.approval import (
 @pytest.mark.asyncio
 async def test_approval_expires_after_timeout():
     store = InMemoryApprovalStore()
-    req = ApprovalRequest(
-        agent_name="A", action_summary="go", timeout_minutes=1
-    )
+    req = ApprovalRequest(agent_name="A", action_summary="go", timeout_minutes=1)
     # Monkey-patch deadline to the past.
     await store.put(req)
     store._entries[req.request_id].deadline = 0.0

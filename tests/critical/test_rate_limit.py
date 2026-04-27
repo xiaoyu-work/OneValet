@@ -1,6 +1,7 @@
 """P0-2/P1-9: Tenant rate limiting."""
 
 import asyncio
+
 import pytest
 
 from koa.tenant_gate.rate_limiter import SlidingWindowLimiter, TokenBucketLimiter

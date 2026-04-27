@@ -404,8 +404,7 @@ class IntentAnalyzer:
             needs_clarification = True
             if not clarification_question:
                 clarification_question = (
-                    "Could you share a bit more detail? I want to make sure I "
-                    "do the right thing."
+                    "Could you share a bit more detail? I want to make sure I do the right thing."
                 )
 
         slots = data.get("slots") or {}

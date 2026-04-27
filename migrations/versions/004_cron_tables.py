@@ -3,6 +3,7 @@
 Replaces the file-based JSON store with PostgreSQL so data survives
 container restarts and supports multi-user isolation.
 """
+
 from typing import Sequence, Union
 
 from alembic import op

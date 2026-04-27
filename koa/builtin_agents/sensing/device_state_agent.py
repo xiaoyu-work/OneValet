@@ -7,11 +7,11 @@ Phase-3 skeleton.  The iOS side pushes a single payload to
 ``POST /api/device/state`` (route TODO).  This agent just normalizes the
 latest snapshot into user_state.
 """
+
 from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import Any, Dict
 
 from koa import valet
 from koa.builtin_agents.sensing.base import SensingAgent, SensingResult

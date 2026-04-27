@@ -7,11 +7,11 @@ proposes episode drafts (e.g., "Saturday hike at Mt. Tam — 47 photos").
 Phase-3 skeleton — the iOS side (photos metadata upgrade / PhotoKit read)
 is separately gated on Photos usage permission.
 """
+
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
-from typing import Any, Dict, List
+from datetime import date
 
 from koa import valet
 from koa.builtin_agents.sensing.base import SensingAgent, SensingResult

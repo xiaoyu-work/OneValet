@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+
 import pytest
 
 from koa.orchestrator.intent_analyzer import IntentAnalyzer
@@ -90,10 +91,7 @@ async def test_intent_accuracy_over_fixtures():
                 and intent.intent_type == "single"
                 and any(len(opt) == 1 for opt in fx.expected_domains)
             )
-            clarify_ok = (
-                (not fx.expected_clarify)
-                or intent.needs_clarification
-            )
+            clarify_ok = (not fx.expected_clarify) or intent.needs_clarification
             return {
                 "fixture": fx.source_file,
                 "message": fx.message,
@@ -121,6 +119,5 @@ async def test_intent_accuracy_over_fixtures():
             )
 
     assert summary["accuracy"] >= _MIN_ACCURACY, (
-        f"Intent classification accuracy {summary['accuracy']:.2%} "
-        f"below floor {_MIN_ACCURACY:.2%}"
+        f"Intent classification accuracy {summary['accuracy']:.2%} below floor {_MIN_ACCURACY:.2%}"
     )

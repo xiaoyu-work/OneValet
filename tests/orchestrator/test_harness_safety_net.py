@@ -5,7 +5,6 @@ unhandled exception still yields error events and a user-facing message
 instead of silently killing the generator.
 """
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,10 +12,10 @@ import pytest
 from koa.result import AgentResult, AgentStatus
 from koa.streaming.models import AgentEvent, EventType
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_orchestrator_stub():
     """Build a minimal Orchestrator-like object that can run _execute_message."""
@@ -45,6 +44,7 @@ async def _collect_events(async_gen) -> list[AgentEvent]:
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestSafetyNetCatchesUnhandledErrors:
     """Verify that exceptions raised before the ReAct loop are caught."""
 
@@ -54,11 +54,11 @@ class TestSafetyNetCatchesUnhandledErrors:
         orch = _make_orchestrator_stub()
 
         with patch.object(
-            type(orch), "prepare_context", side_effect=RuntimeError("kaboom"),
+            type(orch),
+            "prepare_context",
+            side_effect=RuntimeError("kaboom"),
         ):
-            events = await _collect_events(
-                orch._execute_message("tenant-1", "hello")
-            )
+            events = await _collect_events(orch._execute_message("tenant-1", "hello"))
 
         types = [e.type for e in events]
         assert EventType.ERROR in types, f"Expected ERROR event, got {types}"
@@ -71,11 +71,11 @@ class TestSafetyNetCatchesUnhandledErrors:
         orch = _make_orchestrator_stub()
 
         with patch.object(
-            type(orch), "prepare_context", side_effect=ValueError("bad input"),
+            type(orch),
+            "prepare_context",
+            side_effect=ValueError("bad input"),
         ):
-            events = await _collect_events(
-                orch._execute_message("tenant-1", "hi")
-            )
+            events = await _collect_events(orch._execute_message("tenant-1", "hi"))
 
         error_events = [e for e in events if e.type == EventType.ERROR]
         assert len(error_events) == 1
@@ -89,11 +89,11 @@ class TestSafetyNetCatchesUnhandledErrors:
         orch = _make_orchestrator_stub()
 
         with patch.object(
-            type(orch), "prepare_context", side_effect=TypeError("oops"),
+            type(orch),
+            "prepare_context",
+            side_effect=TypeError("oops"),
         ):
-            events = await _collect_events(
-                orch._execute_message("tenant-1", "hey")
-            )
+            events = await _collect_events(orch._execute_message("tenant-1", "hey"))
 
         end_events = [e for e in events if e.type == EventType.EXECUTION_END]
         assert len(end_events) == 1
@@ -105,15 +105,18 @@ class TestSafetyNetCatchesUnhandledErrors:
     async def test_message_chunk_contains_fallback_text(self):
         orch = _make_orchestrator_stub()
 
-        with patch.object(
-            type(orch), "prepare_context", side_effect=RuntimeError("boom"),
-        ), patch(
-            "koa.orchestrator.graceful_response.generate_graceful_error",
-            new_callable=lambda: AsyncMock(return_value="whoops, brain glitch"),
+        with (
+            patch.object(
+                type(orch),
+                "prepare_context",
+                side_effect=RuntimeError("boom"),
+            ),
+            patch(
+                "koa.orchestrator.graceful_response.generate_graceful_error",
+                new_callable=lambda: AsyncMock(return_value="whoops, brain glitch"),
+            ),
         ):
-            events = await _collect_events(
-                orch._execute_message("tenant-1", "yo")
-            )
+            events = await _collect_events(orch._execute_message("tenant-1", "yo"))
 
         chunk_events = [e for e in events if e.type == EventType.MESSAGE_CHUNK]
         assert len(chunk_events) >= 1
@@ -140,9 +143,10 @@ class TestHardcodedMessagesReplaced:
 
     def test_no_hardcoded_sorry_in_orchestrator(self):
         import inspect
+
         from koa.orchestrator.orchestrator import Orchestrator
 
         source = inspect.getsource(Orchestrator._execute_message)
-        assert (
-            "Sorry, I'm having trouble processing your request" not in source
-        ), "Hardcoded sorry message should be replaced with generate_graceful_error"
+        assert "Sorry, I'm having trouble processing your request" not in source, (
+            "Hardcoded sorry message should be replaced with generate_graceful_error"
+        )

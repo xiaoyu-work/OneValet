@@ -353,8 +353,7 @@ async def delete_event(
         )
 
     await db.execute(
-        "DELETE FROM tenant_default.local_calendar_events "
-        "WHERE user_id = $1 AND event_id = $2",
+        "DELETE FROM tenant_default.local_calendar_events WHERE user_id = $1 AND event_id = $2",
         tenant_id,
         event_id,
     )
