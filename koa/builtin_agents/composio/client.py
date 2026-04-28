@@ -220,7 +220,7 @@ class ComposioClient:
     # ── Helpers ──
 
     @staticmethod
-    def format_action_result(data: Dict[str, Any], max_field_len: int = 2000) -> str:
+    def format_action_result(data: Dict[str, Any], max_field_len: int = 300) -> str:
         """Format an execute_action response into a readable string."""
         if data.get("successfull") or data.get("successful"):
             response_data = data.get("data", {})

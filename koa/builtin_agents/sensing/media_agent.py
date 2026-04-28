@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Any
 
 from koa import valet
 from koa.builtin_agents.sensing.base import SensingAgent, SensingResult
@@ -28,17 +29,14 @@ class MediaAgent(SensingAgent):
 
     async def analyze(
         self,
-        *,
-        db,
+        db: Any,
         user_id: str,
-        for_date: date,
+        local_date: date,
+        tz_name: str,
     ) -> SensingResult:
         # TODO(phase-3): query `photo_metadata` table (to be added) for
-        # items where captured_at::date = for_date, cluster by
+        # items where captured_at::date = local_date, cluster by
         # (time-window 30min, geo-cell 500m), propose episodes for clusters
         # with >=10 photos or >=2 distinct faces.
-        logger.debug("MediaAgent.analyze stub for %s %s", user_id, for_date)
-        return SensingResult(
-            state={"last_scanned_date": for_date.isoformat()},
-            proposals=[],
-        )
+        logger.debug("MediaAgent.analyze stub for %s %s %s", user_id, local_date, tz_name)
+        return SensingResult(notes=f"MediaAgent stub: no-op for {local_date}")

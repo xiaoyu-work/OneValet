@@ -196,8 +196,11 @@ class AgentRegistry:
         from ..agents.decorator import enhance_agent_tool_schema, generate_tool_schema
 
         schemas = []
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
         for name, metadata in self._get_agent_registry().items():
             if not getattr(metadata, "expose_as_tool", True):
+                continue
+            if not self._agent_available_for_tenant(metadata, tenant_services):
                 continue
             schema = generate_tool_schema(metadata.agent_class)
             schema = enhance_agent_tool_schema(metadata.agent_class, schema)
@@ -222,6 +225,7 @@ class AgentRegistry:
         from ..agents.decorator import enhance_agent_tool_schema, generate_tool_schema
 
         domain_set = set(domains)
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         schemas = []
         matched = []
@@ -233,6 +237,9 @@ class AgentRegistry:
             agent_domain = getattr(metadata, "domain", None)
             if agent_domain not in domain_set:
                 skipped.append(f"{name}(domain={agent_domain})")
+                continue
+            if not self._agent_available_for_tenant(metadata, tenant_services):
+                skipped.append(f"{name}(requires_service)")
                 continue
             matched.append(name)
             schema = generate_tool_schema(metadata.agent_class)
@@ -267,8 +274,11 @@ class AgentRegistry:
         Includes descriptions, capabilities, available tools, and inputs/outputs.
         """
         lines = []
+        tenant_services = await self._get_tenant_services(tenant_id, credential_store)
 
         for name, metadata in self._get_agent_registry().items():
+            if not self._agent_available_for_tenant(metadata, tenant_services):
+                continue
             description = metadata.description or metadata.agent_class.__doc__ or ""
             lines.append(f"- **{name}**: {description}")
 

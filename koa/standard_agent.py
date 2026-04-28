@@ -219,6 +219,7 @@ class StandardAgent(BaseAgent):
 
         # Track validation errors for custom error messages
         self._validation_error: Optional[str] = None
+        self._tool_validator: Optional[Any] = None
 
         # Instance metadata - for custom per-instance properties (e.g., user_id, session_id)
         self.metadata: Dict[str, Any] = {}
@@ -1543,7 +1544,7 @@ Return JSON only."""
             try:
                 from koa.llm.tool_validator import ToolSchemaValidator
 
-                if not hasattr(self, "_tool_validator") or self._tool_validator is None:
+                if self._tool_validator is None:
                     self._tool_validator = ToolSchemaValidator.from_agent_tools(self.tools)
                 vr = self._tool_validator.validate(tc.name, args)
                 if not vr.ok:
@@ -1840,9 +1841,11 @@ Return JSON only."""
                     "type": "function",
                     "function": {
                         "name": tc.name,
-                        "arguments": json.dumps(tc.arguments, ensure_ascii=False)
-                        if isinstance(tc.arguments, dict)
-                        else tc.arguments,
+                        "arguments": (
+                            json.dumps(tc.arguments, ensure_ascii=False)
+                            if isinstance(tc.arguments, dict)
+                            else tc.arguments
+                        ),
                     },
                 }
                 for tc in response.tool_calls

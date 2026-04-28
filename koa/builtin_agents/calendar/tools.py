@@ -1017,19 +1017,19 @@ async def query_local_events(
             hours_ahead=max(1, int(hours_ahead)),
             calendars=calendars,
         )
-    except Exception as e:
-        logger.warning("query_local_events failed: %s", e)
+    except Exception as exc:
+        logger.warning("query_local_events failed: %s", exc)
         return "Couldn't read local calendar right now."
 
     if not events:
         return f"No local calendar events in the next {hours_ahead} hours."
 
     lines = []
-    for e in events[:15]:
-        title = e.get("title") or "(Untitled)"
-        start = e.get("start") or ""
-        cal = e.get("calendar") or ""
-        loc = e.get("location") or ""
+    for event in events[:15]:
+        title = event.get("title") or "(Untitled)"
+        start = event.get("start") or ""
+        cal = event.get("calendar") or ""
+        loc = event.get("location") or ""
         tag = f" [{cal}]" if cal else ""
         line = f"📅 {title}{tag} — {start}"
         if loc:

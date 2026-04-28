@@ -111,6 +111,30 @@ class AgentTool:
         if self.idempotent is None:
             self.idempotent = self.risk_level == "read"
 
+    @property
+    def __name__(self) -> str:
+        """Expose function-like naming for decorated tool compatibility."""
+        return self.name
+
+    async def __call__(
+        self,
+        *args: Any,
+        context: Optional[AgentToolContext] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Allow decorated tools to be called like their original functions."""
+        param_names = list((self.parameters.get("properties") or {}).keys())
+        if len(args) > len(param_names):
+            raise TypeError(f"{self.name}() takes {len(param_names)} positional arguments")
+
+        call_args = dict(kwargs)
+        for name, value in zip(param_names, args):
+            if name in call_args:
+                raise TypeError(f"{self.name}() got multiple values for argument '{name}'")
+            call_args[name] = value
+
+        return await self.executor(call_args, context or AgentToolContext())
+
     def to_openai_schema(self) -> Dict[str, Any]:
         """Convert to OpenAI function-calling tool schema."""
         return {

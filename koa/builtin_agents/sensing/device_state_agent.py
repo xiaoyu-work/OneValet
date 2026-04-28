@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Any
 
 from koa import valet
 from koa.builtin_agents.sensing.base import SensingAgent, SensingResult
@@ -28,16 +29,13 @@ class DeviceStateAgent(SensingAgent):
 
     async def analyze(
         self,
-        *,
-        db,
+        db: Any,
         user_id: str,
-        for_date: date,
+        local_date: date,
+        tz_name: str,
     ) -> SensingResult:
         # TODO(phase-3): SELECT latest row from `device_state_snapshots`
         # (to be added) and compute flags like
         # ['focus_work', 'low_battery', 'tz_changed'].
-        logger.debug("DeviceStateAgent.analyze stub for %s %s", user_id, for_date)
-        return SensingResult(
-            state={"focus_mode": None, "battery": None, "tz_changed": False},
-            proposals=[],
-        )
+        logger.debug("DeviceStateAgent.analyze stub for %s %s %s", user_id, local_date, tz_name)
+        return SensingResult(notes=f"DeviceStateAgent stub: no-op for {local_date}")

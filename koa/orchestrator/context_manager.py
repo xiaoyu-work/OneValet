@@ -10,12 +10,10 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .constants import (
-    IMAGE_TOKEN_ESTIMATE,
     JSON_CHARS_PER_TOKEN,
     JSON_DETECTION_RATIO,
     JSON_DETECTION_SAMPLE_SIZE,
     TEXT_CHARS_PER_TOKEN,
-    TOKENS_PER_MESSAGE_OVERHEAD,
     TOOL_CALL_STRUCTURE_OVERHEAD_TOKENS,
 )
 from .react_config import ReactLoopConfig
@@ -41,7 +39,6 @@ class ContextManager:
         """
         total = 0
         for msg in messages:
-            total += TOKENS_PER_MESSAGE_OVERHEAD
             content = msg.get("content")
             if content is None:
                 continue
@@ -52,7 +49,6 @@ class ContextManager:
                     if isinstance(part, dict):
                         part_type = part.get("type", "")
                         if part_type in ("image_url", "image"):
-                            total += IMAGE_TOKEN_ESTIMATE
                             continue
                         text = part.get("text") or part.get("content", "")
                         if isinstance(text, str):
