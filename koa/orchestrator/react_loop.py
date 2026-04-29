@@ -34,6 +34,42 @@ logger = logging.getLogger(__name__)
 TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
 
 
+def _stable_json(value: Any) -> str:
+    try:
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _media_key(item: Dict[str, Any]) -> str:
+    if item.get("type") == "inline_cards":
+        data = item.get("data")
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return f"inline_cards:{_stable_json(data)}"
+    return _stable_json(
+        {
+            "type": item.get("type"),
+            "data": item.get("data"),
+            "media_type": item.get("media_type"),
+            "metadata": item.get("metadata"),
+        }
+    )
+
+
+def _append_unique_media(target: List[Dict[str, Any]], media: List[Dict[str, Any]]) -> None:
+    seen = {_media_key(item) for item in target}
+    for item in media:
+        key = _media_key(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        target.append(item)
+
+
 class _ReactLoopLLMError(Exception):
     """Raised when the ReAct loop LLM call fails after all retries.
 
@@ -836,7 +872,7 @@ class ReactLoopMixin:
                         for m in result_media:
                             meta = m.get("metadata", {})
                             if meta.get("for_storage") or m.get("type") == "inline_cards":
-                                _response_media.append(m)
+                                _append_unique_media(_response_media, [m])
 
                         all_tool_records.append(
                             ToolCallRecord(
