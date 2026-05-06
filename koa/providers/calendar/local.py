@@ -79,10 +79,10 @@ class LocalCalendarProvider:
         args: List[Any] = [self.tenant_id]
         if time_min is not None:
             args.append(time_min)
-            sql.append(f"AND ends_at >= ${len(args)}")
+            sql.append(f"AND ends_at > ${len(args)}")
         if time_max is not None:
             args.append(time_max)
-            sql.append(f"AND starts_at <= ${len(args)}")
+            sql.append(f"AND starts_at < ${len(args)}")
         if query:
             args.append(f"%{query}%")
             sql.append(f"AND title ILIKE ${len(args)}")

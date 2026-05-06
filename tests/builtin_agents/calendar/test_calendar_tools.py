@@ -90,14 +90,15 @@ class TestCalendarToolRouting:
         ):
             result = await query_events.executor(
                 {
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
             )
 
         assert isinstance(result, ToolOutput)
-        assert "Found 1 event(s) today:" in result.text
+        assert "Found 1 event(s) between" in result.text
         assert '"eventId": "evt-1"' in result.media[0]["data"]
 
     @pytest.mark.asyncio
@@ -158,7 +159,8 @@ class TestCalendarToolRouting:
             result = await delete_event.executor(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -184,7 +186,8 @@ class TestCalendarToolRouting:
             result = await _preview_delete_event(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -248,7 +251,8 @@ class TestCalendarToolRouting:
             result = await delete_event.executor(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -269,7 +273,8 @@ class TestCalendarToolRouting:
             result = await _preview_delete_event(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -286,7 +291,8 @@ class TestCalendarToolRouting:
         ):
             result = await query_events.executor(
                 {
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                 },
                 _context(),
             )
@@ -303,7 +309,8 @@ class TestCalendarToolRouting:
             result = await _preview_delete_event(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                 },
                 _context(),
             )
@@ -390,7 +397,8 @@ class TestCalendarToolRouting:
             result = await delete_event.executor(
                 {
                     "search_query": "team sync",
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -410,7 +418,8 @@ class TestCalendarToolRouting:
         ):
             result = await query_events.executor(
                 {
-                    "time_range": "today",
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),

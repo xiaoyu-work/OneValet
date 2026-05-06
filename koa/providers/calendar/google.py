@@ -5,7 +5,7 @@ Implements BaseCalendarProvider for Google Calendar.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import httpx
@@ -44,10 +44,14 @@ class GoogleCalendarProvider(BaseCalendarProvider, OAuthHTTPMixin):
 
         if not calendar_id:
             calendar_id = "primary"
-        if not time_min:
-            time_min = datetime.now(timezone.utc)
-        if not time_max:
-            time_max = time_min + timedelta(days=7)
+        if time_min is None or time_max is None:
+            return {
+                "success": False,
+                "error": (
+                    "time_min and time_max are required (no implicit window). "
+                    "Callers must compute an explicit ISO-8601 range."
+                ),
+            }
 
         try:
             params: Dict[str, Any] = {

@@ -119,17 +119,24 @@ def _event_link(event) -> str:
 async def _search_resolved_calendar_events(
     context: AgentToolContext,
     provider,
-    time_range: str,
+    time_min: str,
+    time_max: str,
     search_query: str | None = None,
     max_results: int = 50,
 ):
-    from .search_helper import parse_time_range
+    """Search calendar events for an already-resolved provider.
+
+    ``time_min`` / ``time_max`` are ISO-8601 strings produced by the LLM
+    (or pure ``YYYY-MM-DD`` dates). They are validated and parsed against
+    the user's timezone; missing/invalid input raises ``ValueError``.
+    """
+    from .search_helper import resolve_time_window
 
     user_tz = context.metadata.get("timezone") if context.metadata else None
-    time_min, time_max = parse_time_range(time_range, user_tz=user_tz)
+    parsed_min, parsed_max = resolve_time_window(time_min, time_max, user_tz=user_tz)
     result = await provider.list_events(
-        time_min=time_min,
-        time_max=time_max,
+        time_min=parsed_min,
+        time_max=parsed_max,
         query=search_query,
         max_results=max_results,
     )
@@ -140,8 +147,8 @@ async def _search_resolved_calendar_events(
     return {
         "success": True,
         "events": result.get("data", []),
-        "time_min": time_min,
-        "time_max": time_max,
+        "time_min": parsed_min,
+        "time_max": parsed_max,
     }
 
 
@@ -238,9 +245,24 @@ def _parse_time_to_datetime(time_str: str, user_tz: str | None = None) -> dateti
 
 @tool
 async def query_events(
-    time_range: Annotated[
+    time_min: Annotated[
         str,
-        "Time range to search (e.g., 'today', 'tomorrow', 'this week', 'next week', 'this month', 'next 3 days')",
+        (
+            "Inclusive start of the search window in ISO-8601 (e.g. "
+            "'2026-04-27T00:00:00-07:00') or a date 'YYYY-MM-DD' which is "
+            "interpreted as midnight in the user's timezone. Compute this "
+            "yourself from the current local datetime in the system "
+            "prompt — do not pass natural language phrases like 'last week'."
+        ),
+    ],
+    time_max: Annotated[
+        str,
+        (
+            "Exclusive end of the search window, same format as time_min. "
+            "Must be strictly after time_min. For 'today' pass tomorrow "
+            "midnight; for 'last week' pass this Monday 00:00; for 'next 3 "
+            "days' pass now+3d."
+        ),
     ],
     query: Annotated[Optional[str], "Optional keywords to search in event titles"] = None,
     max_results: Annotated[int, "Maximum number of events to return (default 10)"] = 10,
@@ -253,8 +275,10 @@ async def query_events(
     *,
     context: AgentToolContext,
 ) -> str:
-    """Search and list calendar events. Returns events matching the time range and optional keyword query."""
-    from .search_helper import parse_time_range
+    """Search and list calendar events. Returns events overlapping the
+    half-open ``[time_min, time_max)`` window, optionally filtered by
+    title keywords."""
+    from .search_helper import resolve_time_window
 
     provider, account, error = await _resolve_calendar_provider(
         context,
@@ -265,13 +289,13 @@ async def query_events(
     if error:
         return error
 
-    try:
-        user_tz = context.metadata.get("timezone") if context.metadata else None
-        time_min, time_max = parse_time_range(time_range, user_tz=user_tz)
+    user_tz = context.metadata.get("timezone") if context.metadata else None
+    parsed_min, parsed_max = resolve_time_window(time_min, time_max, user_tz=user_tz)
 
+    try:
         result = await provider.list_events(
-            time_min=time_min,
-            time_max=time_max,
+            time_min=parsed_min,
+            time_max=parsed_max,
             max_results=max_results,
             query=query or None,
         )
@@ -284,10 +308,15 @@ async def query_events(
         events = result.get("data", [])
         events.sort(key=_event_sort_key)
 
-        if not events:
-            return f"No events found {time_range}."
+        window_label = (
+            f"{parsed_min.strftime('%Y-%m-%d %H:%M')} → "
+            f"{parsed_max.strftime('%Y-%m-%d %H:%M')}"
+        )
 
-        parts = [f"Found {len(events)} event(s) {time_range}:"]
+        if not events:
+            return f"No events found between {window_label}."
+
+        parts = [f"Found {len(events)} event(s) between {window_label}:"]
 
         for i, event in enumerate(events[:10], 1):
             summary = html.unescape(event.get("summary", "No title"))
@@ -806,7 +835,8 @@ async def update_event(
 async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
     """Search for events matching criteria and show what would be deleted."""
     search_query = args.get("search_query", "")
-    time_range = args.get("time_range", "next 7 days")
+    time_min = args.get("time_min")
+    time_max = args.get("time_max")
     target_provider = args.get("target_provider")
     target_account = args.get("target_account")
 
@@ -819,13 +849,18 @@ async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
     if error:
         return error
 
-    result = await _search_resolved_calendar_events(
-        context=context,
-        provider=provider,
-        time_range=time_range,
-        search_query=search_query,
-        max_results=50,
-    )
+    try:
+        result = await _search_resolved_calendar_events(
+            context=context,
+            provider=provider,
+            time_min=time_min,
+            time_max=time_max,
+            search_query=search_query,
+            max_results=50,
+        )
+    except ValueError as e:
+        return f"Cannot preview deletion: {e}"
+
     if not result.get("success"):
         return wrap_routing_error("calendar", account.get("provider", "calendar"), "read_failed")
 
@@ -864,10 +899,23 @@ async def _preview_delete_event(args: dict, context: AgentToolContext) -> str:
 @tool(needs_approval=True, get_preview=_preview_delete_event)
 async def delete_event(
     search_query: Annotated[str, "Keywords to search for events to delete (event title, keywords)"],
-    time_range: Annotated[
+    time_min: Annotated[
         str,
-        "Time range to search (e.g., 'today', 'tomorrow', 'this week'). Defaults to 'next 7 days'.",
-    ] = "next 7 days",
+        (
+            "Inclusive start of the search window in ISO-8601 (e.g. "
+            "'2026-04-27T00:00:00-07:00') or a date 'YYYY-MM-DD' (midnight "
+            "in the user's timezone). Resolve relative phrases like 'today' "
+            "or 'this week' yourself using the current local datetime in "
+            "the system prompt."
+        ),
+    ],
+    time_max: Annotated[
+        str,
+        (
+            "Exclusive end of the search window, same format as time_min. "
+            "Must be strictly after time_min."
+        ),
+    ],
     target_provider: Annotated[
         Optional[str], "Optional explicit provider like local or google"
     ] = None,
@@ -877,7 +925,9 @@ async def delete_event(
     *,
     context: AgentToolContext,
 ) -> str:
-    """Delete calendar events matching the search criteria."""
+    """Delete calendar events matching the search criteria within
+    ``[time_min, time_max)``. Always pass an explicit window — never rely
+    on a default."""
     provider, account, error = await _resolve_calendar_provider(
         context,
         target_provider,
@@ -886,13 +936,18 @@ async def delete_event(
     if error:
         return error
 
-    result = await _search_resolved_calendar_events(
-        context=context,
-        provider=provider,
-        time_range=time_range,
-        search_query=search_query,
-        max_results=50,
-    )
+    try:
+        result = await _search_resolved_calendar_events(
+            context=context,
+            provider=provider,
+            time_min=time_min,
+            time_max=time_max,
+            search_query=search_query,
+            max_results=50,
+        )
+    except ValueError as e:
+        return f"Cannot delete events: {e}"
+
     if not result.get("success"):
         return wrap_routing_error("calendar", account.get("provider", "calendar"), "write_failed")
 

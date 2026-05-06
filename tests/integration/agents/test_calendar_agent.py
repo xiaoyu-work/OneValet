@@ -55,14 +55,27 @@ async def test_tool_selection(conversation, user_input, expected_tools):
 
 
 async def test_extracts_query_time_range(conversation):
-    """query_events should receive an appropriate time_range for 'today'."""
+    """query_events should receive concrete ISO time_min/time_max for 'today'."""
+    import re
+
     conv = await conversation()
     await conv.send("What's on my calendar today?")
     conv.assert_tool_called("query_events")
 
     args = conv.get_tool_args("query_events")[0]
-    time_range = args.get("time_range", "").lower()
-    assert "today" in time_range, f"Expected time_range containing 'today', got '{time_range}'"
+    time_min = args.get("time_min", "")
+    time_max = args.get("time_max", "")
+
+    iso_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    assert iso_pattern.match(time_min), (
+        f"Expected ISO-formatted time_min, got '{time_min}'"
+    )
+    assert iso_pattern.match(time_max), (
+        f"Expected ISO-formatted time_max, got '{time_max}'"
+    )
+    assert time_max > time_min, (
+        f"time_max ({time_max}) must be strictly after time_min ({time_min})"
+    )
 
 
 async def test_extracts_create_event_fields(conversation):
