@@ -134,6 +134,8 @@ class TestCalendarToolRouting:
                 {
                     "target": "team sync",
                     "changes": {"new_title": "Weekly sync"},
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -357,6 +359,8 @@ class TestCalendarToolRouting:
                 {
                     "target": "team sync",
                     "changes": {"new_title": "Weekly sync"},
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                 },
                 _context(),
             )
@@ -377,6 +381,8 @@ class TestCalendarToolRouting:
                 {
                     "target": "team sync",
                     "changes": {"new_title": "Weekly sync"},
+                    "time_min": "2026-04-12",
+                    "time_max": "2026-04-13",
                     "target_provider": "local",
                 },
                 _context(),
@@ -449,3 +455,250 @@ class TestCalendarAgent:
         assert set_routing_preference in CalendarAgent.tools
         assert "set_routing_preference" in CalendarAgent._SYSTEM_PROMPT_TEMPLATE
         assert "default destination" in CalendarAgent._SYSTEM_PROMPT_TEMPLATE
+
+    def test_calendar_agent_prompt_documents_update_event_time_window(self):
+        prompt = CalendarAgent._SYSTEM_PROMPT_TEMPLATE
+        # update_event must be in the time-window rules alongside query/delete.
+        assert "update_event" in prompt
+        assert "query_events, update_event, and delete_event" in prompt
+        # Past windows must be allowed for updates so we can edit historical
+        # events (the production bug we just fixed).
+        assert "even if it's in the past" in prompt
+
+
+# ---------------------------------------------------------------------------
+# update_event — past-window / ambiguity / missing-bounds regressions
+# ---------------------------------------------------------------------------
+
+
+class _MultiMatchProvider:
+    """Provider that returns several events whose titles all contain the target."""
+
+    async def list_events(self, **kwargs):
+        return {
+            "success": True,
+            "data": [
+                {
+                    "id": "evt-mon",
+                    "summary": "SF trip - Monday",
+                    "start": datetime(2026, 4, 27, 9, 0, tzinfo=timezone.utc),
+                    "end": datetime(2026, 4, 27, 17, 0, tzinfo=timezone.utc),
+                    "location": "San Francisco",
+                },
+                {
+                    "id": "evt-tue",
+                    "summary": "SF trip - Tuesday",
+                    "start": datetime(2026, 4, 28, 9, 0, tzinfo=timezone.utc),
+                    "end": datetime(2026, 4, 28, 17, 0, tzinfo=timezone.utc),
+                    "location": "San Francisco",
+                },
+                {
+                    "id": "evt-wed",
+                    "summary": "SF trip - Wednesday",
+                    "start": datetime(2026, 4, 29, 9, 0, tzinfo=timezone.utc),
+                    "end": datetime(2026, 4, 29, 17, 0, tzinfo=timezone.utc),
+                    "location": "San Francisco",
+                },
+            ],
+        }
+
+    async def update_event(self, **kwargs):  # should never be called
+        raise AssertionError("update_event must not mutate when there are multiple matches")
+
+
+class _NoMatchProvider:
+    async def list_events(self, **kwargs):
+        return {"success": True, "data": []}
+
+    async def update_event(self, **kwargs):  # should never be called
+        raise AssertionError("update_event must not mutate when target is not found")
+
+
+class _SinglePastMatchProvider:
+    """Provider that returns exactly one matching past event (4/27 SF trip)."""
+
+    def __init__(self):
+        self.update_calls: list = []
+
+    async def list_events(self, **kwargs):
+        return {
+            "success": True,
+            "data": [
+                {
+                    "id": "evt-sf-27",
+                    "event_id": "evt-sf-27",
+                    "summary": "SF business trip",
+                    "description": "OnePoint offsite",
+                    "start": datetime(2026, 4, 27, 9, 0, tzinfo=timezone.utc),
+                    "end": datetime(2026, 4, 27, 17, 0, tzinfo=timezone.utc),
+                    "location": "San Francisco",
+                }
+            ],
+        }
+
+    async def update_event(self, **kwargs):
+        self.update_calls.append(kwargs)
+        return {"success": True, "event_id": kwargs["event_id"]}
+
+
+class TestUpdateEventWindowing:
+    @pytest.mark.asyncio
+    async def test_update_event_finds_past_event_within_supplied_window(self):
+        """Regression: previously hardcoded now→now+30d window made past events invisible."""
+        provider = _SinglePastMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await update_event.executor(
+                {
+                    "target": "SF",
+                    "changes": {"new_title": "SF trip (rescheduled)"},
+                    # Past window — would have been skipped by the old hardcoded future-only search.
+                    "time_min": "2026-04-27",
+                    "time_max": "2026-05-01",
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        assert "renamed the event" in result.lower()
+        assert len(provider.update_calls) == 1
+        assert provider.update_calls[0]["event_id"] == "evt-sf-27"
+        assert provider.update_calls[0]["summary"] == "SF trip (rescheduled)"
+
+    @pytest.mark.asyncio
+    async def test_update_event_returns_disambiguation_when_multiple_matches(self):
+        """Multiple matches must NOT silently mutate the first hit."""
+        provider = _MultiMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await update_event.executor(
+                {
+                    "target": "SF trip",
+                    "changes": {"new_location": "Mountain View"},
+                    "time_min": "2026-04-27",
+                    "time_max": "2026-05-01",
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        assert "found 3 events matching 'SF trip'" in result
+        assert "Monday" in result and "Tuesday" in result and "Wednesday" in result
+        assert "which one to update" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_update_event_returns_friendly_not_found_message(self):
+        provider = _NoMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await update_event.executor(
+                {
+                    "target": "ghost meeting",
+                    "changes": {"new_title": "Renamed"},
+                    "time_min": "2026-04-27",
+                    "time_max": "2026-05-01",
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        assert "couldn't find" in result.lower()
+        # Must surface the actual window so the LLM can self-correct.
+        assert "2026-04-27" in result and "2026-05-01" in result
+
+    @pytest.mark.asyncio
+    async def test_update_event_surfaces_time_bound_validation_errors(self):
+        provider = _SinglePastMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            result = await update_event.executor(
+                {
+                    "target": "SF",
+                    "changes": {"new_title": "X"},
+                    "time_min": "2026-05-01",
+                    "time_max": "2026-04-27",  # inverted on purpose
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        assert "cannot update event" in result.lower()
+        assert "time_max must be strictly after time_min" in result
+        assert provider.update_calls == []
+
+    @pytest.mark.asyncio
+    async def test_update_event_schema_requires_time_window(self):
+        """Tool schema must mark time_min/time_max as required so the LLM is forced to supply them."""
+        required = update_event.parameters.get("required") or []
+        assert "time_min" in required
+        assert "time_max" in required
+
+
+class TestUpdateEventPreview:
+    @pytest.mark.asyncio
+    async def test_preview_resolves_single_match_and_shows_window(self):
+        from koa.builtin_agents.calendar.tools import _preview_update_event
+
+        provider = _SinglePastMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            preview = await _preview_update_event(
+                {
+                    "target": "SF",
+                    "changes": {"new_title": "SF trip (rescheduled)"},
+                    "time_min": "2026-04-27",
+                    "time_max": "2026-05-01",
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        # Window is visible to the user so they can sanity-check before approving.
+        assert "2026-04-27" in preview and "2026-05-01" in preview
+        assert "Resolved event:" in preview
+        assert "SF business trip" in preview
+        assert "Title -> SF trip (rescheduled)" in preview
+
+    @pytest.mark.asyncio
+    async def test_preview_surfaces_ambiguity_before_approval(self):
+        from koa.builtin_agents.calendar.tools import _preview_update_event
+
+        provider = _MultiMatchProvider()
+
+        with patch(
+            "koa.builtin_agents.calendar.tools._resolve_calendar_provider",
+            new=AsyncMock(return_value=(provider, {"provider": "local"}, None)),
+            create=True,
+        ):
+            preview = await _preview_update_event(
+                {
+                    "target": "SF trip",
+                    "changes": {"new_location": "Mountain View"},
+                    "time_min": "2026-04-27",
+                    "time_max": "2026-05-01",
+                    "target_provider": "local",
+                },
+                _context(),
+            )
+
+        assert "found 3 events" in preview.lower()

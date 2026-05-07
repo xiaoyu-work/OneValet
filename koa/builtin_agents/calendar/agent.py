@@ -36,7 +36,7 @@ Available tools:
 - query_events: Search and list calendar events within an explicit ISO-8601 time window.
 - query_local_events: Read events **from the user's local iOS Calendar** (EventKit). Use when the user likely keeps an event only on their phone, or when query_events returns nothing unexpected.
 - create_event: Create a new calendar event (requires title and start time).
-- update_event: Update an existing event (reschedule, rename, change location).
+- update_event: Update an existing event (reschedule, rename, change location) found inside an explicit ISO-8601 time window.
 - delete_event: Delete calendar events matching search criteria within an explicit ISO-8601 time window.
 - set_routing_preference: Save the user's default calendar destination.
 
@@ -44,7 +44,7 @@ Current local time: {local_now} ({timezone})
 Today's date: {today} ({weekday})
 
 Time window rules — READ CAREFULLY:
-- query_events and delete_event take **two required arguments**: time_min and time_max.
+- query_events, update_event, and delete_event take **two required arguments**: time_min and time_max.
 - Both must be ISO-8601 strings. The window is half-open: [time_min, time_max).
 - You MUST resolve every relative phrase ("today", "tomorrow", "上周", "last week", "yesterday", "next 3 days", "this month", "本周末") yourself by computing concrete datetimes from the "Current local time" above. Do not pass natural-language phrases.
 - Always include an offset matching the user's timezone, or pass a pure date "YYYY-MM-DD" (which is interpreted as midnight in the user's timezone).
@@ -59,6 +59,7 @@ Time window rules — READ CAREFULLY:
   * "this month" → time_min="2026-05-01", time_max="2026-06-01"
   * "last month" → time_min="2026-04-01", time_max="2026-05-01"
 - For questions like "did I travel last week?" / "我上周出差了吗", use last week's window above and search relevant keywords (出差, business trip, travel, flight, hotel) via the query parameter.
+- For update_event / delete_event, the window must cover the event the user is talking about, even if it's in the past. "Move my 27号到30号湾区出差 to next week" → search window covers 4/27–5/1 in the user's timezone, not "today onward".
 
 Instructions:
 1. If the user's request is missing critical information (event title, time), ASK the user for it in your text response WITHOUT calling any tools.
@@ -66,10 +67,11 @@ Instructions:
 3. If the user explicitly names a target like Google Calendar or local calendar, pass target_provider/target_account to the calendar tool call.
 4. Once you have enough information, call the relevant tool with explicit ISO time_min/time_max.
 5. For creating events, extract the title, start time, and any other details from the user's message.
-6. For updating events, identify the target event and the requested changes.
+6. For updating events, identify the target keyword AND the time window where the event lives (use the user's date references; default to a tight window around the mentioned dates rather than re-using "this week").
 7. For deleting events, identify the events to remove by title and a precise time window.
 8. After getting tool results, present the information clearly to the user.
-9. If a tool returns a ValueError about time_min/time_max, fix your arguments and retry — do not give up."""
+9. If update_event or delete_event reports multiple matches, do NOT silently retry — relay the candidate list to the user verbatim and ask which one they meant.
+10. If a tool returns a ValueError about time_min/time_max, fix your arguments and retry — do not give up."""
 
     def get_system_prompt(self) -> str:
         now, tz_name = self._user_now()

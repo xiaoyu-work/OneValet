@@ -67,12 +67,8 @@ async def test_extracts_query_time_range(conversation):
     time_max = args.get("time_max", "")
 
     iso_pattern = re.compile(r"^\d{4}-\d{2}-\d{2}")
-    assert iso_pattern.match(time_min), (
-        f"Expected ISO-formatted time_min, got '{time_min}'"
-    )
-    assert iso_pattern.match(time_max), (
-        f"Expected ISO-formatted time_max, got '{time_max}'"
-    )
+    assert iso_pattern.match(time_min), f"Expected ISO-formatted time_min, got '{time_min}'"
+    assert iso_pattern.match(time_max), f"Expected ISO-formatted time_max, got '{time_max}'"
     assert time_max > time_min, (
         f"time_max ({time_max}) must be strictly after time_min ({time_min})"
     )
@@ -258,4 +254,100 @@ async def test_create_event_reject_cancels(conversation):
     result = await conv.send("no, cancel it")
     assert result.status in (AgentStatus.CANCELLED, AgentStatus.COMPLETED), (
         f"Expected CANCELLED after rejection, got {result.status}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Past-date update regression
+#
+# Production bug (2026-05-07): user asked "你改一下我上周从27号到30号在湾区
+# 出差你更新下我的日历". CalendarAgent prompted for approval *twice* and the
+# update silently failed because update_event hardcoded its search window to
+# [now, now+30d) — past events were invisible. Each retry tripped a fresh
+# WAITING_FOR_APPROVAL until max_turns exhausted.
+#
+# These tests exercise the agent at the LLM level to make sure:
+#   - the agent supplies concrete past time bounds for update_event
+#   - approval fires exactly once, and approve→COMPLETED works
+# ---------------------------------------------------------------------------
+
+
+def _is_past_iso(value: str) -> bool:
+    """Best-effort check that an ISO-8601 string falls in the past or covers the past."""
+    import re
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    if not value:
+        return False
+    text = value.strip()
+    iso_re = re.compile(r"^\d{4}-\d{2}-\d{2}")
+    if not iso_re.match(text):
+        return False
+    try:
+        if len(text) == 10:
+            parsed = _dt.fromisoformat(text + "T00:00:00+00:00")
+        else:
+            parsed = _dt.fromisoformat(text.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=_tz.utc)
+    except ValueError:
+        return False
+    return parsed < _dt.now(_tz.utc)
+
+
+async def test_update_event_for_past_trip_uses_past_window(conversation):
+    """The LLM must scope its update_event search to the user's past dates,
+    not 'today onward'."""
+    conv = await conversation()
+    msg = (
+        "Update my SF business trip from last Monday April 27th — "
+        "rename it to 'SF offsite (final)'."
+    )
+    await conv.send_until_status(msg, AgentStatus.WAITING_FOR_APPROVAL)
+
+    update_calls = conv.get_tool_calls("update_event")
+    if not update_calls:
+        # LLM legitimately may scout via query_events first; in that case,
+        # walk the conversation forward until the update fires.
+        await conv.send("yes, go ahead — search and update it")
+        update_calls = conv.get_tool_calls("update_event")
+    assert update_calls, "Expected update_event to be called for a past-date update"
+
+    args = update_calls[0]["arguments"]
+    time_min = args.get("time_min", "")
+    time_max = args.get("time_max", "")
+    assert time_min and time_max, (
+        f"update_event must receive explicit time_min/time_max; got args={args}"
+    )
+    assert _is_past_iso(time_min), (
+        f"time_min must be in the past for a 'last week' update; got time_min={time_min!r}"
+    )
+
+
+async def test_update_event_past_trip_completes_after_single_approval(conversation):
+    """Approving a past-date update should COMPLETE, not loop into a second approval
+    or exhaust the agent's turn budget (which was the production symptom)."""
+    conv = await conversation()
+    await conv.send_until_status(
+        "Update my SF business trip from last Monday April 27th — "
+        "change the location to 'Palo Alto'.",
+        AgentStatus.WAITING_FOR_APPROVAL,
+    )
+    # Only count entries where the executor actually ran (canned result, not the
+    # __PENDING_APPROVAL__ sentinel emitted by the recording preview).
+    pre_executions = sum(
+        1 for c in conv.get_tool_calls("update_event") if c.get("result") != "__PENDING_APPROVAL__"
+    )
+    assert pre_executions == 0, "update_event should not have executed before the user approved"
+
+    result = await conv.send("approve")
+
+    post_executions = sum(
+        1 for c in conv.get_tool_calls("update_event") if c.get("result") != "__PENDING_APPROVAL__"
+    )
+    assert post_executions >= 1, "update_event must execute after approval"
+    assert result.status == AgentStatus.COMPLETED, (
+        f"Expected COMPLETED after a single approval; got {result.status}. "
+        f"(Production bug: status would loop back to WAITING_FOR_APPROVAL.)"
     )

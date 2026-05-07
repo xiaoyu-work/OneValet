@@ -18,16 +18,12 @@ from koa.builtin_agents.calendar.search_helper import (
 
 class TestParseIsoDatetime:
     def test_full_iso_with_offset_preserves_offset(self):
-        result = parse_iso_datetime(
-            "2026-04-27T00:00:00-07:00", field_name="time_min"
-        )
+        result = parse_iso_datetime("2026-04-27T00:00:00-07:00", field_name="time_min")
         assert result.utcoffset().total_seconds() == -7 * 3600
         assert result.year == 2026 and result.month == 4 and result.day == 27
 
     def test_zulu_z_suffix_is_treated_as_utc(self):
-        result = parse_iso_datetime(
-            "2026-04-27T07:00:00Z", field_name="time_min"
-        )
+        result = parse_iso_datetime("2026-04-27T07:00:00Z", field_name="time_min")
         assert result.tzinfo is not None
         assert result.utcoffset().total_seconds() == 0
 
@@ -69,9 +65,7 @@ class TestParseIsoDatetime:
 
     def test_naive_datetime_object_is_localised(self):
         dt = datetime(2026, 4, 27, 9, 0)
-        result = parse_iso_datetime(
-            dt, field_name="time_min", user_tz="America/Los_Angeles"
-        )
+        result = parse_iso_datetime(dt, field_name="time_min", user_tz="America/Los_Angeles")
         assert result.tzinfo is not None
         assert result.utcoffset().total_seconds() == -7 * 3600
 
@@ -95,16 +89,12 @@ class TestParseIsoDatetime:
 
 class TestResolveTimeWindow:
     def test_happy_path_returns_parsed_pair(self):
-        a, b = resolve_time_window(
-            "2026-04-27", "2026-05-04", user_tz="America/Los_Angeles"
-        )
+        a, b = resolve_time_window("2026-04-27", "2026-05-04", user_tz="America/Los_Angeles")
         assert a < b
         assert a.day == 27 and b.day == 4
 
     def test_full_iso_pair(self):
-        a, b = resolve_time_window(
-            "2026-04-27T00:00:00-07:00", "2026-05-04T00:00:00-07:00"
-        )
+        a, b = resolve_time_window("2026-04-27T00:00:00-07:00", "2026-05-04T00:00:00-07:00")
         assert (b - a).days == 7
 
     def test_equal_bounds_raises(self):

@@ -309,8 +309,7 @@ async def query_events(
         events.sort(key=_event_sort_key)
 
         window_label = (
-            f"{parsed_min.strftime('%Y-%m-%d %H:%M')} → "
-            f"{parsed_max.strftime('%Y-%m-%d %H:%M')}"
+            f"{parsed_min.strftime('%Y-%m-%d %H:%M')} → {parsed_max.strftime('%Y-%m-%d %H:%M')}"
         )
 
         if not events:
@@ -617,12 +616,150 @@ async def create_event(
 # =============================================================================
 
 
-async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
-    """Generate a preview of the changes to be applied."""
-    target = args.get("target", "")
-    changes = args.get("changes", {})
+def _match_target_events(events: list, target: str) -> list:
+    """Return events whose summary or description contains ``target`` (case-insensitive).
 
-    parts = [f'I\'ll update the event matching "{target}":']
+    No silent broadening, no "first hit when target looks like 'meeting'" fallback —
+    callers handle the 0/1/N branches explicitly so we never mutate the wrong event.
+    """
+    target_lower = (target or "").strip().lower()
+    if not target_lower:
+        return list(events or [])
+    matches: list = []
+    for event in events or []:
+        title = (event.get("summary") or "").lower()
+        desc = (event.get("description") or "").lower()
+        if target_lower in title or target_lower in desc:
+            matches.append(event)
+    return matches
+
+
+def _summarize_event_for_disambiguation(event: dict) -> str:
+    """Render a single candidate line for the 'multiple matches' message."""
+    title = event.get("summary") or "(untitled)"
+    when = _format_event_time(event.get("start"))
+    location = event.get("location")
+    line = f'- "{title}" @ {when}'
+    if location:
+        line += f" ({location})"
+    return line
+
+
+async def _resolve_update_target(
+    *,
+    context: AgentToolContext,
+    provider,
+    account: dict,
+    target: str,
+    time_min: str,
+    time_max: str,
+):
+    """Search the user-supplied window and return either an error string OR a unique target event.
+
+    Returns a tuple ``(error_str, event)`` where exactly one is None:
+      * ``("Cannot search ...", None)`` — bad time bounds (ValueError from helper)
+      * ``("...write_failed wrap...", None)`` — provider failure
+      * ``("I couldn't find ...", None)`` — zero matches
+      * ``("I found N events matching ...", None)`` — ambiguous (>1 matches), with a list
+      * ``(None, event_dict)`` — exactly one match, safe to update
+    """
+    try:
+        search_result = await _search_resolved_calendar_events(
+            context=context,
+            provider=provider,
+            time_min=time_min,
+            time_max=time_max,
+            search_query=target,
+            max_results=20,
+        )
+    except ValueError as e:
+        return f"Cannot update event: {e}", None
+
+    if not search_result.get("success"):
+        return (
+            wrap_routing_error("calendar", account.get("provider", "calendar"), "write_failed"),
+            None,
+        )
+
+    events = search_result.get("events") or []
+    matches = _match_target_events(events, target)
+
+    if not matches:
+        return (
+            f"I couldn't find an event matching '{target}' between {time_min} and {time_max}. "
+            "Could you double-check the title or widen the time window?",
+            None,
+        )
+
+    if len(matches) > 1:
+        lines = [
+            f"I found {len(matches)} events matching '{target}' between {time_min} and {time_max}:",
+        ]
+        for event in matches[:5]:
+            lines.append(_summarize_event_for_disambiguation(event))
+        if len(matches) > 5:
+            lines.append(f"...and {len(matches) - 5} more")
+        lines.append("Please tell me which one to update (e.g. by date, location, or attendee).")
+        return "\n".join(lines), None
+
+    return None, matches[0]
+
+
+async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
+    """Generate a preview of the changes to be applied.
+
+    Resolves the target event against the LLM-supplied ``[time_min, time_max)``
+    window so the user sees exactly which event will change before approving.
+    Falls back to a simpler preview if resolution can't run (e.g. missing
+    provider context during preview phase).
+    """
+    target = args.get("target", "")
+    changes = args.get("changes") or {}
+    time_min = args.get("time_min")
+    time_max = args.get("time_max")
+    target_provider = args.get("target_provider")
+    target_account = args.get("target_account")
+
+    resolved_line: Optional[str] = None
+    if target and time_min and time_max:
+        try:
+            provider, account, error = await _resolve_calendar_provider(
+                context,
+                target_provider,
+                target_account,
+                operation="read",
+            )
+        except Exception as e:  # defensive: never block the approval card
+            logger.debug(f"update preview: provider resolution skipped ({e})")
+            provider = None
+            account = None
+            error = None
+
+        if provider is not None and not error:
+            try:
+                err, target_event = await _resolve_update_target(
+                    context=context,
+                    provider=provider,
+                    account=account or {},
+                    target=target,
+                    time_min=time_min,
+                    time_max=time_max,
+                )
+            except Exception as e:  # defensive
+                logger.debug(f"update preview: target resolution skipped ({e})")
+                err, target_event = None, None
+
+            if target_event is not None:
+                resolved_line = "Resolved event: " + _summarize_event_for_disambiguation(
+                    target_event
+                ).lstrip("- ")
+            elif err and ("found" in err.lower() and "matching" in err.lower()):
+                # Ambiguity / not-found — surface that in the preview.
+                resolved_line = err
+
+    parts = [f'I\'ll update the event matching "{target}" between {time_min} and {time_max}:']
+    if resolved_line:
+        parts.append(resolved_line)
 
     if changes.get("new_title"):
         parts.append(f"  Title -> {changes['new_title']}")
@@ -633,7 +770,7 @@ async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
     if changes.get("new_duration"):
         parts.append(f"  Duration -> {changes['new_duration']}")
 
-    if len(parts) == 1:
+    if not any(changes.get(k) for k in ("new_title", "new_time", "new_location", "new_duration")):
         parts.append("  (no changes specified)")
 
     parts.append("\nMake these changes?")
@@ -644,11 +781,28 @@ async def _preview_update_event(args: dict, context: AgentToolContext) -> str:
 async def update_event(
     target: Annotated[
         str,
-        "Keywords to identify the event (title, person's name, time reference like 'my 2pm meeting')",
+        "Keywords identifying the event to update (event title, person's name, etc.).",
     ],
     changes: Annotated[
         Dict,
         "What to change: object with optional keys new_time, new_title, new_location, new_duration",
+    ],
+    time_min: Annotated[
+        str,
+        (
+            "Inclusive start of the search window in ISO-8601 (e.g. "
+            "'2026-04-27T00:00:00-07:00') or a date 'YYYY-MM-DD' (midnight "
+            "in the user's timezone). Resolve relative phrases like 'last "
+            "week' / '上周' yourself using the current local datetime in "
+            "the system prompt."
+        ),
+    ],
+    time_max: Annotated[
+        str,
+        (
+            "Exclusive end of the search window, same format as time_min. "
+            "Must be strictly after time_min."
+        ),
     ],
     target_provider: Annotated[
         Optional[str], "Optional explicit provider like local or google"
@@ -659,7 +813,12 @@ async def update_event(
     *,
     context: AgentToolContext,
 ) -> str:
-    """Update an existing calendar event. Specify the target event and what to change."""
+    """Update an existing calendar event found inside ``[time_min, time_max)``.
+
+    Always pass an explicit window — never rely on a default. If the search
+    returns multiple candidates, no event is mutated and the LLM is asked to
+    disambiguate with the user.
+    """
     if not target:
         return "Error: please specify which event to update (target)."
     if not changes:
@@ -674,63 +833,17 @@ async def update_event(
         return error
 
     try:
-        # Search for the target event
-        user_tz_str = context.metadata.get("timezone") if context.metadata else None
-        from .search_helper import _resolve_tz
-
-        user_tz_obj = _resolve_tz(user_tz_str)
-        now = datetime.now(user_tz_obj)
-        time_min = now
-        time_max = now + timedelta(days=30)
-
-        result = await provider.list_events(
+        err, target_event = await _resolve_update_target(
+            context=context,
+            provider=provider,
+            account=account,
+            target=target,
             time_min=time_min,
             time_max=time_max,
-            query=target,
-            max_results=10,
         )
-        if not result.get("success"):
-            return wrap_routing_error(
-                "calendar", account.get("provider", "calendar"), "write_failed"
-            )
-
-        target_event = None
-
-        if result.get("data"):
-            events = result["data"]
-            target_lower = target.lower()
-            for event in events:
-                event_title = event.get("summary", "").lower()
-                event_desc = event.get("description", "").lower()
-                if target_lower in event_title or target_lower in event_desc:
-                    target_event = event
-                    break
-            if not target_event and events:
-                if any(word in target_lower for word in ["meeting", "call", "sync", "appointment"]):
-                    target_event = events[0]
-
-        if not target_event:
-            # Broader search without query filter
-            result = await provider.list_events(
-                time_min=time_min,
-                time_max=time_max,
-                max_results=20,
-            )
-            if not result.get("success"):
-                return wrap_routing_error(
-                    "calendar",
-                    account.get("provider", "calendar"),
-                    "write_failed",
-                )
-            if result.get("data"):
-                target_lower = target.lower()
-                for event in result["data"]:
-                    event_title = event.get("summary", "").lower()
-                    if target_lower in event_title:
-                        target_event = event
-                        break
-
-        if not target_event:
+        if err:
+            return err
+        if target_event is None:  # defensive — _resolve_update_target invariant
             return f"I couldn't find an event matching '{target}'. Could you be more specific?"
 
         event_id = _event_id(target_event)

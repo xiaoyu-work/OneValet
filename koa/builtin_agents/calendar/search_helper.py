@@ -23,7 +23,7 @@ real bugs in production.
 
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -91,8 +91,7 @@ def parse_iso_datetime(
             )
     else:
         raise ValueError(
-            f"{field_name} must be a string ISO-8601 datetime; "
-            f"got {type(value).__name__}."
+            f"{field_name} must be a string ISO-8601 datetime; got {type(value).__name__}."
         )
 
     if parsed.tzinfo is None:
