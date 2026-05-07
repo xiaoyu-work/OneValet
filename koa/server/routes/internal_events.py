@@ -10,14 +10,22 @@ Writability rules
 -----------------
 The table holds rows from three sources: ``eventkit`` (iOS EventKit
 ingest), ``google`` (CalendarSyncService mirror), and ``local``
-(AI-/app-created). Only ``source='local'`` rows are mutable here —
-PATCH/DELETE on a Google or EventKit row would just trash the cache;
-the source calendar is unchanged and the row would reincarnate on the
-next sync. We return 403 in that case.
+(AI-/app-created).
 
-For ``source='google'`` you should mutate via Google's API (not yet wired
-on the agent side); for ``source='eventkit'`` you must mutate on the
-phone via EventKit.
+Local rows are mutable directly. Non-local rows (``google`` /
+``eventkit``) follow the **two-way calendar sync** toggle stored in
+``tenant_default.user_settings``:
+
+* When the toggle is OFF (default), PATCH/DELETE on a non-local row
+  returns 403 with a message pointing the user at Settings.
+* When ON, the writeback service in
+  ``koa/services/calendar_writeback.py`` propagates the change to the
+  source provider (Google API for ``google`` rows; the iOS app handles
+  EventKit on-device and we just patch the cache).
+
+For the AI-agent codepath (``LocalCalendarProvider``) we still refuse
+non-local edits — flipping a user-facing toggle should not implicitly
+grant write permission to the AI.
 """
 
 from __future__ import annotations
@@ -31,6 +39,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from ...services import calendar_writeback as cwb
+from ...services.user_settings import (
+    KEY_TWO_WAY_CALENDAR_SYNC,
+    get_user_setting,
+    set_user_setting,
+)
 from ..app import require_app, verify_service_key
 
 logger = logging.getLogger(__name__)
@@ -243,22 +257,44 @@ class EventUpdate(BaseModel):
     dependencies=[Depends(verify_service_key)],
 )
 async def update_event(event_id: str, req: EventUpdate) -> Dict[str, Any]:
-    db = _require_db(require_app())
+    app = require_app()
+    db = _require_db(app)
 
     existing = await db.fetchrow(
-        "SELECT source FROM tenant_default.local_calendar_events "
+        "SELECT user_id, event_id, calendar_name, title, starts_at, ends_at, "
+        "all_day, location, notes, attendees, metadata, "
+        "color, recurrence_rule, reminder_minutes, "
+        "source, updated_at "
+        "FROM tenant_default.local_calendar_events "
         "WHERE user_id = $1 AND event_id = $2",
         req.tenant_id,
         event_id,
     )
     if existing is None:
         raise HTTPException(404, "Event not found")
+
     if existing["source"] != "local":
-        raise HTTPException(
-            403,
-            f"Event source is '{existing['source']}', not 'local' — "
-            "mutate on the source calendar instead",
-        )
+        # Non-local rows go through the writeback service: gated on the
+        # user's two-way-sync toggle and pushed to the source provider
+        # (Google) or patched-locally + client-mirrored (EventKit).
+        fields = req.model_dump(exclude={"tenant_id"}, exclude_none=True)
+        try:
+            row = await cwb.propagate_update(
+                db=db,
+                calendar_sync=app.calendar_sync,
+                tenant_id=req.tenant_id,
+                existing_row=dict(existing),
+                fields=fields,
+            )
+        except cwb.ToggleOff as e:
+            raise HTTPException(403, str(e))
+        except cwb.UnsupportedSource as e:
+            raise HTTPException(400, str(e))
+        except cwb.CredentialsMissing as e:
+            raise HTTPException(409, str(e))
+        except cwb.SourceWriteFailed as e:
+            raise HTTPException(502, f"Source calendar refused the change: {e}")
+        return {"updated": True, "event": _row_to_event(dict(row))}
 
     sets: List[str] = []
     args: List[Any] = []
@@ -296,17 +332,7 @@ async def update_event(event_id: str, req: EventUpdate) -> Dict[str, Any]:
 
     if not sets:
         # Nothing to change — just return current row.
-        row = await db.fetchrow(
-            "SELECT user_id, event_id, calendar_name, title, starts_at, ends_at, "
-            "all_day, location, notes, attendees, metadata, "
-            "color, recurrence_rule, reminder_minutes, "
-            "source, updated_at "
-            "FROM tenant_default.local_calendar_events "
-            "WHERE user_id = $1 AND event_id = $2",
-            req.tenant_id,
-            event_id,
-        )
-        return {"updated": False, "event": _row_to_event(dict(row))}
+        return {"updated": False, "event": _row_to_event(dict(existing))}
 
     sets.append("updated_at = NOW()")
     args.append(req.tenant_id)
@@ -338,19 +364,34 @@ async def delete_event(
     db = _require_db(require_app())
 
     row = await db.fetchrow(
-        "SELECT source FROM tenant_default.local_calendar_events "
+        "SELECT user_id, event_id, calendar_name, title, starts_at, ends_at, "
+        "all_day, location, notes, attendees, metadata, "
+        "color, recurrence_rule, reminder_minutes, "
+        "source, updated_at "
+        "FROM tenant_default.local_calendar_events "
         "WHERE user_id = $1 AND event_id = $2",
         tenant_id,
         event_id,
     )
     if row is None:
         return {"deleted": False}
+
     if row["source"] != "local":
-        raise HTTPException(
-            403,
-            f"Event source is '{row['source']}', not 'local' — "
-            "delete on the source calendar instead",
-        )
+        try:
+            await cwb.propagate_delete(
+                db=db,
+                tenant_id=tenant_id,
+                existing_row=dict(row),
+            )
+        except cwb.ToggleOff as e:
+            raise HTTPException(403, str(e))
+        except cwb.UnsupportedSource as e:
+            raise HTTPException(400, str(e))
+        except cwb.CredentialsMissing as e:
+            raise HTTPException(409, str(e))
+        except cwb.SourceWriteFailed as e:
+            raise HTTPException(502, f"Source calendar refused the change: {e}")
+        return {"deleted": True}
 
     await db.execute(
         "DELETE FROM tenant_default.local_calendar_events WHERE user_id = $1 AND event_id = $2",
@@ -386,3 +427,41 @@ async def trigger_calendar_sync(req: CalendarSyncReq) -> Dict[str, Any]:
     if svc is None:
         raise HTTPException(503, "CalendarSyncService not available")
     return await svc.sync_tenant(req.tenant_id)
+
+
+# ── User settings ────────────────────────────────────────────────────────
+
+
+class UserSettingPut(BaseModel):
+    tenant_id: str
+    value: Any
+
+
+@router.get(
+    "/api/internal/user-settings/{key}",
+    dependencies=[Depends(verify_service_key)],
+)
+async def read_user_setting(
+    key: str,
+    tenant_id: str = Query(...),
+) -> Dict[str, Any]:
+    """Return the JSON value for a user setting key (or ``None``)."""
+    db = _require_db(require_app())
+    value = await get_user_setting(db, tenant_id, key, default=None)
+    return {"key": key, "value": value}
+
+
+@router.put(
+    "/api/internal/user-settings/{key}",
+    dependencies=[Depends(verify_service_key)],
+)
+async def write_user_setting(
+    key: str,
+    req: UserSettingPut,
+) -> Dict[str, Any]:
+    """Upsert a user setting; ``value`` is stored as JSON."""
+    if key == KEY_TWO_WAY_CALENDAR_SYNC and not isinstance(req.value, bool):
+        raise HTTPException(400, f"{key!r} must be boolean")
+    db = _require_db(require_app())
+    await set_user_setting(db, req.tenant_id, key, req.value)
+    return {"key": key, "value": req.value}
