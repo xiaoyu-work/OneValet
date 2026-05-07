@@ -34,20 +34,28 @@ class UpsertSubscriptionRequest(BaseModel):
 @router.get("/api/internal/subscriptions/list", dependencies=[Depends(verify_service_key)])
 async def internal_list_subscriptions(
     tenant_id: str,
-    active_only: bool = True,
+    active_only: bool = True,  # noqa: ARG001 — kept for API compatibility, see note
 ):
-    """List all subscriptions for a tenant."""
+    """List all subscriptions for a tenant.
+
+    Always excludes user-deleted rows (`is_active = FALSE`). The `active_only`
+    parameter is kept for API compatibility but no longer changes the result —
+    deleted rows must never appear regardless of caller intent. Lifecycle
+    filtering (active vs cancelled/trial/paused) is done client-side via the
+    `status` column, since the same UI surface shows both alive and
+    historically-cancelled subscriptions.
+    """
     app = require_app()
     db = app.database
     if not db:
         return []
 
-    query = "SELECT * FROM subscriptions WHERE tenant_id = $1"
-    if active_only:
-        query += " AND is_active = TRUE"
-    query += " ORDER BY last_charged_date DESC NULLS LAST, created_at DESC"
-
-    rows = await db.fetch(query, tenant_id)
+    rows = await db.fetch(
+        "SELECT * FROM subscriptions "
+        "WHERE tenant_id = $1 AND is_active = TRUE "
+        "ORDER BY last_charged_date DESC NULLS LAST, created_at DESC",
+        tenant_id,
+    )
     return [dict(r) for r in rows]
 
 
@@ -101,15 +109,23 @@ async def internal_delete_subscription(
     tenant_id: str,
     service_name: str,
 ):
-    """Soft-delete a subscription."""
+    """Hard-delete a subscription.
+
+    The user-facing action is "Remove from tracking" — they expect the row
+    to disappear permanently. Previously this was a soft delete (UPDATE
+    is_active = FALSE), which combined with the client-side `status` filter
+    left deleted rows still visible in the Subscriptions subpage's "Active"
+    section. Hard delete keeps the data model simple and matches user
+    intent. If a subscription resurfaces via email detection it will be
+    re-inserted as a fresh row, which the user can delete again if needed.
+    """
     app = require_app()
     db = app.database
     if not db:
         return {"status": "error", "message": "Database not available"}
 
     await db.execute(
-        "UPDATE subscriptions SET is_active = FALSE, updated_at = NOW() "
-        "WHERE tenant_id = $1 AND service_name = $2",
+        "DELETE FROM subscriptions WHERE tenant_id = $1 AND service_name = $2",
         tenant_id,
         service_name,
     )
