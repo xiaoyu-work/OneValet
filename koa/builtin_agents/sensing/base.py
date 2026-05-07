@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from koa.result import AgentStatus
 from koa.standard_agent import StandardAgent
 
 logger = logging.getLogger(__name__)
@@ -99,14 +100,23 @@ class SensingAgent(StandardAgent):
                 bool(db),
                 bool(user_id),
             )
-            return self.make_result(status="skipped", reason="no_context")
+            return self.make_result(
+                status=AgentStatus.COMPLETED,
+                raw_message="nothing_to_report",
+                metadata={"run_status": "skipped", "reason": "no_context"},
+            )
 
         local_date, tz_name = self._yesterday_local()
         try:
             result = await self.analyze(db, user_id, local_date, tz_name)
         except Exception as e:
             logger.exception("%s analyze failed: %s", type(self).__name__, e)
-            return self.make_result(status="error", reason=str(e))
+            return self.make_result(
+                status=AgentStatus.ERROR,
+                raw_message=str(e),
+                error_message=str(e),
+                metadata={"run_status": "error", "reason": str(e)},
+            )
 
         if result.user_state_fields or result.flags:
             fields = dict(result.user_state_fields)
@@ -115,17 +125,24 @@ class SensingAgent(StandardAgent):
             fields["timezone"] = tz_name
             await self._upsert_user_state(db, user_id, local_date, fields)
 
+        result_metadata: Dict[str, Any] = {
+            "run_status": "ok",
+            "local_date": local_date.isoformat(),
+            "flags": result.flags,
+        }
         if result.proposals:
-            if self.metadata is None:
-                self.metadata = {}
-            existing = self.metadata.get("true_memory_proposals", [])
-            self.metadata["true_memory_proposals"] = existing + result.proposals
+            result_metadata["true_memory_proposals"] = result.proposals
+
+        summary = result.notes or f"{type(self).__name__} analyzed {local_date}"
 
         return self.make_result(
-            status="ok",
-            summary=result.notes or f"{type(self).__name__} analyzed {local_date}",
-            user_state_fields=result.user_state_fields,
-            flags=result.flags,
+            status=AgentStatus.COMPLETED,
+            raw_message=summary,
+            data={
+                "user_state_fields": result.user_state_fields,
+                "flags": result.flags,
+            },
+            metadata=result_metadata,
         )
 
     async def _upsert_user_state(self, db, user_id: str, local_date: date, fields: Dict[str, Any]):

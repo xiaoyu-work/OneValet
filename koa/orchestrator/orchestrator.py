@@ -98,6 +98,31 @@ from .state_persistence import PlanStore  # noqa: E402
 from .tool_pipeline import ToolPipeline, credential_check_hook, result_audit_hook  # noqa: E402
 
 
+def _merge_true_memory_proposals(
+    existing: Optional[List[Dict[str, Any]]],
+    new: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    def confidence(item: Dict[str, Any]) -> float:
+        try:
+            return float(item.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    merged: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+    for proposal in list(existing or []) + list(new or []):
+        if not isinstance(proposal, dict):
+            continue
+        key = (
+            str(proposal.get("operation") or "upsert"),
+            str(proposal.get("namespace") or ""),
+            str(proposal.get("fact_key") or ""),
+        )
+        current = merged.get(key)
+        if current is None or confidence(proposal) >= confidence(current):
+            merged[key] = proposal
+    return list(merged.values())
+
+
 class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
     """
     Central coordinator for all agents with ReAct loop architecture.
@@ -2330,7 +2355,10 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                 user_profile=(context.get("metadata") or {}).get("user_profile"),
             )
             if proposals:
-                result.metadata["true_memory_proposals"] = proposals
+                result.metadata["true_memory_proposals"] = _merge_true_memory_proposals(
+                    result.metadata.get("true_memory_proposals"),
+                    proposals,
+                )
         except Exception as e:
             logger.warning(f"True memory proposal extraction failed: {e}")
 

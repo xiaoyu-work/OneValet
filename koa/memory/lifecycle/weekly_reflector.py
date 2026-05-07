@@ -26,15 +26,17 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
 
 MAX_EPISODES_PER_WEEK = 5
 MAX_FACTS_PER_WEEK = 8
+MAX_EXISTING_TRUE_MEMORY = 30
 
 
 LLMCall = Callable[[str, str], Awaitable[str]]
@@ -42,8 +44,11 @@ LLMCall = Callable[[str, str], Awaitable[str]]
 
 SYSTEM_PROMPT = """\
 You are Koi's weekly memory reflector. You read a week of aggregated
-activity logs about one user and distill them into structured long-term
-memory. You NEVER invent details not present in the input.
+activity logs about one user and run a bounded memory consolidation pass.
+You NEVER invent details not present in the input.
+
+This is NOT a full database scan. Only compare the current week against the
+provided existing_true_memory candidates. Prefer no proposal over a weak one.
 
 Output requirements:
 1. Respond with a SINGLE JSON object. No prose, no code fences.
@@ -64,22 +69,34 @@ Output requirements:
          "entities": ["name", ...]
        }
      ],
-     "facts": [
-       {
-         "namespace": "preference" | "routine" | "relationship" | "health" | "project",
-         "fact_key": "snake_case_key",
-         "value": <any JSON>,
-         "summary": "human-readable sentence",
-         "confidence": 0.0..1.0,
-         "how_to_apply": "tell the assistant how this should change behavior"
-       }
-     ]
+      "facts": [
+        {
+          "operation": "upsert" | "revoke",
+          "namespace": "identity" | "work" | "relationship" | "lifestyle" | "travel" | "preference" | "feedback" | "routine" | "health" | "project" | "habit",
+          "fact_key": "snake_case_key",
+          "value": <any JSON>,
+          "summary": "human-readable sentence",
+          "confidence": 0.0..1.0,
+          "why": "why this should become or change durable memory",
+          "how_to_apply": "tell the assistant how this should change behavior"
+        }
+      ]
    }
 3. If the week is genuinely uneventful, return empty lists and
    highlight "Quiet week with no notable events."
 4. Only mark an episode important (>=4) when the user explicitly engaged
    with it or it caused a change in state (routine break, milestone).
 5. Do not repeat facts that are already trivial (time/weekday).
+6. For facts:
+   - Emit "upsert" only for stable preferences, routines, recurring patterns,
+     explicit corrections, or meaningful project/relationship/health changes.
+   - Reuse an existing namespace/fact_key when the week updates or replaces an
+     existing memory. This is how memory stays small.
+   - Emit "revoke" only when the week clearly invalidates an existing memory
+     and there is no replacement value.
+   - Do not emit a fact that is already present in existing_true_memory unless
+     the value, confidence, why, or how_to_apply should change.
+   - Avoid one-off tasks, temporary plans, and noisy observations.
 """
 
 
@@ -100,6 +117,8 @@ async def run_weekly_reflection(
     week_end: date,
     llm_call: LLMCall,
     episode_memory,
+    *,
+    existing_true_memory: Optional[Sequence[Dict[str, Any]]] = None,
 ) -> Optional[WeeklyReflection]:
     """Run the full pipeline for a single user.
 
@@ -116,7 +135,13 @@ async def run_weekly_reflection(
         logger.info("weekly_reflector: no daily_log episodes for %s..%s", week_start, week_end)
         return None
 
-    user_prompt = _build_user_prompt(user_id, week_start, week_end, daily_episodes)
+    user_prompt = _build_user_prompt(
+        user_id,
+        week_start,
+        week_end,
+        daily_episodes,
+        existing_true_memory=existing_true_memory,
+    )
 
     try:
         raw = await llm_call(SYSTEM_PROMPT, user_prompt)
@@ -191,7 +216,14 @@ async def _fetch_daily_log_episodes(
     return out
 
 
-def _build_user_prompt(user_id: str, start: date, end: date, rows: List[Dict[str, Any]]) -> str:
+def _build_user_prompt(
+    user_id: str,
+    start: date,
+    end: date,
+    rows: List[Dict[str, Any]],
+    *,
+    existing_true_memory: Optional[Sequence[Dict[str, Any]]] = None,
+) -> str:
     compact = []
     for r in rows:
         p = r.get("payload") or {}
@@ -227,6 +259,8 @@ def _build_user_prompt(user_id: str, start: date, end: date, rows: List[Dict[str
         )
     return (
         f"Week: {start} to {end}\n"
+        f"existing_true_memory candidates (bounded; use keys for updates/revokes):\n"
+        f"{json.dumps(_compact_true_memory(existing_true_memory), default=str, indent=2)}\n\n"
         f"Daily activity logs (pre-aggregated, one entry per day):\n"
         f"{json.dumps(compact, default=str, indent=2)}\n\n"
         "Return the JSON specified in the system prompt. Output ONLY the JSON."
@@ -240,6 +274,32 @@ def _parse_response(raw: str) -> Dict[str, Any]:
         if "\n" in s:
             _, s = s.split("\n", 1)
     return json.loads(s)
+
+
+def _compact_true_memory(
+    existing_true_memory: Optional[Sequence[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    compact: List[Dict[str, Any]] = []
+    for item in list(existing_true_memory or [])[:MAX_EXISTING_TRUE_MEMORY]:
+        if not isinstance(item, dict):
+            continue
+        namespace = str(item.get("namespace") or "").strip()
+        fact_key = str(item.get("fact_key") or "").strip()
+        summary = " ".join(str(item.get("summary") or "").split()).strip()
+        if not namespace or not fact_key or not summary:
+            continue
+        compact.append(
+            {
+                "namespace": namespace[:60],
+                "fact_key": fact_key[:100],
+                "summary": summary[:300],
+                "value": item.get("value"),
+                "confidence": item.get("confidence"),
+                "why": str(item.get("why") or "")[:240] or None,
+                "how_to_apply": str(item.get("how_to_apply") or "")[:240] or None,
+            }
+        )
+    return compact
 
 
 async def _write_episode(episode_memory, user_id: str, ep: Dict[str, Any]) -> bool:
@@ -278,17 +338,37 @@ async def _write_episode(episode_memory, user_id: str, ep: Dict[str, Any]) -> bo
 
 
 async def _write_weekly_summary(episode_memory, user_id: str, r: WeeklyReflection) -> None:
+    fact_lines = []
+    for f in r.fact_proposals[:MAX_FACTS_PER_WEEK]:
+        summary = str(f.get("summary") or "").strip()
+        if not summary:
+            continue
+        op = str(f.get("operation") or "upsert")
+        ns = str(f.get("namespace") or "")
+        key = str(f.get("fact_key") or "")
+        fact_lines.append(f"{op} {ns}.{key}: {summary}")
+
     text = (
         f"Week {r.week_start.isoformat()} to {r.week_end.isoformat()}: "
         f"{r.highlight} "
         f"(mood trend: {r.mood_trend}; topics: {', '.join(r.top_topics) if r.top_topics else 'none'})"
     )
+    if fact_lines:
+        text += " Memory maintenance proposals: " + " | ".join(fact_lines)
     extras = {
         "week_start": r.week_start.isoformat(),
         "week_end": r.week_end.isoformat(),
         "mood_trend": r.mood_trend,
         "top_topics": r.top_topics,
         "fact_proposal_count": len(r.fact_proposals),
+        "fact_proposal_keys": [
+            {
+                "operation": f.get("operation"),
+                "namespace": f.get("namespace"),
+                "fact_key": f.get("fact_key"),
+            }
+            for f in r.fact_proposals[:MAX_FACTS_PER_WEEK]
+        ],
     }
     try:
         await episode_memory.write_episode(
@@ -305,31 +385,63 @@ async def _write_weekly_summary(episode_memory, user_id: str, r: WeeklyReflectio
 
 
 def _clean_facts(raw_facts: List[Any]) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    valid_ns = {"preference", "routine", "relationship", "health", "project"}
+    deduped: Dict[tuple[str, str], Dict[str, Any]] = {}
+    valid_ns = {
+        "feedback",
+        "habit",
+        "health",
+        "identity",
+        "lifestyle",
+        "preference",
+        "project",
+        "relationship",
+        "routine",
+        "travel",
+        "work",
+    }
     for f in raw_facts or []:
         if not isinstance(f, dict):
             continue
-        ns = str(f.get("namespace", ""))
+        ns = _normalize_slug(str(f.get("namespace", "")))
         if ns not in valid_ns:
             continue
-        key = str(f.get("fact_key", "")).strip()
+        key = _normalize_slug(str(f.get("fact_key", "")))
         if not key:
             continue
-        out.append(
-            {
-                "operation": "upsert",
-                "namespace": ns,
-                "fact_key": key,
-                "value": f.get("value"),
-                "summary": str(f.get("summary", ""))[:300],
-                "confidence": _clamp_float(f.get("confidence", 0.5), 0.0, 1.0),
-                "source_type": "weekly_reflection",
-                "how_to_apply": str(f.get("how_to_apply", ""))[:400],
-                "why": "Inferred by weekly reflector from aggregated activity.",
-            }
-        )
-    return out
+        operation = _normalize_slug(str(f.get("operation") or "upsert"))
+        if operation not in {"upsert", "revoke"}:
+            operation = "upsert"
+        confidence = _clamp_float(f.get("confidence", 0.5), 0.0, 1.0)
+        min_confidence = 0.75 if operation == "revoke" else 0.65
+        if confidence < min_confidence:
+            continue
+        summary = " ".join(str(f.get("summary", "")).split()).strip()[:300]
+        if not summary:
+            continue
+        proposal = {
+            "operation": operation,
+            "namespace": ns,
+            "fact_key": key,
+            "value": None if operation == "revoke" else f.get("value"),
+            "summary": summary,
+            "confidence": round(confidence, 4),
+            "source_type": "weekly_reflection",
+            "reason": "Inferred by weekly reflector from aggregated activity.",
+            "why": " ".join(str(f.get("why") or "").split()).strip()[:400]
+            or "Inferred by weekly reflector from aggregated activity.",
+            "how_to_apply": " ".join(str(f.get("how_to_apply") or "").split()).strip()[:400]
+            or None,
+            "evidence": str(f.get("evidence") or "")[:500] or None,
+        }
+        key_tuple = (ns, key)
+        current = deduped.get(key_tuple)
+        if current is None or proposal["confidence"] >= current.get("confidence", 0.0):
+            deduped[key_tuple] = proposal
+    return list(deduped.values())
+
+
+def _normalize_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9_]+", "_", value.strip().lower()).strip("_")
 
 
 def _clamp_int(v: Any, lo: int, hi: int) -> int:

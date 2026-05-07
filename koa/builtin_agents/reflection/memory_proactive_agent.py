@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from koa import valet
 from koa.memory.lifecycle.episode_memory import EpisodeMemory
+from koa.result import AgentStatus
 from koa.standard_agent import StandardAgent
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,11 @@ class MemoryProactiveAgent(StandardAgent):
         momex = hints.get("momex")
         user_id = hints.get("user_id") or (self.metadata or {}).get("user_id")
         if not user_id:
-            return self.make_result(status="skipped", reason="no_context")
+            return self.make_result(
+                status=AgentStatus.COMPLETED,
+                raw_message="nothing_to_report",
+                metadata={"run_status": "skipped", "reason": "no_context"},
+            )
 
         now, _tz = self._user_now()
         today = now.date()
@@ -48,17 +53,25 @@ class MemoryProactiveAgent(StandardAgent):
         episode_memory = EpisodeMemory(momex) if momex is not None else None
         candidate = await _select_candidate(db, episode_memory, user_id, today)
         if candidate is None:
-            return self.make_result(status="nothing_to_report")
+            return self.make_result(
+                status=AgentStatus.COMPLETED,
+                raw_message="nothing_to_report",
+                metadata={"run_status": "nothing_to_report"},
+            )
+
+        notification = {
+            "kind": candidate["kind"],
+            "title": candidate["title"],
+            "body": candidate["body"],
+            "payload": candidate.get("payload", {}),
+        }
+        summary = f"Memory-driven nudge ({candidate['kind']}): {candidate['title']}"
 
         return self.make_result(
-            status="ok",
-            notification={
-                "kind": candidate["kind"],
-                "title": candidate["title"],
-                "body": candidate["body"],
-                "payload": candidate.get("payload", {}),
-            },
-            summary=f"Memory-driven nudge ({candidate['kind']}): {candidate['title']}",
+            status=AgentStatus.COMPLETED,
+            raw_message=summary,
+            data={"notification": notification},
+            metadata={"run_status": "ok", "notification": notification},
         )
 
 

@@ -3,8 +3,9 @@
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Callable, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Tuple
 
+from ...message import Message
 from .delivery import CronDeliveryHandler, DeliveryResult
 from .models import (
     AgentTurnPayload,
@@ -202,6 +203,8 @@ class CronExecutor:
 
     async def _execute_core(self, job: CronJob) -> Tuple[Optional[str], Optional[str]]:
         """Dispatch to main or isolated execution. Returns (summary, error)."""
+        if job.agent_id:
+            return await self._execute_agent_turn(job)
         if job.session_target == SessionTarget.MAIN:
             return await self._execute_main(job)
         else:
@@ -235,6 +238,94 @@ class CronExecutor:
             logger.debug(f"Cron: failed to load user profile for {job.user_id[:8]}: {e}")
 
         return meta
+
+    def _build_agent_context_hints(self, job: CronJob, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the infrastructure hints normally supplied to agent-tools."""
+        profile = metadata.get("user_profile") if isinstance(metadata, dict) else None
+        tz = getattr(job.schedule, "tz", None) or metadata.get("timezone")
+        if not tz and isinstance(profile, dict):
+            tz = profile.get("timezone")
+
+        hints: Dict[str, Any] = {
+            "user_id": job.user_id,
+            "tenant_id": job.user_id,
+            "cron_job_id": job.id,
+            "cron_job_name": job.name,
+        }
+        if tz:
+            hints["timezone"] = tz
+        if profile:
+            hints["user_profile"] = profile
+        if metadata.get("true_memory"):
+            hints["true_memory"] = metadata["true_memory"]
+
+        for hint_name, attr_name in (
+            ("db", "database"),
+            ("momex", "momex"),
+            ("trigger_engine", "trigger_engine"),
+        ):
+            value = getattr(self._orchestrator, attr_name, None)
+            if value is not None:
+                hints[hint_name] = value
+
+        trigger_engine = hints.get("trigger_engine")
+        cron_service = getattr(trigger_engine, "cron_service", None) if trigger_engine else None
+        if cron_service is not None:
+            hints["cron_service"] = cron_service
+
+        return hints
+
+    async def _execute_agent_turn(self, job: CronJob) -> Tuple[Optional[str], Optional[str]]:
+        """Run jobs with agent_id by directly invoking the named hidden agent."""
+        if not isinstance(job.payload, AgentTurnPayload):
+            return None, "Cron jobs with agent_id require agentTurn payload"
+
+        if not hasattr(self._orchestrator, "create_agent"):
+            return None, "Orchestrator cannot create agents"
+
+        metadata = await self._build_metadata(
+            job,
+            isolated=job.session_target == SessionTarget.ISOLATED,
+            direct_agent=True,
+            agent_id=job.agent_id,
+        )
+        context_hints = self._build_agent_context_hints(job, metadata)
+
+        try:
+            agent = await self._orchestrator.create_agent(
+                tenant_id=job.user_id,
+                agent_type=job.agent_id,
+                context_hints=context_hints,
+                context={"metadata": metadata},
+            )
+            if agent is None:
+                return None, f"Agent not found: {job.agent_id}"
+
+            msg = Message(
+                name="cron",
+                content=job.payload.message,
+                role="user",
+                metadata=metadata,
+            )
+            result = await agent.reply(msg)
+        except Exception as e:
+            return None, str(e)
+        finally:
+            agent_to_remove = locals().get("agent")
+            pool = getattr(self._orchestrator, "agent_pool", None)
+            if agent_to_remove is not None and pool is not None:
+                try:
+                    await pool.remove_agent(job.user_id, agent_to_remove.agent_id)
+                except Exception as e:
+                    logger.debug("Cron: failed to remove direct agent from pool: %s", e)
+
+        status_value = getattr(result.status, "value", str(result.status)).lower()
+        if status_value in {"error", "failed", "cancelled"}:
+            return None, result.error_message or result.raw_message or f"{job.agent_id} failed"
+        if status_value in {"waiting_for_input", "waiting_for_approval", "paused"}:
+            return None, f"{job.agent_id} did not complete: {status_value}"
+
+        return self._extract_summary(job, result, job.payload.message), None
 
     async def _execute_main(self, job: CronJob) -> Tuple[Optional[str], Optional[str]]:
         """Main mode: inject system event into main session."""
