@@ -159,13 +159,13 @@ class TestValetDecorator:
         assert "requires_service" not in meta.extra
 
     def test_requires_service_merged_with_extra(self):
-        @valet(requires_service=["gmail"], extra={"tier": "premium"})
+        @valet(requires_service=["gmail"], extra={"custom_label": "priority"})
         class TestAgentMerged:
             """test"""
 
         meta = AGENT_REGISTRY["TestAgentMerged"]
         assert meta.extra["requires_service"] == ["gmail"]
-        assert meta.extra["tier"] == "premium"
+        assert meta.extra["custom_label"] == "priority"
 
 
 # =========================================================================

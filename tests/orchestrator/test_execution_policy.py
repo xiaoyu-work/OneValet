@@ -54,11 +54,10 @@ class TestExecutionPolicyEngine:
         assert decision.allowed is True
         assert decision.require_approval is False
 
-    def test_enforces_tier_and_feature_flag(self):
+    def test_enforces_feature_flag(self):
         engine = ExecutionPolicyEngine()
         tool = _make_tool(
             needs_approval=False,
-            enabled_tiers=["pro"],
             requires_feature_flag="email-write",
         )
         denied = engine.evaluate(
@@ -66,21 +65,19 @@ class TestExecutionPolicyEngine:
             request_context={
                 "metadata": {
                     "permissions": {
-                        "user_tier": "starter",
-                        "feature_flags": ["email-write"],
+                        "feature_flags": [],
                     }
                 }
             },
         )
         assert denied.allowed is False
-        assert "tier" in denied.reason
+        assert "feature flag" in denied.reason
 
         allowed = engine.evaluate(
             tool,
             request_context={
                 "metadata": {
                     "permissions": {
-                        "user_tier": "pro",
                         "feature_flags": ["email-write"],
                     }
                 }

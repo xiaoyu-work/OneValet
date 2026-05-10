@@ -6,7 +6,7 @@ combined with a ReAct (Reasoning + Acting) loop for tool/agent execution.
 
 Extension Points (override in subclass):
     - prepare_context(): Add memories, user info, custom metadata
-    - should_process(): Guardrails, rate limits, tier access control
+    - should_process(): Guardrails, rate limits, custom access control
     - reject_message(): Custom rejection handling
     - create_agent(): Custom agent instantiation
     - post_process(): Save to memory, notifications, response wrapping
@@ -2033,7 +2033,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         metadata["conversation_history"].
 
         Override to add:
-        - User preferences/tier info
+        - User preferences
         - Custom metadata
 
         Args:

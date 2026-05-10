@@ -34,7 +34,7 @@ def _build_google_flights_query_url(
     return f"https://www.google.com/travel/flights?q={urllib.parse.quote(query)}"
 
 
-@tool(enabled_tiers=["pro"])
+@tool
 async def search_flights(
     origin: Annotated[str, "Origin city or airport code"],
     destination: Annotated[str, "Destination city or airport code"],
@@ -109,7 +109,7 @@ def _build_google_hotels_url(location: str, check_in: str, check_out: str = "") 
     return f"https://www.google.com/travel/hotels?q={urllib.parse.quote(query)}"
 
 
-@tool(enabled_tiers=["pro"])
+@tool
 async def search_hotels(
     location: Annotated[str, "Destination city"],
     check_in: Annotated[str, "Check-in YYYY-MM-DD"],

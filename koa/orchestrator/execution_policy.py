@@ -91,15 +91,6 @@ class ExecutionPolicyEngine:
                     tags=["feature-flag"],
                 )
 
-        if tool.enabled_tiers:
-            user_tier = str(security.get("user_tier", "") or "")
-            if user_tier not in set(tool.enabled_tiers):
-                return ExecutionPolicyDecision(
-                    allowed=False,
-                    reason=f"tool '{tool.name}' is unavailable for tier '{user_tier or 'unknown'}'",
-                    tags=["tier-gate"],
-                )
-
         if security.get("read_only_mode") and not tool.read_only:
             return ExecutionPolicyDecision(
                 allowed=False,

@@ -469,7 +469,6 @@ class ToolCallRecorder:
             idempotent=tool.idempotent,
             renderer=tool.renderer,
             sensitive_args=list(tool.sensitive_args),
-            enabled_tiers=list(tool.enabled_tiers) if tool.enabled_tiers is not None else None,
             requires_feature_flag=tool.requires_feature_flag,
         )
 

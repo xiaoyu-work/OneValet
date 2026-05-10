@@ -82,7 +82,6 @@ class AgentTool:
         idempotent: Whether repeated execution is safe.
         renderer: Optional UI rendering hint ("markdown", "table", "image", etc.).
         sensitive_args: Argument names that should be redacted in logs/UI.
-        enabled_tiers: Optional allow-list of tiers that may execute the tool.
         requires_feature_flag: Optional feature flag required to execute the tool.
     """
 
@@ -99,7 +98,6 @@ class AgentTool:
     idempotent: Optional[bool] = None
     renderer: Optional[str] = None
     sensitive_args: List[str] = field(default_factory=list)
-    enabled_tiers: Optional[List[str]] = None
     requires_feature_flag: Optional[str] = None
 
     def __post_init__(self) -> None:

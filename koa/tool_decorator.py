@@ -257,7 +257,6 @@ def tool(
     idempotent: Optional[bool] = None,
     renderer: Optional[str] = None,
     sensitive_args: Optional[List[str]] = None,
-    enabled_tiers: Optional[List[str]] = None,
     requires_feature_flag: Optional[str] = None,
     name: Optional[str] = None,
 ) -> Any:
@@ -287,7 +286,6 @@ def tool(
             idempotent=idempotent,
             renderer=renderer,
             sensitive_args=list(sensitive_args or []),
-            enabled_tiers=list(enabled_tiers) if enabled_tiers is not None else None,
             requires_feature_flag=requires_feature_flag,
         )
 

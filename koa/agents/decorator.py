@@ -103,7 +103,7 @@ class AgentMetadata:
     # Whether this agent should be exposed as a tool in the ReAct loop
     expose_as_tool: bool = True
 
-    # Extra config (for app-specific extensions like required_tier)
+    # Extra config for app-specific extensions.
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -186,7 +186,7 @@ def valet(
             The agent is only available to a tenant who has at least one of
             these services configured in CredentialStore.  When omitted the
             agent is always available.
-        extra: App-specific extensions (e.g., required_tier)
+        extra: App-specific extensions.
 
     The decorator automatically extracts:
         - description: from class docstring

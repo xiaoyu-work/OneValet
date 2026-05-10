@@ -15,7 +15,7 @@ from koa.standard_agent import StandardAgent
 from .tools import track_shipment
 
 
-@valet(domain="lifestyle", extra={"required_tier": "pro"})
+@valet(domain="lifestyle")
 class ShippingAgent(StandardAgent):
     """Track packages and check delivery status. Use when the user mentions a tracking number, package, shipment, delivery, or asks where their order is."""
 

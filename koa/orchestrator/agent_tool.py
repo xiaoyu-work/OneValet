@@ -70,13 +70,6 @@ def _extract_recent_context(request_context: Optional[Dict[str, Any]], tenant_id
         return ""
 
 
-def _has_tier_access(permissions: Dict[str, Any], required_tier: str) -> bool:
-    tier_levels = {"free": 0, "pro": 1}
-    user_tier = str(permissions.get("user_tier") or "free").lower()
-    required = str(required_tier or "free").lower()
-    return tier_levels.get(user_tier, 0) >= tier_levels.get(required, 0)
-
-
 async def execute_agent_tool(
     orchestrator,
     agent_type: str,
@@ -182,29 +175,6 @@ async def execute_agent_tool(
     if registry:
         metadata = registry.get_agent_metadata(agent_type)
         if metadata:
-            required_tier = metadata.extra.get("required_tier")
-            if required_tier:
-                permissions = enriched_hints.get("permissions") or {}
-                if not _has_tier_access(permissions, required_tier):
-                    return AgentToolResult(
-                        completed=True,
-                        result_text=(
-                            f"{agent_type} is a Koi Pro feature. "
-                            "Upgrade to Pro to use this capability."
-                        ),
-                        metadata={
-                            "error": {
-                                "code": "tier_upgrade_required",
-                                "message": f"{agent_type} requires {required_tier} tier",
-                                "details": {
-                                    "agent_type": agent_type,
-                                    "required_tier": required_tier,
-                                    "user_tier": permissions.get("user_tier", "free"),
-                                },
-                            }
-                        },
-                    )
-
             required_services = metadata.extra.get("requires_service", [])
             if required_services:
                 credential_store = getattr(orchestrator, "credential_store", None)
