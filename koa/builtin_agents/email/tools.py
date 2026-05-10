@@ -236,7 +236,7 @@ async def _preview_send_email(args: dict, context) -> str:
     return f"Email Draft:\nTo: {to}\nSubject: {subject}\n\n{body_preview}\n\n---\nSend this?"
 
 
-@tool(needs_approval=True, get_preview=_preview_send_email)
+@tool(needs_approval=True, get_preview=_preview_send_email, enabled_tiers=["pro"])
 async def send_email(
     to: Annotated[str, "Recipient email address"],
     body: Annotated[str, "Email body content (plain text)"],
@@ -288,7 +288,7 @@ async def _preview_reply_email(args: dict, context) -> str:
     return f"Reply Draft{suffix}:\n\n{body}\n\n---\nSend this reply?"
 
 
-@tool(needs_approval=True, get_preview=_preview_reply_email)
+@tool(needs_approval=True, get_preview=_preview_reply_email, enabled_tiers=["pro"])
 async def reply_email(
     message_id: Annotated[str, "Message ID of the email to reply to (from search_emails)"],
     body: Annotated[str, "Reply content"],
@@ -342,7 +342,7 @@ async def _preview_delete_emails(args: dict, context) -> str:
     return f"{action} {description}?"
 
 
-@tool(needs_approval=True, get_preview=_preview_delete_emails)
+@tool(needs_approval=True, get_preview=_preview_delete_emails, enabled_tiers=["pro"])
 async def delete_emails(
     message_ids: Annotated[List[str], "List of message IDs to delete"],
     permanent: Annotated[bool, "Permanently delete instead of trash (default: false)"] = False,
@@ -388,7 +388,7 @@ async def _preview_archive_emails(args: dict, context) -> str:
     return f"Archive {description}?"
 
 
-@tool(needs_approval=True, get_preview=_preview_archive_emails)
+@tool(needs_approval=True, get_preview=_preview_archive_emails, enabled_tiers=["pro"])
 async def archive_emails(
     message_ids: Annotated[List[str], "List of message IDs to archive"],
     account: Annotated[str, "Account name (from search_emails results)"] = "primary",
@@ -423,7 +423,7 @@ async def archive_emails(
 # ============================================================
 
 
-@tool
+@tool(enabled_tiers=["pro"])
 async def mark_as_read(
     message_ids: Annotated[List[str], "List of message IDs to mark as read"],
     account: Annotated[str, "Account name (from search_emails results)"] = "primary",

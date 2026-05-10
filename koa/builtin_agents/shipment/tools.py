@@ -258,7 +258,7 @@ async def _query_one(
     return _format_shipment_status(result, description), raw_data
 
 
-@tool
+@tool(enabled_tiers=["pro"])
 async def track_shipment(
     action: Annotated[str, "The operation to perform"],
     tracking_number: Annotated[str, "Package tracking number (required for query_one)"] = "",
