@@ -11,15 +11,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/drive.readonly",
-    "https://www.googleapis.com/auth/documents",
-    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
 
@@ -90,6 +86,12 @@ class GoogleOAuth:
     @staticmethod
     async def fetch_user_email(access_token: str) -> str:
         """Fetch user email from Google userinfo endpoint."""
+        data = await GoogleOAuth.fetch_user_profile(access_token)
+        return data.get("email", "")
+
+    @staticmethod
+    async def fetch_user_profile(access_token: str) -> Dict[str, Any]:
+        """Fetch Google profile fields authorized by userinfo.email/profile."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 GoogleOAuth.USERINFO_URL,
@@ -97,5 +99,4 @@ class GoogleOAuth:
                 timeout=15.0,
             )
             response.raise_for_status()
-            data = response.json()
-            return data.get("email", "")
+            return response.json()

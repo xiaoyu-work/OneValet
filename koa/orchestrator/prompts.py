@@ -88,7 +88,6 @@ These examples show how to map user intent to the correct agent:
 - "Schedule a cron job" → CronAgent
 - "Track my package" → ShippingAgent
 - "Search my cloud storage" / "files in Dropbox" → CloudStorageAgent
-- "Create a Google Doc" / "Search Google Drive" → GoogleWorkspaceAgent
 - "What does an igloo look like?" → google_search (image) + download_image, then complete_task with the image and explanation
 - "Hello" → complete_task (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)

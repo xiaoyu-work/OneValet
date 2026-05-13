@@ -12,7 +12,7 @@ import logging
 from typing import Annotated, Optional
 
 from koa import valet
-from koa.constants import SERVICE_GMAIL
+from koa.constants import SERVICE_GOOGLE_DRIVE
 from koa.models import AgentToolContext
 from koa.standard_agent import StandardAgent
 from koa.tool_decorator import tool
@@ -279,7 +279,7 @@ async def google_sheets_write(
 # =============================================================================
 
 
-@valet(domain="productivity", requires_service=[SERVICE_GMAIL])
+@valet(domain="productivity", requires_service=[SERVICE_GOOGLE_DRIVE])
 class GoogleWorkspaceAgent(StandardAgent):
     """Search, read, create, and write Google Drive files, Docs, and Sheets. Use when the user mentions Google Docs, Sheets, Drive, or their documents and spreadsheets."""
 

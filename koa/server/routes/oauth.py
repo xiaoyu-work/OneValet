@@ -88,7 +88,8 @@ async def google_oauth_callback(request: Request, code: str, state: str):
 
     try:
         tokens = await GoogleOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
-        email = await GoogleOAuth.fetch_user_email(tokens["access_token"])
+        user_profile = await GoogleOAuth.fetch_user_profile(tokens["access_token"])
+        email = user_profile.get("email", "")
 
         credentials = {
             "provider": "google",
@@ -97,9 +98,10 @@ async def google_oauth_callback(request: Request, code: str, state: str):
             "refresh_token": tokens["refresh_token"],
             "token_expiry": tokens["token_expiry"],
             "scopes": tokens.get("scope", "").split(),
+            "provider_data": {"profile": user_profile},
         }
 
-        for svc in ("gmail", "google_calendar", "google_tasks", "google_drive"):
+        for svc in ("gmail", "google_calendar", "google_tasks"):
             await app.save_credential_raw(
                 tenant_id=tenant_id,
                 service=svc,
@@ -109,7 +111,7 @@ async def google_oauth_callback(request: Request, code: str, state: str):
 
         if redirect_after:
             return oauth_success_redirect(redirect_after, "google", email, tenant_id)
-        return oauth_success_html("google", email, "Gmail, Google Calendar, Tasks, Drive")
+        return oauth_success_html("google", email, "Gmail, Google Calendar &amp; Tasks")
     except Exception as e:
         logger.error(f"Google OAuth callback failed: {e}", exc_info=True)
         return HTMLResponse(

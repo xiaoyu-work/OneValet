@@ -14,29 +14,25 @@ import webbrowser
 from typing import Optional
 
 # Maps CLI service names to OAuth authorize endpoints and display names.
-# Google OAuth covers: gmail, google_calendar, google_tasks, google_drive
+# Google OAuth covers: gmail, google_calendar, google_tasks
 # Microsoft OAuth covers: outlook, outlook_calendar, microsoft_todo, onedrive
 _OAUTH_SERVICES = {
     # Google (single OAuth flow covers all Google services)
     "gmail": {
         "endpoint": "/api/oauth/google/authorize",
-        "label": "Google (Gmail, Calendar, Tasks, Drive)",
+        "label": "Google (Gmail, Calendar, Tasks)",
     },
     "google-calendar": {
         "endpoint": "/api/oauth/google/authorize",
-        "label": "Google (Gmail, Calendar, Tasks, Drive)",
+        "label": "Google (Gmail, Calendar, Tasks)",
     },
     "google-tasks": {
         "endpoint": "/api/oauth/google/authorize",
-        "label": "Google (Gmail, Calendar, Tasks, Drive)",
-    },
-    "google-drive": {
-        "endpoint": "/api/oauth/google/authorize",
-        "label": "Google (Gmail, Calendar, Tasks, Drive)",
+        "label": "Google (Gmail, Calendar, Tasks)",
     },
     "google": {
         "endpoint": "/api/oauth/google/authorize",
-        "label": "Google (Gmail, Calendar, Tasks, Drive)",
+        "label": "Google (Gmail, Calendar, Tasks)",
     },
     # Microsoft (single OAuth flow covers all Microsoft services)
     "outlook": {
@@ -78,7 +74,7 @@ _OAUTH_SERVICES = {
 
 # Primary services shown in `koa connect` help (no duplicates)
 _PRIMARY_SERVICES = [
-    ("google", "Gmail, Calendar, Tasks, Drive"),
+    ("google", "Gmail, Calendar, Tasks"),
     ("microsoft", "Outlook, Calendar, To Do, OneDrive"),
     ("todoist", "Todoist task management"),
     ("notion", "Notion workspace"),

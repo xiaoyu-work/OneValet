@@ -2,7 +2,7 @@
 Gmail Provider - Gmail API implementation
 
 Uses Google Gmail API for email operations.
-Requires OAuth scopes: gmail.send, gmail.modify, gmail.readonly
+Requires OAuth scope: gmail.modify
 """
 
 import base64
