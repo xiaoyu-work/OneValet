@@ -5,17 +5,20 @@ from koa.oauth.google_oauth import GOOGLE_SCOPES, GoogleOAuth
 
 def test_google_scopes_match_implemented_features():
     assert "https://www.googleapis.com/auth/userinfo.email" in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/userinfo.profile" in GOOGLE_SCOPES
     assert "https://www.googleapis.com/auth/gmail.modify" in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/calendar.events" in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/tasks" in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/calendar" not in GOOGLE_SCOPES
+    assert "https://www.googleapis.com/auth/calendar" in GOOGLE_SCOPES
+    # gmail.modify already covers read + send
+    assert "https://www.googleapis.com/auth/gmail.readonly" not in GOOGLE_SCOPES
+    assert "https://www.googleapis.com/auth/gmail.send" not in GOOGLE_SCOPES
+    # broad calendar replaces the narrow calendar.events scope
+    assert "https://www.googleapis.com/auth/calendar.events" not in GOOGLE_SCOPES
+    # retained in code but not requested until submitted for verification
+    assert "https://www.googleapis.com/auth/tasks" not in GOOGLE_SCOPES
+    assert "https://www.googleapis.com/auth/userinfo.profile" not in GOOGLE_SCOPES
     assert "https://www.googleapis.com/auth/drive.readonly" not in GOOGLE_SCOPES
     assert "https://www.googleapis.com/auth/drive" not in GOOGLE_SCOPES
     assert "https://www.googleapis.com/auth/documents" not in GOOGLE_SCOPES
     assert "https://www.googleapis.com/auth/spreadsheets" not in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/gmail.readonly" not in GOOGLE_SCOPES
-    assert "https://www.googleapis.com/auth/gmail.send" not in GOOGLE_SCOPES
 
 
 @pytest.mark.asyncio

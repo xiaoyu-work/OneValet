@@ -10,12 +10,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+# Only scopes declared for Google OAuth verification are requested here.
+# gmail.modify already grants read + send, so gmail.readonly / gmail.send are
+# intentionally omitted. Drive/Docs/Sheets/Tasks agent code is retained but
+# those scopes are intentionally NOT requested until submitted for verification.
 GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/tasks",
+    "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
 ]
 
 
@@ -91,7 +93,7 @@ class GoogleOAuth:
 
     @staticmethod
     async def fetch_user_profile(access_token: str) -> Dict[str, Any]:
-        """Fetch Google profile fields authorized by userinfo.email/profile."""
+        """Fetch the Google userinfo payload (email requires userinfo.email)."""
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 GoogleOAuth.USERINFO_URL,
