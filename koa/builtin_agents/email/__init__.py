@@ -2,15 +2,15 @@
 Email agents for Koa
 
 Provides an agent for managing email (read, send, reply, delete, archive)
-and agents for email importance evaluation and preference management.
+and an agent for managing email importance rules and notification preferences.
 """
 
 from .agent import EmailAgent
-from .importance import EmailImportanceAgent
+from .importance_rules import SYSTEM_RULES
 from .preference import EmailPreferenceAgent
 
 __all__ = [
     "EmailAgent",
-    "EmailImportanceAgent",
     "EmailPreferenceAgent",
+    "SYSTEM_RULES",
 ]

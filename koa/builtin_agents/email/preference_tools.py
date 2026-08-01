@@ -13,7 +13,7 @@ from typing import Annotated, Optional
 from koa.models import AgentToolContext
 
 from ...tool_decorator import tool
-from .importance import EmailImportanceAgent
+from .importance_rules import SYSTEM_RULES
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +62,11 @@ async def show_email_rules(*, context: AgentToolContext) -> str:
     if current:
         return (
             f"Your custom email importance rules:\n{current}\n\n"
-            f"System default rules also apply:\n{EmailImportanceAgent.SYSTEM_RULES}"
+            f"System default rules also apply:\n{SYSTEM_RULES}"
         )
     return (
         "You haven't set custom rules yet. Using system default rules:\n"
-        f"{EmailImportanceAgent.SYSTEM_RULES}"
+        f"{SYSTEM_RULES}"
     )
 
 
