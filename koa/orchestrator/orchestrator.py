@@ -228,7 +228,7 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         Initialize Orchestrator.
 
         Args:
-            momex: Momex memory Ã¢â‚¬â€ conversation history + long-term knowledge
+            momex: Momex memory — conversation history + long-term knowledge
             config: Full orchestrator configuration
             llm_client: LLM client for the ReAct loop
             agent_registry: Pre-configured agent registry
