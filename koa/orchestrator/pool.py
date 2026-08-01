@@ -431,8 +431,10 @@ class AgentPoolManager:
 
                     agent.transition_to(AgentStatus.ERROR)
                     agent.error_message = f"Timed out after {elapsed:.0f}s in {status_value}"
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Eviction proceeds regardless -- the agent is being
+                    # removed, so failing to mark it is cosmetic.
+                    logger.debug(f"Could not mark {agent_id} as errored: {e}")
                 await self.remove_agent(tenant_id, agent_id)
                 timed_out_ids.append(agent_id)
 

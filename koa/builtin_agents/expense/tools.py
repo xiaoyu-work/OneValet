@@ -972,7 +972,9 @@ async def search_receipts(
         logger.error(f"Failed to search receipts: {e}", exc_info=True)
         return "Sorry, I couldn't search receipts. Please try again."
 
-    # Cross-reference with expenses if available
+    # Cross-reference with expenses if available. A failure here degrades the
+    # answer (receipts still show) rather than replacing it, so it is logged
+    # and the search continues.
     expense_matches = []
     if expense_repo:
         try:
@@ -980,8 +982,8 @@ async def search_receipts(
                 tenant_id=context.tenant_id,
                 query=query.strip(),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Expense cross-reference failed for '{query}': {e}")
 
     if not receipts and not expense_matches:
         period_str = f" in {period}" if period else ""
@@ -1009,8 +1011,9 @@ async def search_receipts(
                     link_result = await storage_provider.get_download_link(file_id)
                     if link_result.get("success"):
                         url = link_result["data"].get("url", "")
-                except Exception:
-                    pass
+                except Exception as e:
+                    # The receipt is still listed, just without a link.
+                    logger.warning(f"Could not sign download URL for {file_id}: {e}")
             line = f"{i}. {d}"
             if desc:
                 line += f" - {desc}"

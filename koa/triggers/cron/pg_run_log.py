@@ -88,7 +88,8 @@ class PostgresCronRunLog:
             try:
                 d = row["data"] if isinstance(row["data"], dict) else json.loads(row["data"])
                 entries.append(CronRunEntry.from_dict(d))
-            except Exception:
+            except (json.JSONDecodeError, TypeError, KeyError, ValueError) as e:
+                logger.warning(f"Skipping malformed run-log row for job {job_id}: {e}")
                 continue
         return entries
 

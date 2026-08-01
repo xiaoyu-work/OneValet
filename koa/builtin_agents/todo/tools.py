@@ -619,7 +619,9 @@ async def set_reminder(
                     from zoneinfo import ZoneInfo
 
                     local_dt = local_dt.replace(tzinfo=ZoneInfo(user_tz))
-                except Exception:
+                except (ImportError, ValueError, KeyError):
+                    # Unknown/invalid tz name -- CronService treats a naive
+                    # datetime as UTC.
                     pass
 
             schedule = AtSchedule(at=local_dt.isoformat())
@@ -1000,8 +1002,19 @@ async def _update_reminder(
                         local_dt.isoformat()
                     )
                     response_parts.append(f"changed to {time_desc}")
-                except Exception:
-                    pass
+                except ValueError as e:
+                    # Say so rather than reporting a reschedule that did not
+                    # happen -- the user would keep the old reminder time
+                    # while believing it had moved.
+                    logger.warning(
+                        f"Could not parse new_schedule_datetime "
+                        f"{new_schedule_datetime!r}: {e}"
+                    )
+                    return (
+                        f"I couldn't understand the new time "
+                        f"{new_schedule_datetime!r}. The reminder is unchanged -- "
+                        "could you give me the date and time again?"
+                    )
 
         if update_type in ("message", "both"):
             if new_message:

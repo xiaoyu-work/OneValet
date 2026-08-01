@@ -109,8 +109,8 @@ class ShipmentPoller:
             )
             if row and row["tz"]:
                 return row["tz"]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Could not read timezone for {tenant_id}, using UTC: {e}")
         return "UTC"
 
     @staticmethod

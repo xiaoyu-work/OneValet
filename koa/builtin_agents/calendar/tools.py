@@ -231,7 +231,9 @@ def _parse_time_to_datetime(time_str: str, user_tz: str | None = None) -> dateti
                 from zoneinfo import ZoneInfo
 
                 parsed = parsed.replace(tzinfo=ZoneInfo(user_tz))
-            except Exception:
+            except (ImportError, ValueError, KeyError):
+                # Unknown/invalid tz name -- leave it naive, the caller
+                # falls back to UTC.
                 pass
         return parsed
     except Exception:
