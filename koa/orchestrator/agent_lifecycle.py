@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Optional
 
 from ..message import Message
 from ..result import AgentResult, AgentStatus
-from .models import AgentPoolEntry, callback_handler
+from ..standard_agent import StandardAgent
+from .models import AgentCallback, AgentPoolEntry, callback_handler
 
 logger = logging.getLogger(__name__)
 

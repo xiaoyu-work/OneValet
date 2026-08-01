@@ -118,7 +118,8 @@ class DagLoopMixin:
             # Fix 5: check DAG-level timeout before each level
             if time.monotonic() > deadline:
                 logger.warning(
-                    f"[DAG] Timeout exceeded ({dag_timeout_seconds}s) at level {level_idx}"
+                    f"[DAG] Timeout exceeded ({self._react_config.dag_timeout}s) "
+                    f"at level {level_idx}"
                 )
                 for st in level:
                     all_results[st.id] = SubTaskResult(
