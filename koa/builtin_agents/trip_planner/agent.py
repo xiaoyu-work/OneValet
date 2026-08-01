@@ -7,7 +7,7 @@ This agent orchestrates multiple domains to produce executable itineraries:
 - optional execution (calendar events, task creation) after user approval
 """
 
-from koa import InputField, valet
+from koa import valet
 from koa.builtin_agents.calendar.tools import create_event, query_events
 from koa.builtin_agents.maps.tools import get_directions, search_places
 from koa.builtin_agents.todo.tools import create_task
@@ -20,14 +20,6 @@ from .travel_tools import get_weather, search_flights, search_hotels
 class TripPlannerAgent(StandardAgent):
     """Plan a complete trip itinerary with day-by-day schedule. Use when the user asks to plan a trip, make an itinerary, or organize a multi-day travel plan. Coordinates flights, hotels, weather, places, directions, and optionally creates calendar events and tasks."""
 
-    # Only destination is truly required. Everything else can be inferred
-    # by the ReAct LLM (dates from "3 days", origin from user profile, etc.).
-    # Pattern: "Assume and proceed" — state assumptions, let user correct.
-    destination = InputField(
-        prompt="Which city or destination are you traveling to?",
-        description="Trip destination city/area",
-    )
-
     max_turns = 20
 
     _SYSTEM_PROMPT_TEMPLATE = """\
@@ -35,13 +27,20 @@ You are a senior trip planner that builds realistic, executable itineraries.
 
 Today's date: {today} ({weekday})
 
+## Destination Is Required
+A destination is the one thing you cannot proceed without. If the user has not
+named a city or area, ask "Which city or destination are you traveling to?" and
+call no tools until they answer. Everything else you infer or skip per the rules
+below.
+
 ## Handling Missing Info
 Use what the user provides. For what's missing:
 - **Dates**: infer from duration (e.g. "3 days" = 3 days starting {tomorrow}). This is the ONLY thing you may infer.
 - **Origin city**: if not given, skip flight search entirely. Do NOT guess a city.
 - **Budget / preferences**: do not mention or guess. Just plan a balanced trip.
 - **Do NOT list assumptions.** Never fabricate information the user didn't provide.
-Proceed directly with tool calls. Do NOT ask clarifying questions.
+Once you have a destination, proceed directly with tool calls. Do NOT ask other
+clarifying questions.
 
 ## Tool Usage (CRITICAL)
 You MUST call tools to gather real data before producing any plan.
@@ -124,9 +123,6 @@ Only execute write actions (calendar/todo) after explicit user consent.
             prompt += "\n".join(lines)
 
         return prompt
-
-    async def on_running(self, msg):
-        return await super().on_running(msg)
 
     tools = (
         get_weather,
