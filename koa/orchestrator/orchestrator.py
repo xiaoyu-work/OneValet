@@ -676,32 +676,20 @@ class Orchestrator(
             # Step 2: Check if should process
             if not await self.should_process(message, context):
                 result = await self.reject_message(message, context)
-                yield AgentEvent(
-                    type=EventType.MESSAGE_CHUNK,
-                    data={"chunk": result.raw_message or ""},
-                )
-                yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+                async for event in self._emit_direct_result(result, with_message_frame=False):
+                    yield event
                 return
 
             # Step 3: Check pending agents (WAITING_FOR_INPUT / WAITING_FOR_APPROVAL)
             agent_result = await self._check_pending_agents(tenant_id, message, context)
             if agent_result is not None:
-                # Agent still waiting or completed -> return result directly.
-                # The user's message was a response to the pending agent (e.g. an
-                # approval like "yes"/"ok"), NOT a new task.  Feeding it into the ReAct
-                # loop would cause the orchestrator to misinterpret the approval
-                # word as a brand-new request and spawn unnecessary follow-up agents.
+                # The user's message was a reply to the pending agent (e.g. an
+                # approval like "yes"/"ok"), NOT a new task. Feeding it into the
+                # ReAct loop would read the approval word as a fresh request and
+                # spawn unnecessary follow-up agents.
                 agent_result = await self.post_process(agent_result, context)
-                yield AgentEvent(
-                    type=EventType.MESSAGE_START,
-                    data={"agent_type": agent_result.agent_type},
-                )
-                yield AgentEvent(
-                    type=EventType.MESSAGE_CHUNK,
-                    data={"chunk": agent_result.raw_message or ""},
-                )
-                yield AgentEvent(type=EventType.MESSAGE_END, data={})
-                yield AgentEvent(type=EventType.EXECUTION_END, data=agent_result)
+                async for event in self._emit_direct_result(agent_result):
+                    yield event
                 return
 
             # Step 3b: Speculative execution — kick off likely tools before LLM decides
@@ -866,6 +854,31 @@ class Orchestrator(
                 ),
             )
 
+    async def _emit_direct_result(
+        self,
+        result: AgentResult,
+        *,
+        with_message_frame: bool = True,
+    ) -> AsyncIterator[AgentEvent]:
+        """Stream a result that bypassed the ReAct loop.
+
+        ``with_message_frame`` wraps the text in MESSAGE_START/MESSAGE_END so a
+        client renders it as an assistant turn. Rejections skip the frame, since
+        they are a refusal to answer rather than an answer.
+        """
+        if with_message_frame:
+            yield AgentEvent(
+                type=EventType.MESSAGE_START,
+                data={"agent_type": result.agent_type},
+            )
+        yield AgentEvent(
+            type=EventType.MESSAGE_CHUNK,
+            data={"chunk": result.raw_message or ""},
+        )
+        if with_message_frame:
+            yield AgentEvent(type=EventType.MESSAGE_END, data={})
+        yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+
     async def _ask_for_clarification(
         self,
         intent: Any,
@@ -902,7 +915,6 @@ class Orchestrator(
         yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q})
         result = await self.post_process(result, context)
         yield AgentEvent(type=EventType.EXECUTION_END, data=result)
-
     async def _run_multi_intent(
         self,
         intent: Any,
