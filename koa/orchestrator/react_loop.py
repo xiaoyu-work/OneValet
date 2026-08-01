@@ -1075,7 +1075,8 @@ class ReactLoopMixin:
                     total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
                     total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
                     total_usage.cost_usd += getattr(usage, "cost", 0) or 0
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[ReAct] Summary call after max_turns failed: {e}")
                 final_text = "I was unable to complete the request within the allowed turns."
 
             final_response = final_text

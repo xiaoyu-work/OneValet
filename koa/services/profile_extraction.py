@@ -1005,7 +1005,11 @@ class ProfileExtractionService:
                     "date": headers.get("Date", ""),
                     "snippet": data.get("snippet", ""),
                 }
-            except Exception:
+            except Exception as e:
+                # One unreadable message must not abort the scan, but a
+                # systematic failure should be visible rather than looking
+                # like an empty mailbox.
+                logger.debug(f"Could not fetch metadata for message {msg_id}: {e}")
                 return None
 
         results = await asyncio.gather(
@@ -1065,7 +1069,8 @@ class ProfileExtractionService:
                 "date": headers.get("Date", ""),
                 "body": body,
             }
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Could not fetch body for message {msg_id}: {e}")
             return None
 
     async def _scan_gmail(self, provider, max_emails: int = MAX_EMAILS_TO_SCAN) -> List[Dict]:

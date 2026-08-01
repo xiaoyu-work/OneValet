@@ -6,6 +6,7 @@ This module provides:
 - Decorator for automatic hook execution
 """
 
+import logging
 from datetime import datetime
 from functools import wraps
 from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar, Union
@@ -24,6 +25,8 @@ from .models import (
     HookResult,
     HookType,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class HookExecutionError(Exception):
@@ -98,6 +101,7 @@ class HookManager:
                 except HookExecutionError:
                     raise
                 except Exception as e:
+                    logger.warning(f'Hook {hook_type} failed during {context.phase}: {e}')
                     results.append(HookResult(hook_type=hook_type, success=False, error=str(e)))
 
         return results
@@ -115,6 +119,7 @@ class HookManager:
                     result = await hook.on_post_execute(context)
                     results.append(result)
                 except Exception as e:
+                    logger.warning(f'Hook {hook_type} failed during {context.phase}: {e}')
                     results.append(HookResult(hook_type=hook_type, success=False, error=str(e)))
 
         return results
@@ -131,6 +136,7 @@ class HookManager:
                     result = await hook.on_error(context)
                     results.append(result)
                 except Exception as e:
+                    logger.warning(f'Hook {hook_type} failed during {context.phase}: {e}')
                     results.append(HookResult(hook_type=hook_type, success=False, error=str(e)))
 
         return results

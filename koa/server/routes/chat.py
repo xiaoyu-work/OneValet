@@ -291,5 +291,8 @@ async def get_actions(tenant_id: str, limit: int = 50, offset: int = 0):
             "total": count or 0,
             "has_more": (count or 0) > offset + limit,
         }
-    except Exception:
+    except Exception as e:
+        # An empty history and an unreachable database look identical to the
+        # client, so at least make the difference visible in the logs.
+        logger.error(f"Failed to read action history for {tenant_id}: {e}", exc_info=True)
         return {"actions": [], "total": 0, "has_more": False}
