@@ -1688,11 +1688,9 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
         total_turns = 0
         total_tool_calls = 0
 
-        # Fix 5: DAG-level timeout (generous but bounded)
-        dag_timeout_seconds = (
-            self._react_config.max_turns * self._react_config.agent_tool_execution_timeout
-        )
-        deadline = start_time + dag_timeout_seconds
+        # DAG-level budget: independent of max_turns (which is a model-iteration
+        # count, not a time unit).
+        deadline = start_time + self._react_config.dag_timeout
 
         yield AgentEvent(
             type=EventType.WORKFLOW_START,

@@ -334,16 +334,20 @@ class ReactLoopMixin:
                 logger.warning(f"[ReAct] Planning phase failed, proceeding without plan: {e}")
 
         for turn in range(1, self._react_config.max_turns + 1):
-            elapsed = time.monotonic() - start_time
-            if elapsed > self._react_config.react_timeout:
-                logger.warning(
-                    f"[ReAct] Global timeout after {elapsed:.1f}s (limit={self._react_config.react_timeout}s)"
-                )
-                yield AgentEvent(
-                    type=EventType.ERROR,
-                    data={"error": "Request timed out. Please try again with a simpler request."},
-                )
-                break
+            budget = self._react_config.react_timeout
+            if budget is not None:
+                elapsed = time.monotonic() - start_time
+                if elapsed > budget:
+                    logger.warning(
+                        f"[ReAct] Wall-clock budget exhausted after {elapsed:.1f}s (limit={budget}s)"
+                    )
+                    yield AgentEvent(
+                        type=EventType.ERROR,
+                        data={
+                            "error": "Request timed out. Please try again with a simpler request."
+                        },
+                    )
+                    break
 
             # Context guard with summarization
             messages = await self._summarize_and_trim(messages)

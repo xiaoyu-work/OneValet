@@ -23,15 +23,24 @@ class ReactLoopConfig:
     """All ReAct loop configuration centralized in one place."""
 
     # Loop control
-    max_turns: int = 10
-    react_timeout: float = 300.0
-    """Global timeout in seconds for the entire ReAct loop execution."""
+    max_turns: int = 60
+    """Max model<->tool iterations for one request. Long tasks (multi-step research,
+    trip planning, cross-agent workflows) routinely need more than a handful of turns;
+    the loop still terminates on its own as soon as the model stops requesting tools."""
+    react_timeout: Optional[float] = None
+    """Optional wall-clock budget in seconds for the entire ReAct loop.
+
+    ``None`` (the default) means no wall-clock kill: a task runs until it finishes,
+    exhausts ``max_turns``, or is interrupted. Set a float only when a caller genuinely
+    needs a deadline (e.g. a synchronous HTTP handler); it is a budget, not a safety net."""
 
     # Tool execution
     tool_execution_timeout: int = 30
     """Regular Tool timeout in seconds."""
     agent_tool_execution_timeout: int = 120
     """Agent-Tool timeout in seconds."""
+    dag_timeout: float = 1800.0
+    """Wall-clock budget for a whole multi-intent DAG execution, in seconds."""
     max_tool_result_share: float = 0.3
     """Single tool result may consume at most 30% of the context window."""
     max_tool_result_chars: int = 400_000
