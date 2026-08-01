@@ -247,11 +247,6 @@ class StandardAgent(BaseAgent):
         self.last_active = datetime.now()
         self.error_message: Optional[str] = None
 
-        # Build required_fields from InputField specs or legacy define_required_fields()
-        self.required_fields = self._build_required_fields()
-
-        # Track validation errors for custom error messages
-        self._validation_error: Optional[str] = None
         self._tool_validator: Optional[Any] = None
 
         # Instance metadata - for custom per-instance properties (e.g., user_id, session_id)
@@ -280,32 +275,6 @@ class StandardAgent(BaseAgent):
         self._tool_trace: List[Dict[str, Any]] = []
         self._collected_media: List[Dict[str, Any]] = []  # media from ToolOutput results
 
-        # Pre-populate collected_fields with context_hints (only for declared fields)
-        if context_hints:
-            for field_name, value in context_hints.items():
-                if not value:
-                    continue
-                # Only pre-populate fields that are declared as required/input fields.
-                # Infrastructure objects (db, trigger_engine, etc.) stay in
-                # self.context_hints and must NOT enter collected_fields, which
-                # gets JSON-serialized by the pool backend.
-                field_def = next((f for f in self.required_fields if f.name == field_name), None)
-                if not field_def:
-                    continue
-                if field_def.validator:
-                    if not field_def.validator(str(value)):
-                        logger.debug(
-                            f"context_hints field '{field_name}' failed validation, skipping"
-                        )
-                        continue
-                self.collected_fields[field_name] = value
-            logger.debug(
-                f"Pre-populated fields from context_hints: {list(self.collected_fields.keys())}"
-            )
-
-        # Initialize optional fields with defaults
-        self._init_optional_fields()
-
         # Built-in streaming engine
         self._stream_engine = StreamEngine(
             agent_id=self.agent_id, agent_type=self.__class__.__name__
@@ -329,49 +298,6 @@ class StandardAgent(BaseAgent):
             except Exception:
                 pass
         return datetime.now(timezone.utc), "UTC"
-
-    def _build_required_fields(self) -> List[RequiredField]:
-        """Build RequiredField list from InputField specs or legacy method."""
-        # First check for InputField specs from decorator
-        input_specs = getattr(self.__class__, "_input_specs", [])
-        if input_specs:
-            return [
-                RequiredField(
-                    name=spec.name,
-                    description=spec.description,
-                    prompt=spec.prompt,
-                    validator=self._wrap_validator(spec.validator) if spec.validator else None,
-                    required=spec.required,
-                )
-                for spec in input_specs
-            ]
-        # Fallback to legacy method
-        return self.define_required_fields()
-
-    def _wrap_validator(self, validator: Callable) -> Callable[[str], bool]:
-        """
-        Wrap a validator that returns error message into one that returns bool.
-        Store the error message for later use.
-        """
-
-        def wrapped(value: str) -> bool:
-            result = validator(value)
-            if result is None:
-                self._validation_error = None
-                return True
-            else:
-                self._validation_error = result
-                return False
-
-        return wrapped
-
-    def _init_optional_fields(self) -> None:
-        """Initialize optional fields with their defaults."""
-        input_specs = getattr(self.__class__, "_input_specs", [])
-        for spec in input_specs:
-            if not spec.required and spec.default is not None:
-                if spec.name not in self.collected_fields:
-                    self.collected_fields[spec.name] = spec.default
 
     # ===== Agent ReAct Support =====
 
@@ -443,105 +369,47 @@ class StandardAgent(BaseAgent):
 
     # ===== Required Methods (Must Override) =====
 
-    def define_required_fields(self) -> List[RequiredField]:
-        """
-        Define what information this agent needs.
-
-        Returns:
-            List of RequiredField objects
-
-        Example:
-            def define_required_fields(self):
-                return [
-                    RequiredField("name", "User's name", "What's your name?"),
-                    RequiredField("email", "Email", "What's your email?", lambda v: "@" in v)
-                ]
-        """
-        return []  # Default: no required fields
-
     # ===== State Handlers (Override to customize) =====
 
     async def on_initializing(self, msg: Message) -> AgentResult:
         """
         Called when agent first receives a message.
 
-        Default behavior: Extract fields and transition to appropriate state.
-        Override for custom initialization logic.
+        Default behavior: run the agent's ReAct loop. Override for custom
+        initialization logic.
         """
-        # Extract fields from initial message
-        if msg:
-            await self._extract_and_collect_fields(msg.get_text())
-
-        # Check if we have all required fields
-        missing = self._get_missing_fields()
-
-        if missing:
-            return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
-                raw_message=self._get_next_prompt(),
-                missing_fields=missing,
-            )
-
-        # All fields collected - check approval
         if self.needs_approval():
             return self.make_result(
                 status=AgentStatus.WAITING_FOR_APPROVAL, raw_message=self.get_approval_prompt()
             )
 
-        # No approval needed - go directly to running
         self.transition_to(AgentStatus.RUNNING)
         return await self.on_running(msg)
 
     async def on_waiting_for_input(self, msg: Message) -> AgentResult:
         """
-        Called when waiting for user to provide missing fields.
+        Called when waiting for the user to answer a question the agent asked.
 
-        If tools is active and a ReAct loop is in progress,
-        resumes the ReAct loop with the user's answer.
-        Otherwise, continues InputField collection.
+        Resumes the ReAct loop with the user's reply so the model can continue
+        from where it paused.
         """
-        # Agent ReAct path: resume loop with user's follow-up
+        user_text = msg.get_text() if msg else ""
+        if not user_text:
+            return self.make_result(
+                status=AgentStatus.WAITING_FOR_INPUT,
+                raw_message="Please provide the requested information.",
+            )
+
         if self.tools and self._react_messages:
-            user_text = msg.get_text() if msg else ""
-            if not user_text:
-                return self.make_result(
-                    status=AgentStatus.WAITING_FOR_INPUT,
-                    raw_message="Please provide the requested information.",
-                )
             self._react_messages.append({"role": "user", "content": user_text})
             self.transition_to(AgentStatus.RUNNING)
             return await self._run_react()
 
-        # InputField collection path
-        if msg:
-            success = await self._extract_and_collect_fields(msg.get_text())
-
-            # Validation failed - show error and re-ask
-            if not success and self._validation_error:
-                prompt = self._get_next_prompt() or ""
-                error_message = f"{self._validation_error} {prompt}"
-                return self.make_result(
-                    status=AgentStatus.WAITING_FOR_INPUT,
-                    raw_message=error_message,
-                    missing_fields=self._get_missing_fields(),
-                )
-
-        missing = self._get_missing_fields()
-
-        if missing:
-            return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT,
-                raw_message=self._get_next_prompt(),
-                missing_fields=missing,
-            )
-
-        # All fields collected - check approval
         if self.needs_approval():
             return self.make_result(
                 status=AgentStatus.WAITING_FOR_APPROVAL, raw_message=self.get_approval_prompt()
             )
 
-        # No approval needed - execute
         self.transition_to(AgentStatus.RUNNING)
         return await self.on_running(msg)
 
@@ -604,21 +472,10 @@ class StandardAgent(BaseAgent):
             return self.make_result(status=AgentStatus.CANCELLED)
 
         else:  # MODIFY
-            # Try to extract new field values
-            await self._extract_and_collect_fields(user_input)
-
-            missing = self._get_missing_fields()
-            if missing:
-                return self.make_result(
-                    status=AgentStatus.WAITING_FOR_INPUT,
-                    raw_message=self._get_next_prompt(),
-                    missing_fields=missing,
-                )
-
-            # Still have all fields, ask for approval again
-            return self.make_result(
-                status=AgentStatus.WAITING_FOR_APPROVAL, raw_message=self.get_approval_prompt()
-            )
+            # The user wants something changed; re-run the loop with their words
+            # so the model can adjust its tool call.
+            self.transition_to(AgentStatus.RUNNING)
+            return await self.on_running(msg)
 
     async def on_running(self, msg: Message) -> AgentResult:
         """
@@ -758,7 +615,8 @@ class StandardAgent(BaseAgent):
         # Return appropriate result based on restored status
         if previous_status == AgentStatus.WAITING_FOR_INPUT:
             return self.make_result(
-                status=AgentStatus.WAITING_FOR_INPUT, raw_message=self._get_next_prompt() or ""
+                status=AgentStatus.WAITING_FOR_INPUT,
+                raw_message="Please provide the requested information.",
             )
         elif previous_status == AgentStatus.WAITING_FOR_APPROVAL:
             return self.make_result(
@@ -893,133 +751,6 @@ class StandardAgent(BaseAgent):
 
     # ===== Field Extraction =====
 
-    async def _extract_and_collect_fields(self, user_input: str) -> bool:
-        """
-        Extract fields from user input and add to collected_fields.
-
-        Returns:
-            True if field was collected successfully, False if validation failed
-        """
-        if not user_input:
-            return False
-
-        extracted = await self.extract_fields(user_input)
-
-        for field_name, value in extracted.items():
-            if value is None:
-                continue
-
-            # Try to validate using InputField descriptor first
-            input_field = self._get_input_field(field_name)
-            if input_field:
-                error = input_field.validate(value)
-                if error:
-                    self._validation_error = error
-                    return False
-
-            # Fallback to legacy RequiredField validator
-            field_def = next((f for f in self.required_fields if f.name == field_name), None)
-            if field_def and field_def.validator:
-                if not field_def.validator(str(value)):
-                    # _validation_error is set by wrapped validator
-                    return False
-
-            self.collected_fields[field_name] = value
-            self._validation_error = None
-
-        return True
-
-    def _get_input_field(self, name: str) -> Optional[InputField]:
-        """Get InputField descriptor by name."""
-        for attr_name in dir(self.__class__):
-            attr = getattr(self.__class__, attr_name, None)
-            if isinstance(attr, InputField) and attr.name == name:
-                return attr
-        return None
-
-    async def extract_fields(self, user_input: str) -> Dict[str, Any]:
-        """
-        Extract field values from user input using LLM.
-
-        Override for custom extraction logic.
-
-        Args:
-            user_input: User's message
-
-        Returns:
-            Dict of field_name -> extracted_value
-        """
-        missing = self._get_missing_fields()
-        if not missing:
-            return {}
-
-        # Use LLM for extraction
-        if self.llm_client:
-            extracted = await self._extract_fields_with_llm(user_input, missing)
-            if extracted:
-                return extracted
-
-        # Fallback: one field at a time
-        if len(missing) == 1:
-            return {missing[0]: user_input.strip()}
-
-        return {}
-
-    async def _extract_fields_with_llm(
-        self, user_input: str, missing_fields: List[str]
-    ) -> Dict[str, Any]:
-        """Use LLM to extract field values from user input."""
-        # Build field descriptions
-        field_info = []
-        for field_name in missing_fields:
-            input_field = self._get_input_field(field_name)
-            desc = input_field.description if input_field else field_name
-            field_info.append(f"- {field_name}: {desc}")
-
-        # Build context from original request and already-collected fields
-        context_parts = []
-        task_instr = self.collected_fields.get("task_instruction") or self.context_hints.get(
-            "task_instruction"
-        )
-        if task_instr:
-            context_parts.append(f'Original request: "{task_instr}"')
-        known_field_names = {f.name for f in self.required_fields}
-        collected = {k: v for k, v in self.collected_fields.items() if k in known_field_names and v}
-        if collected:
-            context_parts.append(
-                "Already collected: " + ", ".join(f"{k}={v}" for k, v in collected.items())
-            )
-        context_block = "\n".join(context_parts) + "\n" if context_parts else ""
-
-        prompt = f"""Extract field values from the user message AND infer related values from context.
-
-RULES:
-1. Extract values explicitly stated in the user message.
-2. Infer values that can be calculated from context + extracted values.
-   - Duration + one date → calculate the other date.
-   - Example: original request says "三天" (3 days), user says start is "tomorrow" → end_date = start + 3 days.
-3. Return dates as YYYY-MM-DD when you can calculate them. Today is {datetime.now().strftime("%Y-%m-%d")}.
-4. Fill as many fields as possible. Do NOT leave a field empty if it can be inferred.
-
-{context_block}Fields to extract:
-{chr(10).join(field_info)}
-
-User message: "{user_input}"
-
-Return JSON only."""
-
-        response = await self.llm_client.chat_completion(
-            messages=[{"role": "user", "content": prompt}],
-            config={"response_format": {"type": "json_object"}},
-        )
-
-        # Parse JSON response
-        content = response.content if hasattr(response, "content") else str(response)
-        try:
-            return json.loads(content)
-        except json.JSONDecodeError:
-            return {}
-
     # ===== Approval Parsing =====
 
     def parse_approval(self, user_input: str) -> ApprovalResult:
@@ -1039,33 +770,14 @@ Return JSON only."""
 
     # ===== Helper Methods =====
 
-    def _get_missing_fields(self) -> List[str]:
-        """Get list of missing required field names."""
-        return [
-            f.name
-            for f in self.required_fields
-            if f.required and f.name not in self.collected_fields
-        ]
-
-    def _get_next_prompt(self) -> Optional[str]:
-        """Get the next question to ask user."""
-        for field in self.required_fields:
-            if field.required and field.name not in self.collected_fields:
-                return field.prompt
-        return None
-
     def get_state_summary(self) -> Dict[str, Any]:
         """Get standardized state summary."""
-        missing = self._get_missing_fields()
         return {
             "agent_id": self.agent_id,
             "agent_type": self.__class__.__name__,
             "tenant_id": self.tenant_id,
             "status": self.status.value,
-            "required_fields": [f.name for f in self.required_fields],
             "collected_fields": dict(self.collected_fields),
-            "missing_fields": missing,
-            "next_prompt": self._get_next_prompt() if missing else None,
             "last_active": self.last_active.isoformat(),
             "error_message": self.error_message,
         }

@@ -37,7 +37,6 @@ def logged(
     include_inputs: bool = False,
     include_outputs: bool = False,
     log_state_changes: bool = True,
-    log_field_collection: bool = True,
     logger_name: Optional[str] = None,
 ) -> Union[AgentClass, Callable[[AgentClass], AgentClass]]:
     """
@@ -46,7 +45,6 @@ def logged(
     This decorator wraps key agent methods to automatically log:
     - Agent initialization
     - State transitions
-    - Field collection
     - Method calls (on_initializing, on_running, etc.)
     - Errors
 
@@ -55,7 +53,6 @@ def logged(
         include_inputs: Log input messages
         include_outputs: Log output results
         log_state_changes: Log state transitions
-        log_field_collection: Log when fields are collected
         logger_name: Custom logger name (default: koa.agents.<class_name>)
 
     Example:
@@ -93,7 +90,6 @@ def logged(
                 "include_inputs": include_inputs,
                 "include_outputs": include_outputs,
                 "log_state_changes": log_state_changes,
-                "log_field_collection": log_field_collection,
                 "logger": _logger,
             }
 
@@ -177,35 +173,6 @@ def logged(
                     raise
 
             cls.reply = new_reply
-
-        # Wrap _extract_and_collect_fields for field collection logging
-        if log_field_collection and hasattr(cls, "_extract_and_collect_fields"):
-            original_extract = cls._extract_and_collect_fields
-
-            @functools.wraps(original_extract)
-            async def new_extract(self, user_input):
-                fields_before = set(self.collected_fields.keys())
-
-                await original_extract(self, user_input)
-
-                fields_after = set(self.collected_fields.keys())
-                new_fields = fields_after - fields_before
-
-                if new_fields and hasattr(self, "_logging_config"):
-                    cfg = self._logging_config
-                    for field_name in new_fields:
-                        value = self.collected_fields[field_name]
-                        # Truncate value for logging
-                        value_str = str(value)
-                        if len(value_str) > 50:
-                            value_str = value_str[:50] + "..."
-                        cfg["logger"].log(
-                            cfg["level"],
-                            f"[{cls.__name__}] Field collected: {field_name}={value_str} "
-                            f"(agent_id={self.agent_id})",
-                        )
-
-            cls._extract_and_collect_fields = new_extract
 
         return cls
 
