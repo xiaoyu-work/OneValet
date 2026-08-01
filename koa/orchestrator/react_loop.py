@@ -212,6 +212,7 @@ class ReactLoopMixin:
         metadata: Optional[Dict[str, Any]] = None,
         request_tools: Optional[List] = None,
         _llm_client_override: Optional[Any] = None,
+        routing_task: Optional["asyncio.Task"] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Unified ReAct loop implementation yielding streaming events.
 
@@ -269,19 +270,25 @@ class ReactLoopMixin:
 
         # Model routing: classify once before the loop, reuse for all turns.
         # If a model-level override is provided (e.g. from fallback), use it
-        # directly and skip routing.
+        # directly and skip routing. When the caller pre-started the
+        # classification (see _start_routing), await that instead of issuing a
+        # second round-trip here.
         routed_llm_client = _llm_client_override
         routing_score = -1
-        if routed_llm_client is None and self._model_router:
+        if routed_llm_client is None and (routing_task is not None or self._model_router):
             try:
-                decision = await self._model_router.route(messages)
-                routing_score = decision.score
-                routed_llm_client = self._model_router.registry.get(decision.provider)
-                if routed_llm_client:
-                    logger.info(
-                        f"[ReAct] ModelRouter selected provider='{decision.provider}' "
-                        f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
-                    )
+                if routing_task is not None:
+                    decision = await routing_task
+                else:
+                    decision = await self._model_router.route(messages)
+                if decision is not None:
+                    routing_score = decision.score
+                    routed_llm_client = self._model_router.registry.get(decision.provider)
+                    if routed_llm_client:
+                        logger.info(
+                            f"[ReAct] ModelRouter selected provider='{decision.provider}' "
+                            f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
+                        )
             except Exception as e:
                 logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
 

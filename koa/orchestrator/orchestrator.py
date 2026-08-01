@@ -92,6 +92,16 @@ from .state_persistence import PlanStore  # noqa: E402
 from .tool_pipeline import ToolPipeline, credential_check_hook, result_audit_hook  # noqa: E402
 
 
+def _cancel_routing(task: "Optional[asyncio.Task]") -> None:
+    """Drop a pre-started routing classification whose result is now unused.
+
+    Cancelling matters because the task holds an in-flight model call; leaving
+    it to finish would keep a connection open and log a decision nothing acts on.
+    """
+    if task is not None and not task.done():
+        task.cancel()
+
+
 def _merge_true_memory_proposals(
     existing: Optional[List[Dict[str, Any]]],
     new: List[Dict[str, Any]],
@@ -647,6 +657,7 @@ class Orchestrator(
         """
         from .graceful_response import generate_graceful_error
 
+        routing_task: Optional[asyncio.Task] = None
         try:
             if not self._initialized:
                 await self.initialize()
@@ -705,6 +716,11 @@ class Orchestrator(
                 if speculative_tasks:
                     context["_speculative_tasks"] = speculative_tasks
 
+            # Step 3c: Start model-complexity routing now so it overlaps with
+            # intent analysis below -- both are classifiers over the same
+            # message, and running them in sequence costs an extra round-trip.
+            routing_task = self._start_routing(message, context)
+
             # Step 4: Intent Analysis — classify domains and detect multi-intent
             intent = await self._analyze_intent(message, context)
             context["intent_analysis"] = intent
@@ -732,10 +748,13 @@ class Orchestrator(
                     intent, tenant_id, message, context
                 ):
                     yield event
+                _cancel_routing(routing_task)
                 return
 
             # Step 4b: Multi-intent → DAG execution
             if intent.intent_type == "multi" and intent.sub_tasks:
+                # Sub-tasks route themselves, so this run's decision is unused.
+                _cancel_routing(routing_task)
                 async for event in self._run_multi_intent(
                     intent, tenant_id, message, context, metadata
                 ):
@@ -792,6 +811,7 @@ class Orchestrator(
                 metadata=metadata,
                 request_tools=request_tools,
                 needs_memory=intent.needs_memory,
+                routing_task=routing_task,
             ):
                 if event.type == EventType.EXECUTION_END:
                     exec_data = event.data
@@ -827,6 +847,7 @@ class Orchestrator(
             )
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
         except Exception as e:
+            _cancel_routing(routing_task)
             logger.error(f"[Orchestrator] Unhandled error in _execute_message: {e}", exc_info=True)
             fallback_msg = await generate_graceful_error(
                 error=e,
@@ -853,6 +874,41 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+
+    def _start_routing(
+        self,
+        message: str,
+        context: Dict[str, Any],
+    ) -> Optional["asyncio.Task"]:
+        """Begin model-complexity classification without waiting for it.
+
+        Routing and intent analysis are both classifiers over the same user
+        message, and neither reads the other's output -- but run in sequence
+        they cost two full round-trips before any real work starts.
+
+        The classifier only reads recent user/assistant turns, which are
+        already known here, so it does not need the assembled prompt that
+        _build_llm_messages produces. Starting it now lets it overlap with
+        intent analysis; _react_loop_events awaits the task instead of issuing
+        its own call.
+        """
+        if not self._model_router:
+            return None
+
+        history = list(context.get("conversation_history") or [])
+        classifier_input = [
+            m for m in history if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+        ]
+        classifier_input.append({"role": "user", "content": message})
+
+        async def _route():
+            try:
+                return await self._model_router.route(classifier_input)
+            except Exception as e:
+                logger.warning(f"[Orchestrator] Model routing failed: {e}")
+                return None
+
+        return asyncio.ensure_future(_route())
 
     async def _emit_direct_result(
         self,
@@ -1021,6 +1077,7 @@ class Orchestrator(
         metadata: Dict[str, Any],
         request_tools: List[Any],
         needs_memory: bool,
+        routing_task: Optional["asyncio.Task"] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Run the ReAct loop, retrying once on another model if the first fails.
 
@@ -1072,6 +1129,7 @@ class Orchestrator(
                 media=media,
                 metadata=metadata,
                 request_tools=request_tools,
+                routing_task=routing_task,
             ):
                 yield event
             return
