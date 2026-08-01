@@ -65,6 +65,31 @@ Examples:
 - Address change: {"section": "identity", "field": "address", "value": "123 New St, Seattle", "detail": "New address confirmed"}
 """
 
+_USER_RULES_TEMPLATE = """\
+
+USER'S OWN RULES (HIGHEST PRIORITY — these override the defaults above):
+{rules}
+
+How to apply them:
+- If the email matches any of the user's rules, it is IMPORTANT even when the
+  default rules would not have flagged it.
+- If the user asked NOT to be notified about something, it is NOT IMPORTANT
+  even when the default rules would have flagged it.
+"""
+
+
+def _build_importance_prompt(user_rules: str = "") -> str:
+    """The classifier prompt, with the user's own rules appended when set.
+
+    The defaults describe what a typical user wants; the user's rules describe
+    what *this* user wants, so they take precedence in both directions -- they
+    can promote an email the defaults ignore, and suppress one the defaults
+    would have flagged.
+    """
+    if not user_rules or not user_rules.strip():
+        return _IMPORTANCE_SYSTEM_PROMPT
+    return _IMPORTANCE_SYSTEM_PROMPT + _USER_RULES_TEMPLATE.format(rules=user_rules.strip())
+
 
 class EmailEventHandler:
     """Handles email events by evaluating importance and detecting subscriptions via LLM.
@@ -117,8 +142,10 @@ class EmailEventHandler:
             except Exception:
                 pass
 
-        # Single LLM call for both importance and subscription detection
-        evaluation = await self._evaluate_email(sender, subject, snippet)
+        # Single LLM call for both importance and subscription detection,
+        # steered by the user's own rules when they have set any.
+        user_rules = await self._get_user_importance_rules(tenant_id)
+        evaluation = await self._evaluate_email(sender, subject, snippet, user_rules)
         if evaluation is None:
             logger.warning(f"LLM evaluation failed for email {message_id}")
             return
@@ -320,10 +347,34 @@ class EmailEventHandler:
         dismissed = row2["cnt"] if row2 else 0
         return dismissed == 0
 
+    async def _get_user_importance_rules(self, tenant_id: str) -> str:
+        """The user's own importance rules, as set via EmailPreferenceAgent.
+
+        Stored in the tenant profile under ``email_importance_rules``. Returns
+        an empty string when unset or unavailable -- the classifier then runs on
+        the default rules alone.
+        """
+        if not self._database:
+            return ""
+        try:
+            from ..services.profile_repo import ProfileRepository
+
+            profile = await ProfileRepository(self._database).get_profile(tenant_id)
+            if not profile:
+                return ""
+            return (profile.get("email_importance_rules") or "").strip()
+        except Exception as e:
+            logger.debug(f"Could not load email importance rules for {tenant_id[:8]}: {e}")
+            return ""
+
     async def _evaluate_email(
-        self, sender: str, subject: str, snippet: str
+        self, sender: str, subject: str, snippet: str, user_rules: str = ""
     ) -> Optional[Dict[str, Any]]:
         """Call the LLM to evaluate email importance and detect subscriptions.
+
+        Args:
+            user_rules: The user's own importance rules, appended to the
+                classifier prompt so they can promote or suppress an email.
 
         Returns:
             Dict with keys: important (bool), reason (str), summary (str), subscription (dict|null)
@@ -334,7 +385,7 @@ class EmailEventHandler:
         try:
             response = await self._llm_client.chat_completion(
                 messages=[
-                    {"role": "system", "content": _IMPORTANCE_SYSTEM_PROMPT},
+                    {"role": "system", "content": _build_importance_prompt(user_rules)},
                     {"role": "user", "content": user_message},
                 ],
                 config={"temperature": 0.0, "max_tokens": 512},
