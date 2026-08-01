@@ -69,7 +69,7 @@ async def update_task(task_id: str, req: TaskUpdateRequest):
     if not req.status:
         raise KoaError(E.VALIDATION_ERROR, "No updates specified")
 
-    task = await app.update_task(task_id, TaskStatus(req.status))
+    task = await app.update_task(task_id, status=TaskStatus(req.status))
     if not task:
         raise KoaError(E.NOT_FOUND, "Task not found", details={"resource": "task"})
     return task.to_dict()

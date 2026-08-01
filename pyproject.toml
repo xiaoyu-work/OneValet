@@ -122,14 +122,11 @@ warn_unused_configs = true
 ignore_missing_imports = true
 disable_error_code = [
     "attr-defined",
-    "no-any-return",
     "assignment",
     "union-attr",
-    "import-untyped",
     "annotation-unchecked",
     "arg-type",
     "return-value",
-    "call-arg",
 ]
 
 [tool.pytest.ini_options]

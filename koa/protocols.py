@@ -37,6 +37,7 @@ class LLMClientProtocol(Protocol):
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict]] = None,
         config: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
     ) -> Any:
         """
         Call LLM for chat completion
@@ -45,6 +46,10 @@ class LLMClientProtocol(Protocol):
             messages: List of message dicts with 'role' and 'content'
             tools: Optional list of tool schemas (OpenAI format)
             config: Optional configuration (model, temperature, etc.)
+            **kwargs: Provider-specific options the caller passes through,
+                e.g. ``tool_choice``, ``response_format``, ``media``,
+                ``reasoning_effort``. Implementations should ignore any they
+                do not support rather than raising.
 
         Returns:
             Response object with choices[0].message structure
