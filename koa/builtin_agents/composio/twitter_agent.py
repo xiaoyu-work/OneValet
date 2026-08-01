@@ -601,7 +601,7 @@ class TwitterComposioAgent(StandardAgent):
     bookmarks, and direct messages on Twitter/X. Use when the user mentions
     Twitter, X, tweets, or social media posting."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

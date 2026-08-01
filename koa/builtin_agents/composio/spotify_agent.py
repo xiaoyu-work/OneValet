@@ -757,7 +757,7 @@ class SpotifyComposioAgent(StandardAgent):
     what's currently playing. Use when the user mentions Spotify, music,
     songs, playlists, or playback control."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

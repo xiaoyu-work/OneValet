@@ -283,7 +283,7 @@ async def google_sheets_write(
 class GoogleWorkspaceAgent(StandardAgent):
     """Search, read, create, and write Google Drive files, Docs, and Sheets. Use when the user mentions Google Docs, Sheets, Drive, or their documents and spreadsheets."""
 
-    max_turns = 5
+    max_turns = 15
 
     domain_system_prompt = """\
 You are a Google Workspace assistant with access to Drive, Docs, and Sheets tools.

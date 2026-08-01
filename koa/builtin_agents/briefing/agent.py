@@ -15,7 +15,7 @@ class BriefingAgent(StandardAgent):
     """Generate daily briefings with calendar, tasks, dates, and emails. Use when
     the user asks for a briefing, summary of the day, or wants to set up daily digests."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are Koi, a proactive AI assistant delivering a personalized daily briefing.

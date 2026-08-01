@@ -4,7 +4,6 @@ Tests cover:
 - _tool_name_from_schema
 - _build_tool_result_message
 - _assistant_message_from_response
-- complete_task interception logic (tested via helpers)
 - _score_tool_relevance
 - _filter_tool_schemas
 - _choose_fallback_tools
@@ -15,12 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from koa.orchestrator.react_config import (
-    COMPLETE_TASK_TOOL_NAME,
-    CompleteTaskResult,
-)
-
-# ── Standalone helper re-implementations for isolated testing ──
+# â”€â”€ Standalone helper re-implementations for isolated testing â”€â”€
 # These replicate the pure logic from Orchestrator without needing
 # the full class instantiation.
 
@@ -73,7 +67,7 @@ def _make_schema(name, description=""):
     }
 
 
-# ── Mock types ──
+# â”€â”€ Mock types â”€â”€
 
 
 @dataclass
@@ -173,89 +167,6 @@ class TestAssistantMessageFromResponse:
         assert msg["content"] is None
 
 
-# =========================================================================
-# complete_task interception logic
-# =========================================================================
-
-
-class TestCompleteTaskInterception:
-    """Test the complete_task extraction logic as an isolated function."""
-
-    @staticmethod
-    def _extract_complete_task(tool_calls):
-        """Replicate the interception logic from orchestrator._react_loop_events."""
-        complete_task_result = None
-        remaining = []
-        for tc in tool_calls:
-            if tc.name == COMPLETE_TASK_TOOL_NAME:
-                try:
-                    args = (
-                        tc.arguments if isinstance(tc.arguments, dict) else json.loads(tc.arguments)
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    args = {}
-                text = args.get("result", "")
-                if text:
-                    complete_task_result = CompleteTaskResult(result=text)
-                else:
-                    remaining.append(tc)
-            else:
-                remaining.append(tc)
-        return complete_task_result, remaining
-
-    def test_complete_task_extracted(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, {"result": "Done!"})]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is not None
-        assert ct.result == "Done!"
-        assert remaining == []
-
-    def test_complete_task_with_other_tools(self):
-        tcs = [
-            MockToolCall("1", "get_weather", {"city": "tokyo"}),
-            MockToolCall("2", COMPLETE_TASK_TOOL_NAME, {"result": "Here's the weather"}),
-            MockToolCall("3", "send_email", {"to": "user"}),
-        ]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct.result == "Here's the weather"
-        assert len(remaining) == 2
-        assert remaining[0].name == "get_weather"
-        assert remaining[1].name == "send_email"
-
-    def test_complete_task_missing_result(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, {"other": "data"})]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is None
-        assert len(remaining) == 1
-
-    def test_complete_task_empty_result(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, {"result": ""})]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is None
-        assert len(remaining) == 1
-
-    def test_complete_task_arguments_as_json_string(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, '{"result": "done"}')]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct.result == "done"
-
-    def test_complete_task_malformed_json_arguments(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, "not json")]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is None
-        assert len(remaining) == 1
-
-    def test_complete_task_none_arguments(self):
-        tcs = [MockToolCall("1", COMPLETE_TASK_TOOL_NAME, None)]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is None
-        assert len(remaining) == 1
-
-    def test_no_complete_task(self):
-        tcs = [MockToolCall("1", "get_weather", {"city": "tokyo"})]
-        ct, remaining = self._extract_complete_task(tcs)
-        assert ct is None
-        assert len(remaining) == 1
 
 
 # =========================================================================

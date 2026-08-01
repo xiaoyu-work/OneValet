@@ -390,7 +390,7 @@ async def notion_update_page(
 class NotionAgent(StandardAgent):
     """Search, read, create, and update Notion pages and databases. Use when the user mentions Notion, their notes, wiki, or knowledge base in Notion."""
 
-    max_turns = 5
+    max_turns = 15
 
     domain_system_prompt = """\
 You are a Notion workspace assistant with access to Notion tools.

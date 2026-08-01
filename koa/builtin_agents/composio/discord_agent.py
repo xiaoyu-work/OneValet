@@ -276,7 +276,7 @@ class DiscordComposioAgent(StandardAgent):
     the user mentions Discord, guilds, servers, or wants to send/read
     messages on Discord."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

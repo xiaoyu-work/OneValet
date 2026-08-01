@@ -60,10 +60,6 @@ class ReactLoopConfig:
     llm_retry_base_delay: float = 1.0
     """Retry base delay in seconds (used for exponential back-off)."""
 
-    # complete_task enforcement
-    max_complete_task_retries: int = 3
-    """Max grace-turn retries when LLM forgets to call complete_task."""
-
     # Approval
     approval_timeout_minutes: int = 30
     """Approval auto-cancel timeout in minutes."""

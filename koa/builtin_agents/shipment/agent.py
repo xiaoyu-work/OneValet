@@ -19,7 +19,7 @@ from .tools import track_shipment
 class ShippingAgent(StandardAgent):
     """Track packages and check delivery status. Use when the user mentions a tracking number, package, shipment, delivery, or asks where their order is."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a shipment tracking assistant with access to package tracking tools.

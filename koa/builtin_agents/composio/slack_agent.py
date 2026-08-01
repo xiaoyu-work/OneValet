@@ -616,7 +616,7 @@ class SlackComposioAgent(StandardAgent):
     in Slack. Use when the user mentions Slack, channels, or wants to
     send/read messages on Slack."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

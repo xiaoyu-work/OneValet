@@ -16,7 +16,7 @@ from .tools import check_expiring_subscriptions, query_subscriptions
 class SubscriptionAgent(StandardAgent):
     """Query and manage subscriptions (Netflix, Spotify, iCloud, T-Mobile, etc.). Use when the user asks about their subscriptions, recurring charges, monthly bills, or wants to know what services they are paying for."""
 
-    max_turns = 3
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a subscription management assistant.

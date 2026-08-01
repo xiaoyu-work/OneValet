@@ -22,7 +22,7 @@ from .tools import (
 class CronAgent(StandardAgent):
     """Create, list, update, and manage scheduled cron jobs and recurring automations. Use when the user wants to schedule recurring tasks, set up timed automations, create reminders, or manage existing scheduled jobs."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a cron job management assistant. Your job is to create, manage, and \

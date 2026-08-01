@@ -405,87 +405,22 @@ class ReactLoopMixin:
 
             tool_calls = response.tool_calls
 
-            # No tool calls → LLM forgot to call complete_task.
-            # Retry up to max_complete_task_retries times with tool_choice="required".
-            # Nudge messages are removed after each attempt to avoid polluting
-            # subsequent turns with "Call complete_task now" clutter.
+            # No tool calls → the model is done. Its text is the final answer.
+            # (There is no completion tool to forget, so there is nothing to
+            # recover from here: an assistant turn without tool calls simply
+            # ends the loop.)
             if not tool_calls:
-                max_retries = self._react_config.max_complete_task_retries
-                for retry in range(1, max_retries + 1):
-                    logger.warning(
-                        f"[ReAct] turn={turn} no tool calls, grace retry {retry}/{max_retries}"
-                    )
-                    nudge_msg = {
-                        "role": "user",
-                        "content": "Call `complete_task` now with your final answer.",
-                    }
-                    messages.append(nudge_msg)
-                    try:
-                        response = await self._llm_call_with_retry(
-                            messages,
-                            tool_schemas,
-                            tool_choice="required",
-                            llm_client_override=routed_llm_client,
-                        )
-                    except Exception as e:
-                        messages.pop()  # remove nudge before propagating
-                        yield AgentEvent(
-                            type=EventType.ERROR,
-                            data={"error": str(e), "error_type": type(e).__name__},
-                        )
-                        return
-                    # Remove the nudge message so it doesn't pollute context
-                    messages.pop()
-                    usage_retry = getattr(response, "usage", None)
-                    if usage_retry:
-                        total_usage.input_tokens += getattr(usage_retry, "prompt_tokens", 0)
-                        total_usage.output_tokens += getattr(usage_retry, "completion_tokens", 0)
-                        total_usage.cost_usd += getattr(usage_retry, "cost", 0) or 0
-                    tool_calls = response.tool_calls
-                    if tool_calls:
-                        break  # success -- proceed to tool execution
-
-                # Exhausted all retries -- ask LLM to produce a user-friendly
-                # error message (no tools, so it can only return text).
-                if not tool_calls:
-                    logger.error(
-                        f"[ReAct] turn={turn} exhausted {max_retries} "
-                        f"grace retries, LLM still did not call complete_task"
-                    )
-                    messages.append(self._assistant_message_from_response(response))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "There was an internal issue processing your request. "
-                                "Generate a short, friendly apology to the user in "
-                                "their language, and suggest they try again later."
-                            ),
-                        }
-                    )
-                    try:
-                        fallback_resp = await self._llm_call_with_retry(
-                            messages,
-                            tool_schemas=[],
-                            tool_choice=None,
-                            llm_client_override=routed_llm_client,
-                        )
-                        final_response = (
-                            getattr(fallback_resp, "content", None)
-                            or fallback_resp.choices[0].message.content
-                            or "Sorry, something went wrong. Please try again later."
-                        )
-                    except Exception:
-                        final_response = "Sorry, something went wrong. Please try again later."
-                    self._audit.log_react_turn(
-                        turn=turn,
-                        tool_calls=[],
-                        final_answer=True,
-                        tenant_id=tenant_id,
-                    )
+                final_response = (getattr(response, "content", None) or "").strip()
+                self._audit.log_react_turn(
+                    turn=turn,
+                    tool_calls=[],
+                    final_answer=True,
+                    tenant_id=tenant_id,
+                )
+                if final_response:
                     async for event in self._yield_chunked_response(final_response, turn):
                         yield event
-                    return
+                break
 
             if tool_calls:
                 # Append assistant message with tool_calls

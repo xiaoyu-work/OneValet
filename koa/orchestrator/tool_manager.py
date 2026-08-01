@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from ..models import AgentTool, AgentToolContext
 from .agent_tool import execute_agent_tool
 from .constants import TOOL_RESULT_HARD_CAP_CHARS
-from .react_config import COMPLETE_TASK_SCHEMA
+from .react_config import COMPLETE_TASK_SCHEMA  # noqa: F401  (re-exported for compat)
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,6 @@ class ToolManagerMixin:
             )
 
         schemas.extend(agent_tool_schemas)
-
-        # Always inject complete_task as the last tool
-        schemas.append(COMPLETE_TASK_SCHEMA)
 
         # Apply tool policy filter if configured
         if self._tool_policy_filter:

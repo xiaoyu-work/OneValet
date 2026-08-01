@@ -30,7 +30,7 @@ from .tools import (
 class TodoAgent(StandardAgent):
     """List, create, complete, and delete todo tasks; set and manage reminders. Use when the user mentions tasks, todos, to-do lists, reminders, or wants to be reminded about something."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a todo and reminder management assistant with access to task and reminder tools.

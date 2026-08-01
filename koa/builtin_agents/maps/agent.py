@@ -19,7 +19,7 @@ from .tools import check_air_quality, get_directions, search_places
 class MapsAgent(StandardAgent):
     """Find places, restaurants, attractions, get directions, and check air quality. Use when the user asks about nearby places, how to get somewhere, navigation, or local recommendations."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a maps and location assistant with access to real-time search tools.

@@ -24,7 +24,7 @@ from .tools import (
 class EmailAgent(StandardAgent):
     """Read, send, reply, delete, and archive emails. Use when the user mentions email, inbox, messages, or wants to send/check/reply to any email."""
 
-    max_turns = 8
+    max_turns = 20
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 Email management tools are available for this task. Today is {today} ({weekday}).

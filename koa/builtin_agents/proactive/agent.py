@@ -16,7 +16,7 @@ class ProactiveCheckAgent(StandardAgent):
     """Run proactive checks for upcoming events, overdue tasks, and expiring subscriptions.
     Used by the cron system for periodic notifications."""
 
-    max_turns = 3
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are Koi's proactive notification system. Your job is to check for things

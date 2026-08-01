@@ -216,7 +216,7 @@ class LinkedInComposioAgent(StandardAgent):
     """Create posts and view profile on LinkedIn. Use when the user mentions
     LinkedIn, professional networking, or wants to post on LinkedIn."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

@@ -27,7 +27,7 @@ from .tools import (
 class CalendarAgent(StandardAgent):
     """Check schedule, create, update, or delete calendar events. Use when the user asks about their schedule, meetings, appointments, or wants to create/change/cancel an event."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a calendar management assistant with access to the user's calendar.

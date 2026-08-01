@@ -28,7 +28,7 @@ class TripPlannerAgent(StandardAgent):
         description="Trip destination city/area",
     )
 
-    max_turns = 8
+    max_turns = 20
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are a senior trip planner that builds realistic, executable itineraries.

@@ -35,7 +35,7 @@ class ExpenseAgent(StandardAgent):
     """Track expenses, scan receipts, analyze spending, and manage budgets. Use when
     the user mentions expenses, spending, costs, payments, budgets, or receipts."""
 
-    max_turns = 5
+    max_turns = 15
 
     _SYSTEM_PROMPT_TEMPLATE = """\
 You are an expense tracking and budget management assistant with access to expense, \

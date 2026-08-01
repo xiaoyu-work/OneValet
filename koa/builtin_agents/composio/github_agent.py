@@ -579,7 +579,7 @@ class GitHubComposioAgent(StandardAgent):
     repositories on GitHub. Use when the user mentions GitHub, issues, PRs,
     pull requests, or repositories."""
 
-    max_turns = 5
+    max_turns = 15
     tool_timeout = 60.0
 
     domain_system_prompt = """\

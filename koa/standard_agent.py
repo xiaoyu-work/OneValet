@@ -204,16 +204,13 @@ class StandardAgent(BaseAgent):
     # Agent ReAct loop configuration (active when tools is non-empty)
     domain_system_prompt: str = ""
     tools: tuple = ()
-    max_turns: int = 5
-    max_complete_task_retries: int = 3
+    max_turns: int = 15
     tool_timeout: float = 30.0  # seconds per tool call
     max_tool_result_chars: int = 4000  # truncate tool results beyond this
 
     _COMPLETE_TASK_INSTRUCTION = (
-        "\n\nIMPORTANT: When you have finished the task, you MUST call the "
-        "`complete_task` tool with your final answer in the `result` parameter. "
-        "This is the ONLY way to finish. Never respond with plain text without "
-        "calling `complete_task`."
+        "\n\nIMPORTANT: When you have finished the task, reply with your final answer "
+        "as plain text and no tool calls. That ends the turn."
     )
 
     def __init__(
@@ -1321,8 +1318,6 @@ Return JSON only."""
     async def _run_react(self) -> AgentResult:
         """Core mini ReAct loop with agent tools."""
         tool_schemas = [t.to_openai_schema() for t in self.tools]
-        # Always inject complete_task
-        tool_schemas.append(COMPLETE_TASK_SCHEMA)
         messages = self._react_messages
 
         if self._remaining_tool_calls:
@@ -1359,85 +1354,15 @@ Return JSON only."""
                         },
                     )
 
-                # Grace turn: LLM forgot to call complete_task.
-                # Retry up to max_complete_task_retries times.
-                max_retries = self.max_complete_task_retries
-                for retry in range(1, max_retries + 1):
-                    logger.warning(
-                        f"[{self.__class__.__name__}:{self.name}] turn={turn} no tool calls, "
-                        f"grace retry {retry}/{max_retries}"
-                    )
-                    messages.append(self._format_assistant_msg(response))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "You must call the `complete_task` tool with your final "
-                                "response in the `result` parameter to finish. Call it now."
-                            ),
-                        }
-                    )
-                    try:
-                        response = await self.llm_client.chat_completion(
-                            messages=messages,
-                            tools=tool_schemas,
-                            tool_choice="required",
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"[{self.__class__.__name__}:{self.name}] grace retry {retry} "
-                            f"LLM call failed: {e}"
-                        )
-                        return self.make_result(
-                            status=AgentStatus.ERROR,
-                            raw_message=(
-                                "Internal error: failed to complete the task. Please try again."
-                            ),
-                            metadata={
-                                "tool_trace": list(self._tool_trace),
-                                "tool_calls_count": len(self._tool_trace),
-                            },
-                        )
-                    if response.has_tool_calls:
-                        break  # success — proceed to tool execution
-
-                # Exhausted all retries — ask LLM to produce a user-friendly
-                # error message (no tools, so it can only return text).
-                if not response.has_tool_calls:
-                    logger.error(
-                        f"[{self.__class__.__name__}:{self.name}] exhausted {max_retries} "
-                        f"grace retries, LLM still did not call complete_task"
-                    )
-                    messages.append(self._format_assistant_msg(response))
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "There was an internal issue processing your request. "
-                                "Generate a short, friendly apology to the user in "
-                                "their language, and suggest they try again later."
-                            ),
-                        }
-                    )
-                    try:
-                        fallback_resp = await self.llm_client.chat_completion(
-                            messages=messages,
-                            tools=None,
-                        )
-                        friendly_msg = fallback_resp.content or (
-                            "Sorry, something went wrong. Please try again later."
-                        )
-                    except Exception:
-                        friendly_msg = "Sorry, something went wrong. Please try again later."
-                    return self.make_result(
-                        status=AgentStatus.COMPLETED,
-                        raw_message=friendly_msg,
-                        metadata={
-                            "tool_trace": list(self._tool_trace),
-                            "tool_calls_count": len(self._tool_trace),
-                            "complete_task_fallback": True,
-                        },
-                    )
+                # No tool calls → the agent is done. Its text is the answer.
+                return self.make_result(
+                    status=AgentStatus.COMPLETED,
+                    raw_message=text,
+                    metadata={
+                        "tool_trace": list(self._tool_trace),
+                        "tool_calls_count": len(self._tool_trace),
+                    },
+                )
 
             messages.append(self._format_assistant_msg(response))
             result = await self._execute_tool_calls(response.tool_calls, messages)

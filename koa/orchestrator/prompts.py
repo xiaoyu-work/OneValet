@@ -22,12 +22,12 @@ def render_complete_task_mandate() -> str:
     return """
 # Completion Protocol
 
-You operate in a ReAct loop: call tools → receive results → call more tools → call `complete_task` to finish.
+You operate in a ReAct loop: call tools → receive results → call more tools. When you have
+everything you need, simply reply with your final answer as plain text and no tool calls —
+that ends the turn.
 
-**`complete_task` is mandatory.** You MUST call the `complete_task` tool with your final response in the `result` parameter to end every turn. This is the ONLY way to finish. Never respond with plain text alone.
-
-For greetings and small talk, call `complete_task` directly.
-For ALL other requests, you MUST call the relevant agent tool FIRST. Never skip an agent tool because you think you already know the answer — always delegate to the agent and let it respond. Only call `complete_task` after receiving the agent's result.
+For greetings and small talk, answer directly.
+For ALL other requests, you MUST call the relevant agent tool FIRST. Never skip an agent tool because you think you already know the answer — always delegate to the agent and let it respond. Only write your final answer after receiving the agent's result.
 """.strip()
 
 
@@ -88,8 +88,8 @@ These examples show how to map user intent to the correct agent:
 - "Schedule a cron job" → CronAgent
 - "Track my package" → ShippingAgent
 - "Search my cloud storage" / "files in Dropbox" → CloudStorageAgent
-- "What does an igloo look like?" → google_search (image) + download_image, then complete_task with the image and explanation
-- "Hello" → complete_task (no agent needed, just greet back)
+- "What does an igloo look like?" → google_search (image) + download_image, then answer with the image and explanation
+- "Hello" → answer directly (no agent needed, just greet back)
 - "Check my email and calendar" → EmailAgent + CalendarAgent (parallel if independent)
 """.strip()
 
@@ -102,8 +102,8 @@ Follow this lifecycle for every request:
 
 1. **Understand:** Identify what the user wants. Distinguish between:
    - **Action requests** ("send an email", "book a flight") → proceed to step 2.
-   - **Questions** ("what's on my calendar?") → call the relevant tool, then deliver the answer via `complete_task`.
-   - **Ambiguous requests** → ask for clarification via `complete_task` before taking action. Do NOT guess intent for destructive or irreversible operations.
+   - **Questions** ("what's on my calendar?") → call the relevant tool, then deliver the answer as your final reply.
+   - **Ambiguous requests** → ask for clarification as your final reply before taking action. Do NOT guess intent for destructive or irreversible operations.
 
 2. **Act:** Call the appropriate tool(s). You may call multiple independent tools in parallel in a single turn.
 
@@ -113,7 +113,7 @@ Follow this lifecycle for every request:
    - If the same tool fails twice, inform the user and suggest alternatives.
    - Never silently swallow errors.
 
-4. **Deliver:** Once all information is gathered, call `complete_task` with a comprehensive final answer.
+4. **Deliver:** Once all information is gathered, reply with a comprehensive final answer and no further tool calls.
 """.strip()
 
 
@@ -224,7 +224,7 @@ Steps with no dependencies can be executed in parallel.
 
 {plan_text}
 
-After completing all steps, synthesize results and call `complete_task`.
+After completing all steps, synthesize the results into your final answer.
 """.strip()
 
 
@@ -240,7 +240,7 @@ You proposed the following plan in your previous turn:
 The user has now responded. Based on their response:
 - If they approve (e.g. "go ahead", "yes", "ok", or any affirmative): Execute the plan immediately by calling the appropriate tools in order.
 - If they want modifications (e.g. "change step 3", "add weather check"): Adjust the plan and execute the modified version.
-- If they reject (e.g. "never mind", "cancel", "no"): Acknowledge politely and call `complete_task`.
+- If they reject (e.g. "never mind", "cancel", "no"): Acknowledge politely and stop.
 - If they say something unrelated to the plan: Ignore the plan and handle the new request.
 """.strip()
 
@@ -256,7 +256,7 @@ Steps:
 1. Call `google_search` with `search_type: "image"` and a descriptive query.
 2. Review the thumbnails and pick the most relevant, high-quality image.
 3. Call `download_image` with the selected image's full URL.
-4. Include the image naturally in your `complete_task` response.
+4. Include the image naturally in your final response.
 
 Do NOT search for images when:
 - The question is purely abstract, logical, or numerical.
