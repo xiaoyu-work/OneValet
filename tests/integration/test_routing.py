@@ -26,12 +26,12 @@ ROUTING_CASES = [
     ("Set up daily briefing at 8am", ["BriefingAgent"]),
     ("Plan a 3-day trip to Tokyo", ["TripPlannerAgent"]),
     ("Turn off the living room lights", ["SmartHomeAgent"]),
-    ("Create a GitHub issue for the login bug", ["GitHubComposioAgent"]),
+    ("Create a GitHub issue for the login bug", ["GitHubMCPAgent"]),
     ("Post a tweet about our new product", ["TwitterComposioAgent"]),
     ("Send a Slack message to the engineering channel", ["SlackComposioAgent"]),
     ("Search my Google Drive for the Q4 report", ["GoogleWorkspaceAgent", "CloudStorageAgent"]),
     ("Schedule a recurring task every Monday at 9am", ["CronAgent", "TodoAgent"]),
-    ("Search my Notion for meeting notes", ["NotionAgent"]),
+    ("Search my Notion for meeting notes", ["NotionMCPAgent"]),
     ("Generate an image of a sunset over the ocean", ["ImageAgent"]),
 ]
 

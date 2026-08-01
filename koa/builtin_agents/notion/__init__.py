@@ -1,12 +1,12 @@
 """
 Notion integration for Koa
 
-NotionAgent handles all Notion operations (search, read, create, update)
-via an internal mini ReAct loop.
+NotionMCPAgent handles all Notion operations (search, fetch, create, update)
+through Notion's official hosted MCP server.
 """
 
-from .agent import NotionAgent
+from .agent import NotionMCPAgent
 
 __all__ = [
-    "NotionAgent",
+    "NotionMCPAgent",
 ]

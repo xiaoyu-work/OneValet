@@ -23,9 +23,13 @@ router = APIRouter()
 
 # Composio-powered apps (OAuth proxied through Composio platform).
 # Keys match the provider id used by the frontend / koiai backend.
+#
+# GitHub is deliberately absent: it connects directly to GitHub's own MCP server
+# (koa/mcp/registry.py), which needs a real GitHub token. Composio keeps the
+# actual token on its servers and only hands us a placeholder, so routing GitHub
+# through here would store a credential that cannot authenticate anything.
 COMPOSIO_APPS = {
     "slack": "Slack",
-    "github": "GitHub",
     "twitter": "Twitter/X",
     "spotify": "Spotify",
     "youtube": "YouTube",
@@ -626,6 +630,94 @@ async def notion_oauth_callback(request: Request, code: str, state: str):
         return oauth_success_html("notion", workspace, "Notion")
     except Exception as e:
         logger.error(f"Notion OAuth callback failed: {e}", exc_info=True)
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500
+        )
+
+
+# --- GitHub OAuth ---
+#
+# Must be declared before the generic /{composio_app}/ routes below, otherwise
+# the wildcard would swallow /api/oauth/github/... first.
+
+
+@router.get("/api/oauth/github/authorize")
+async def github_oauth_authorize(
+    request: Request,
+    tenant_id: str = "default",
+    redirect_after: Optional[str] = None,
+    account_name: str = "primary",
+):
+    """Initiate GitHub OAuth flow. Returns authorization URL."""
+    from ...oauth.github_oauth import GitHubOAuth
+
+    app = require_app()
+
+    state = await app.save_oauth_state(
+        tenant_id=tenant_id,
+        service="github",
+        redirect_after=redirect_after,
+        account_name=account_name,
+    )
+    base_url = get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/github/callback"
+
+    try:
+        url = GitHubOAuth.build_authorize_url(redirect_uri=redirect_uri, state=state)
+        return {"authorize_url": url}
+    except ValueError as e:
+        raise KoaError(E.OAUTH_NOT_CONFIGURED, str(e), details={"provider": "github"})
+
+
+@router.get("/api/oauth/github/callback")
+async def github_oauth_callback(request: Request, code: str, state: str):
+    """GitHub OAuth callback -- exchange code for token and store credentials."""
+    from ...oauth.github_oauth import GitHubOAuth
+
+    app = require_app()
+
+    state_data = await app.consume_oauth_state(state)
+    if not state_data:
+        return HTMLResponse(
+            "<h2>OAuth Error</h2><p>Invalid or expired state. Please try again.</p>",
+            status_code=400,
+        )
+
+    tenant_id = state_data["tenant_id"]
+    account_name = state_data["account_name"]
+    redirect_after = state_data["redirect_after"]
+
+    base_url = get_base_url(request)
+    redirect_uri = f"{base_url}/api/oauth/github/callback"
+
+    try:
+        tokens = await GitHubOAuth.exchange_code(code=code, redirect_uri=redirect_uri)
+
+        login = ""
+        try:
+            login = await GitHubOAuth.fetch_user_login(tokens["access_token"])
+        except Exception as e:  # noqa: BLE001 - identity is cosmetic, not required
+            logger.debug(f"Could not fetch GitHub user login: {e}")
+
+        credentials = {
+            "provider": "github",
+            "access_token": tokens["access_token"],
+            "scope": tokens.get("scope", ""),
+            "login": login,
+        }
+
+        await app.save_credential_raw(
+            tenant_id=tenant_id,
+            service="github",
+            credentials=credentials,
+            account_name=account_name,
+        )
+
+        if redirect_after:
+            return oauth_success_redirect(redirect_after, "github", login, tenant_id)
+        return oauth_success_html("github", login, "GitHub")
+    except Exception as e:
+        logger.error(f"GitHub OAuth callback failed: {e}", exc_info=True)
         return HTMLResponse(
             "<h2>OAuth Error</h2><p>Something went wrong. Please try again.</p>", status_code=500
         )

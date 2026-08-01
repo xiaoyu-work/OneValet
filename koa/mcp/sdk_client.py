@@ -127,17 +127,27 @@ class MCPSDKClient(MCPClient):
 
     async def _connect_streamable_http(self) -> None:
         from mcp.client.session import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        from mcp.client.streamable_http import (
+            create_mcp_http_client,
+            streamable_http_client,
+        )
 
         self._exit_stack = AsyncExitStack()
         await self._exit_stack.__aenter__()
 
+        # streamable_http_client takes auth headers on a caller-supplied httpx
+        # client, and only owns the client when it creates one itself — ours has
+        # to join the exit stack or it leaks sockets.
+        #
+        # config.timeout is deliberately not forwarded as an HTTP timeout: it is a
+        # per-RPC budget already enforced by asyncio.wait_for around each call, and
+        # applying it to the transport would cut off long-lived SSE streams that
+        # the SDK defaults keep open for 300s.
+        http_client = create_mcp_http_client(headers=self.config.headers or None)
+        await self._exit_stack.enter_async_context(http_client)
+
         read_stream, write_stream = await self._exit_stack.enter_async_context(  # type: ignore[misc]
-            streamablehttp_client(
-                url=self.config.url,
-                headers=self.config.headers or None,
-                timeout=self.config.timeout,
-            )
+            streamable_http_client(self.config.url, http_client=http_client)
         )
         self._session = await self._exit_stack.enter_async_context(  # type: ignore[func-returns-value]
             ClientSession(read_stream, write_stream)
@@ -160,7 +170,7 @@ class MCPSDKClient(MCPClient):
             MCPTool(
                 name=tool.name,
                 description=tool.description or "",
-                input_schema=tool.inputSchema,
+                input_schema=tool.input_schema,
                 server_name=self.config.name,
             )
             for tool in result.tools
@@ -182,7 +192,7 @@ class MCPSDKClient(MCPClient):
                 uri=str(r.uri),
                 name=r.name,
                 description=getattr(r, "description", None),
-                mime_type=getattr(r, "mimeType", None),
+                mime_type=r.mime_type,
                 server_name=self.config.name,
             )
             for r in result.resources
@@ -236,7 +246,7 @@ class MCPSDKClient(MCPClient):
             if hasattr(block, "text"):
                 parts.append(block.text)
             elif hasattr(block, "data"):
-                parts.append(f"[binary: {getattr(block, 'mimeType', 'unknown')}]")
+                parts.append(f"[binary: {getattr(block, 'mime_type', 'unknown')}]")
 
         text = "\n".join(parts) if parts else ""
 
@@ -251,7 +261,7 @@ class MCPSDKClient(MCPClient):
             )
             text = text[:_DEFAULT_MCP_RESPONSE_CAP] + "\n...[truncated]"
 
-        if result.isError:
+        if result.is_error:
             raise RuntimeError(text or "MCP tool returned an error")
 
         return text

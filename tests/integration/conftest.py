@@ -231,24 +231,24 @@ CANNED_DATA: Dict[str, str] = {
     "get_download_link": json.dumps({"url": "https://drive.google.com/download/file_001"}),
     "share_file": json.dumps({"shared": True, "link": "https://drive.google.com/share/file_001"}),
     "storage_usage": json.dumps({"used": "12.5 GB", "total": "15 GB", "percent": 83}),
-    # Notion tools
-    "notion_search": json.dumps(
+    # Notion tools (official Notion MCP server — vendor-prefixed names)
+    "notion-search": json.dumps(
         [
             {"id": "page_001", "title": "Meeting Notes", "type": "page"},
         ]
     ),
-    "notion_read_page": json.dumps(
+    "notion-fetch": json.dumps(
         {"id": "page_001", "title": "Meeting Notes", "content": "Discussed Q4 goals..."}
     ),
-    "notion_query_database": json.dumps(
+    "notion-query-data-sources": json.dumps(
         [
             {"id": "row_001", "properties": {"Name": "Task A", "Status": "In Progress"}},
         ]
     ),
-    "notion_create_page": json.dumps(
+    "notion-create-pages": json.dumps(
         {"id": "page_002", "title": "New Page", "url": "https://notion.so/page_002"}
     ),
-    "notion_update_page": json.dumps({"id": "page_001", "updated": True}),
+    "notion-update-page": json.dumps({"id": "page_001", "updated": True}),
     # Google Workspace tools
     "google_drive_search": json.dumps(
         [
