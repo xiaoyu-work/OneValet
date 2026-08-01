@@ -199,6 +199,12 @@ class ReactLoopMixin:
         if context_tokens < CONTEXT_WARN_BELOW:
             logger.warning(f"Low context window: {context_tokens} tokens")
 
+        # Bind the real window of the model in use so trimming thresholds track
+        # the model rather than the static config default.
+        self._context_manager.set_context_window(context_tokens)
+        # A fresh request: no measurement applies to this message list yet.
+        self._context_manager.invalidate_usage()
+
         start_time = time.monotonic()
         turn = 0
         all_tool_records: List[ToolCallRecord] = []
@@ -399,9 +405,13 @@ class ReactLoopMixin:
             # Accumulate token usage
             usage = getattr(response, "usage", None)
             if usage:
-                total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
+                prompt_tokens = getattr(usage, "prompt_tokens", 0)
+                total_usage.input_tokens += prompt_tokens
                 total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
                 total_usage.cost_usd += getattr(usage, "cost", 0) or 0
+                # The prompt-side total that actually occupied the window on this
+                # round-trip -- the trigger signal for the next iteration's guard.
+                self._context_manager.observe_usage(prompt_tokens)
 
             tool_calls = response.tool_calls
 
@@ -1089,6 +1099,9 @@ class ReactLoopMixin:
                     f"[Context] Summarized {len(old_msgs)} old messages "
                     f"({len(old_text)} chars -> {len(summary)} chars)"
                 )
+                # The message list is being rewritten, so the last reported
+                # prompt-token count no longer describes what will be sent.
+                self._context_manager.invalidate_usage()
                 return self._context_manager.build_summarized_messages(
                     system_msgs,
                     summary,

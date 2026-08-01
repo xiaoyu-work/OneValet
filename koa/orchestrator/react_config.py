@@ -48,7 +48,8 @@ class ReactLoopConfig:
 
     # Context management
     context_token_limit: int = 128_000
-    """Context window size in tokens."""
+    """Fallback context window, used only when the LLM client does not report one.
+    The real window is bound per-request via ContextManager.set_context_window()."""
     context_trim_threshold: float = 0.8
     """Trigger history trimming when usage exceeds this fraction."""
     max_history_messages: int = 40

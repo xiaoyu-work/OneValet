@@ -22,10 +22,58 @@ logger = logging.getLogger(__name__)
 
 
 class ContextManager:
-    """Manages conversation context size using three lines of defense."""
+    """Manages conversation context size using three lines of defense.
+
+    The trigger signal is the prompt-side token total the provider actually
+    reported for the most recent call (``observe_usage``). Character-based
+    estimation is only a fallback for the first call of a request, before any
+    usage has been reported.
+    """
 
     def __init__(self, config: ReactLoopConfig) -> None:
         self.config = config
+        self._last_prompt_tokens: Optional[int] = None
+        self._context_window: Optional[int] = None
+
+    # ------------------------------------------------------------------
+    # Live signals
+    # ------------------------------------------------------------------
+
+    def set_context_window(self, context_window: Optional[int]) -> None:
+        """Bind the real window of the model in use, overriding the config default."""
+        if context_window and context_window > 0:
+            self._context_window = int(context_window)
+
+    @property
+    def context_window(self) -> int:
+        return self._context_window or self.config.context_token_limit
+
+    def observe_usage(self, prompt_tokens: Optional[int]) -> None:
+        """Record the prompt-side total the provider reported for the last call.
+
+        This is what actually occupied the window on that round-trip, so it is a
+        far better trigger than counting characters.
+        """
+        if prompt_tokens and prompt_tokens > 0:
+            self._last_prompt_tokens = int(prompt_tokens)
+
+    def invalidate_usage(self) -> None:
+        """Drop the recorded measurement after the message list is rewritten.
+
+        A trim or summarization changes what will be sent, so the previous
+        prompt-token count no longer describes it; fall back to estimation until
+        the provider reports again.
+        """
+        self._last_prompt_tokens = None
+
+    def current_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """Best available measure of what the next call will cost."""
+        if self._last_prompt_tokens is not None:
+            return self._last_prompt_tokens
+        return self.estimate_tokens(messages)
+
+    def _trim_threshold(self) -> int:
+        return int(self.context_window * self.config.context_trim_threshold)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -118,15 +166,25 @@ class ContextManager:
     # ------------------------------------------------------------------
 
     def trim_if_needed(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Trim history when estimated tokens exceed the trim threshold.
+        """Trim history when the context in use exceeds the trim threshold.
 
         Keeps the system prompt (first message if role=='system') plus the
         most recent ``max_history_messages`` messages.
         """
-        threshold = int(self.config.context_token_limit * self.config.context_trim_threshold)
-        if self.estimate_tokens(messages) <= threshold:
+        if self.current_tokens(messages) <= self._trim_threshold():
             return messages
 
+        self.invalidate_usage()
+        return self._keep_recent(messages, self.config.max_history_messages)
+
+    def trim_now(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Trim unconditionally, without consulting the threshold.
+
+        Used on a confirmed context-overflow error: the provider has already
+        told us the payload was too big, so the trigger check would only be a
+        chance to disagree with it and retry the same failing request.
+        """
+        self.invalidate_usage()
         return self._keep_recent(messages, self.config.max_history_messages)
 
     # ------------------------------------------------------------------
@@ -158,6 +216,7 @@ class ContextManager:
 
     def force_trim(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Aggressively trim to system prompt + most recent 5 messages."""
+        self.invalidate_usage()
         return self._keep_recent(messages, keep=5)
 
     # ------------------------------------------------------------------
@@ -172,8 +231,7 @@ class ContextManager:
         Returns None if no trimming is needed.
         Otherwise returns (system_msgs, old_msgs_to_summarize, recent_msgs_to_keep).
         """
-        threshold = int(self.config.context_token_limit * self.config.context_trim_threshold)
-        if self.estimate_tokens(messages) <= threshold:
+        if self.current_tokens(messages) <= self._trim_threshold():
             return None
 
         if not messages:

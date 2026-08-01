@@ -174,7 +174,7 @@ class LLMManagerMixin:
                 if error_kind == LLMErrorKind.CONTEXT_OVERFLOW:
                     if attempt == 0:
                         logger.warning("Context overflow, trimming history")
-                        messages = self._context_manager.trim_if_needed(messages)
+                        messages = self._context_manager.trim_now(messages)
                     elif attempt == 1:
                         logger.warning("Context overflow persists, truncating all tool results")
                         messages = self._context_manager.truncate_all_tool_results(messages)
