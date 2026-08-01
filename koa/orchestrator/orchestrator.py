@@ -1332,29 +1332,7 @@ class Orchestrator(
         session_id = context.get("session_id", tenant_id)
         user_message = context.get("message", "")
 
-        # Record intent classification outcome (fire-and-forget).
-        # Status → outcome mapping:
-        #   COMPLETED → completed; FAILED / CANCELLED → error/cancelled.
-        # "clarify" outcomes are emitted separately on the short-circuit
-        # path; this block handles everything that reaches execution.
-        intent_for_feedback = context.get("intent_analysis")
-        if intent_for_feedback is not None:
-            try:
-                status_name = getattr(result.status, "value", str(result.status)).lower()
-                if "cancel" in status_name:
-                    outcome = "cancelled"
-                elif "fail" in status_name or "error" in status_name:
-                    outcome = "error"
-                else:
-                    outcome = "completed"
-                self._record_intent_feedback(
-                    tenant_id=tenant_id,
-                    intent=intent_for_feedback,
-                    outcome=outcome,
-                    extra={"session_id": session_id},
-                )
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.debug("post_process feedback record failed: %s", exc)
+        self._record_execution_outcome(result, tenant_id, session_id, context)
 
         status_value = (
             result.status.value if hasattr(result.status, "value") else str(result.status)
@@ -1380,52 +1358,7 @@ class Orchestrator(
         if session_prompt:
             context["session_memory_prompt"] = session_prompt
 
-        if messages and self.momex:
-            decision = self.memory_governance.decide_storage(
-                user_message=user_message,
-                assistant_message=result.raw_message,
-                result_status=status_value,
-                metadata={**(context.get("metadata") or {}), **(result.metadata or {})},
-            )
-            result.metadata["memory_write"] = {
-                "stored": decision.should_store,
-                "reason": decision.reason,
-                "tags": list(decision.tags),
-            }
-        else:
-            decision = None
-
-        if messages and self.momex and decision and decision.should_store:
-            # Long-term knowledge extraction — fire-and-forget so the
-            # response is not blocked by embedding / LLM extraction.
-            async def _bg_momex_add():
-                try:
-                    moderator = getattr(self.memory_governance, "_moderator", None)
-                    kwargs: Dict[str, Any] = {
-                        "tenant_id": tenant_id,
-                        "messages": messages,
-                        "infer": True,
-                    }
-                    # Only pass moderator when the target accepts it — this
-                    # keeps 3rd-party / test doubles that implement the basic
-                    # `add(tenant_id, messages, infer)` shape working.
-                    if moderator is not None:
-                        try:
-                            import inspect
-
-                            sig = inspect.signature(self.momex.add)
-                            if "moderator" in sig.parameters or any(
-                                p.kind == inspect.Parameter.VAR_KEYWORD
-                                for p in sig.parameters.values()
-                            ):
-                                kwargs["moderator"] = moderator
-                        except (TypeError, ValueError):
-                            pass
-                    await self.momex.add(**kwargs)
-                except Exception as e:
-                    logger.warning(f"Background momex.add failed: {e}")
-
-            self.task_registry.create_task(_bg_momex_add(), name="momex_add")
+        self._persist_long_term_memory(result, context, tenant_id, messages, status_value)
 
         # True Memory proposal extraction — runs synchronously so proposals
         # are available in result.metadata before the response is returned.
@@ -1465,6 +1398,99 @@ class Orchestrator(
                 logger.error(f"Post-process hook {hook.__name__} failed: {e}")
 
         return result
+
+    def _record_execution_outcome(
+        self,
+        result: AgentResult,
+        tenant_id: str,
+        session_id: str,
+        context: Dict[str, Any],
+    ) -> None:
+        """Feed the request's outcome back to the intent feedback store.
+
+        Only requests that reached execution land here; the ambiguous path
+        records its own 'clarify' outcome when it short-circuits. Fire-and-
+        forget: a feedback failure must never affect the user's response.
+        """
+        intent = context.get("intent_analysis")
+        if intent is None:
+            return
+        try:
+            status_name = getattr(result.status, "value", str(result.status)).lower()
+            if "cancel" in status_name:
+                outcome = "cancelled"
+            elif "fail" in status_name or "error" in status_name:
+                outcome = "error"
+            else:
+                outcome = "completed"
+            self._record_intent_feedback(
+                tenant_id=tenant_id,
+                intent=intent,
+                outcome=outcome,
+                extra={"session_id": session_id},
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("post_process feedback record failed: %s", exc)
+
+    def _persist_long_term_memory(
+        self,
+        result: AgentResult,
+        context: Dict[str, Any],
+        tenant_id: str,
+        messages: List[Dict[str, Any]],
+        status_value: str,
+    ) -> None:
+        """Store the turn in long-term memory when governance allows it.
+
+        The decision is recorded on the result either way, so a caller can see
+        why a turn was or was not kept. The write itself is fire-and-forget:
+        embedding and extraction are slow, and the user should not wait on them.
+        """
+        if not (messages and self.momex):
+            return
+
+        decision = self.memory_governance.decide_storage(
+            user_message=context.get("message", ""),
+            assistant_message=result.raw_message,
+            result_status=status_value,
+            metadata={**(context.get("metadata") or {}), **(result.metadata or {})},
+        )
+        result.metadata["memory_write"] = {
+            "stored": decision.should_store,
+            "reason": decision.reason,
+            "tags": list(decision.tags),
+        }
+        if not decision.should_store:
+            return
+
+        async def _bg_momex_add():
+            try:
+                moderator = getattr(self.memory_governance, "_moderator", None)
+                kwargs: Dict[str, Any] = {
+                    "tenant_id": tenant_id,
+                    "messages": messages,
+                    "infer": True,
+                }
+                # Only pass moderator when the target accepts it -- this keeps
+                # 3rd-party / test doubles that implement the basic
+                # `add(tenant_id, messages, infer)` shape working.
+                if moderator is not None:
+                    try:
+                        import inspect
+
+                        sig = inspect.signature(self.momex.add)
+                        if "moderator" in sig.parameters or any(
+                            p.kind == inspect.Parameter.VAR_KEYWORD
+                            for p in sig.parameters.values()
+                        ):
+                            kwargs["moderator"] = moderator
+                    except (TypeError, ValueError):
+                        pass
+                await self.momex.add(**kwargs)
+            except Exception as e:
+                logger.warning(f"Background momex.add failed: {e}")
+
+        self.task_registry.create_task(_bg_momex_add(), name="momex_add")
 
     # ==========================================================================
     # CALLBACK SYSTEM
