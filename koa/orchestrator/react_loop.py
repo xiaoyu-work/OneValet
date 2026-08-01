@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
 
+#: Sentinel distinguishing "the run was interrupted" from a real (possibly
+#: falsy) result when racing an awaitable against the cancel signal.
+_INTERRUPTED = object()
+
 
 def _stable_json(value: Any) -> str:
     try:
@@ -123,6 +127,7 @@ class ReactLoopMixin:
     - ``_context_manager``
     - ``_model_router``
     - ``_audit``
+    - ``_run_controls``
     - ``agent_pool``
     - ``database``
     - ``_tenant_plans``
@@ -134,6 +139,40 @@ class ReactLoopMixin:
     - ``_cap_tool_result()`` (ToolManagerMixin)
     - ``_build_llm_messages()`` (Orchestrator)
     """
+
+    def _compensate_pending_tool_calls(
+        self,
+        tool_calls: List[Any],
+        messages: List[Dict[str, Any]],
+        reason: str = "Interrupted by user before execution.",
+    ) -> None:
+        """Give every tool call that will not run an error result.
+
+        An assistant message carrying tool_calls with no matching tool results
+        is rejected outright by several hosted chat templates, and any resumed
+        or replayed transcript would re-prompt them. So on the stop path each
+        pending call still gets an answer, and the history stays well-formed.
+        """
+        answered = {
+            m.get("tool_call_id") for m in messages if m.get("role") == "tool"
+        }
+        for tc in tool_calls:
+            if tc.id in answered:
+                continue
+            messages.append(self._build_tool_result_message(tc.id, reason, is_error=True))
+
+    def _apply_steering(
+        self,
+        control: Any,
+        messages: List[Dict[str, Any]],
+    ) -> List[str]:
+        """Append any queued steering messages as user turns. Returns what was applied."""
+        pending = control.drain_steering()
+        for text in pending:
+            messages.append({"role": "user", "content": text})
+        if pending:
+            logger.info(f"[ReAct] Injected {len(pending)} steering message(s)")
+        return pending
 
     async def _yield_chunked_response(
         self,
@@ -205,6 +244,9 @@ class ReactLoopMixin:
         # A fresh request: no measurement applies to this message list yet.
         self._context_manager.invalidate_usage()
 
+        # Register this run so surfaces can interrupt or steer it.
+        control = self._run_controls.start(tenant_id)
+
         start_time = time.monotonic()
         turn = 0
         all_tool_records: List[ToolCallRecord] = []
@@ -216,6 +258,7 @@ class ReactLoopMixin:
         _recent_tool_fingerprints: List[str] = []  # tool name + args hash
         _recent_result_hashes: List[str] = []  # result content hash
         _response_media: List[Dict[str, Any]] = []  # images for client storage
+        interrupted = False
 
         logger.info(f"[ReAct] tenant={tenant_id}")
 
@@ -319,6 +362,7 @@ class ReactLoopMixin:
                             "pending_approvals": [],
                         },
                     )
+                    self._run_controls.finish(tenant_id, control)
                     return  # stop the generator -- user needs to respond
 
                 elif plan_data:
@@ -355,6 +399,21 @@ class ReactLoopMixin:
                     )
                     break
 
+            # Stop boundary: the user asked to stop between turns.
+            if control.cancelled:
+                logger.info(f"[ReAct] Interrupted at turn boundary (turn={turn})")
+                interrupted = True
+                break
+
+            # Steering boundary: apply any messages the user sent mid-run so the
+            # next model call sees the redirection.
+            applied = self._apply_steering(control, messages)
+            if applied:
+                yield AgentEvent(
+                    type=EventType.STEERING_APPLIED,
+                    data={"messages": applied, "turn": turn},
+                )
+
             # Context guard with summarization
             messages = await self._summarize_and_trim(messages)
 
@@ -371,13 +430,20 @@ class ReactLoopMixin:
                 # Pass images only on the first turn
                 if media and turn == 1:
                     extra_kwargs["media"] = media
-                response = await self._llm_call_with_retry(
-                    messages,
-                    tool_schemas,
-                    tool_choice=tool_choice,
-                    llm_client_override=routed_llm_client,
-                    **extra_kwargs,
+                response = await control.race(
+                    self._llm_call_with_retry(
+                        messages,
+                        tool_schemas,
+                        tool_choice=tool_choice,
+                        llm_client_override=routed_llm_client,
+                        **extra_kwargs,
+                    ),
+                    interrupted=_INTERRUPTED,
                 )
+                if response is _INTERRUPTED:
+                    logger.info(f"[ReAct] Interrupted during LLM call (turn={turn})")
+                    interrupted = True
+                    break
             except Exception as e:
                 # Classify the error to decide whether to retry at model level
                 from .error_classifier import LLMErrorKind, classify_llm_error
@@ -396,10 +462,13 @@ class ReactLoopMixin:
                             "error_type": type(e).__name__,
                         },
                     )
+                    self._run_controls.finish(tenant_id, control)
                     return
 
                 # For other errors: signal the caller to attempt model-level
-                # fallback by raising with classification metadata.
+                # fallback by raising with classification metadata. The caller
+                # re-enters this loop, which registers a fresh control, so the
+                # entry left behind here is replaced rather than leaked.
                 raise _ReactLoopLLMError(e, error_kind, turn) from e
 
             # Accumulate token usage
@@ -500,6 +569,18 @@ class ReactLoopMixin:
 
                 # complete_task was called alongside other tools -- add its result
                 tool_calls = remaining_tool_calls if remaining_tool_calls else tool_calls
+
+                # Stop boundary: the assistant message with its tool_calls is
+                # already in history, so every call must still be answered even
+                # though none of them will run.
+                if control.cancelled:
+                    logger.info(
+                        f"[ReAct] Interrupted before executing {len(tool_calls)} "
+                        f"tool call(s) (turn={turn})"
+                    )
+                    self._compensate_pending_tool_calls(tool_calls, messages)
+                    interrupted = True
+                    break
 
                 # ----------------------------------------------------------
                 # Validate tool calls against the schema sent to the LLM.
@@ -624,13 +705,18 @@ class ReactLoopMixin:
 
                     # Normal execution path
                     try:
-                        r = await self._execute_with_timeout(
-                            tc,
-                            tenant_id,
-                            metadata=metadata,
-                            request_tools=request_tools,
-                            request_context=context,
+                        r = await control.race(
+                            self._execute_with_timeout(
+                                tc,
+                                tenant_id,
+                                metadata=metadata,
+                                request_tools=request_tools,
+                                request_context=context,
+                            ),
+                            interrupted=_INTERRUPTED,
                         )
+                        if r is _INTERRUPTED:
+                            r = InterruptedError("Interrupted by user during execution.")
                     except BaseException as exc:
                         return TimedResult(
                             result=exc, duration_ms=int((time.monotonic() - t0) * 1000)
@@ -925,6 +1011,13 @@ class ReactLoopMixin:
                     tenant_id=tenant_id,
                 )
 
+                # Stop boundary: tool results are recorded, so the transcript is
+                # complete and it is safe to unwind here.
+                if control.cancelled:
+                    logger.info(f"[ReAct] Interrupted after tool execution (turn={turn})")
+                    interrupted = True
+                    break
+
                 if loop_broken:
                     final_response = loop_broken_text or ""
                     result_status = (
@@ -998,6 +1091,23 @@ class ReactLoopMixin:
                 task.cancel()
                 logger.info(f"[Speculative] Cancelled unused task: {key}")
 
+        # This run is no longer signalable.
+        self._run_controls.finish(tenant_id, control)
+
+        if interrupted:
+            if not final_response:
+                final_response = "Stopped."
+            if result_status is None:
+                result_status = "INTERRUPTED"
+            yield AgentEvent(
+                type=EventType.INTERRUPTED,
+                data={
+                    "reason": control.cancel_reason,
+                    "turns": turn,
+                    "tool_calls_count": len(all_tool_records),
+                },
+            )
+
         yield AgentEvent(
             type=EventType.EXECUTION_END,
             data={
@@ -1006,6 +1116,7 @@ class ReactLoopMixin:
                 "tool_calls_count": len(all_tool_records),
                 "final_response": final_response,
                 "result_status": result_status,
+                "interrupted": interrupted,
                 "pending_approvals": pending_approvals,
                 "media": _response_media or None,
                 "token_usage": {

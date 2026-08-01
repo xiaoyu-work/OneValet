@@ -54,6 +54,8 @@ class EventType(str, Enum):
     # Execution events
     EXECUTION_START = "execution_start"
     EXECUTION_END = "execution_end"
+    INTERRUPTED = "interrupted"
+    STEERING_APPLIED = "steering_applied"
 
     # Error events
     ERROR = "error"

@@ -76,6 +76,7 @@ from .pool import AgentPoolManager
 from .prompts import build_system_prompt
 from .react_config import ReactLoopConfig
 from .react_loop import ReactLoopMixin
+from .run_control import RunControlRegistry
 from .tool_manager import ToolManagerMixin
 from .tool_policy import ToolPolicyFilter
 
@@ -311,6 +312,11 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
 
         self.task_registry = task_registry or _TR(self.__class__.__name__)
 
+        # Interruption + mid-run steering for in-flight requests. Surfaces call
+        # request_interrupt()/queue_steering() with a tenant_id to signal the
+        # run the ReAct loop is currently executing for that tenant.
+        self._run_controls = RunControlRegistry()
+
         # Intent-recognition infrastructure.  See
         # :mod:`koa.orchestrator.intent_feedback` and
         # :mod:`koa.orchestrator.intent_embedding` for the full design.
@@ -442,6 +448,32 @@ class Orchestrator(ReactLoopMixin, ToolManagerMixin, LLMManagerMixin):
                 return client
 
         return None
+
+    # ==========================================================================
+    # RUN CONTROL (interrupt / steering)
+    # ==========================================================================
+
+    def request_interrupt(self, tenant_id: str, reason: str = "user stop") -> bool:
+        """Stop the tenant's in-flight run at its next boundary.
+
+        Returns False when the tenant has no run in flight. The run unwinds
+        cooperatively: pending tool calls are compensated with error results so
+        the transcript never carries an orphaned tool_call, and the loop emits
+        an INTERRUPTED event before its EXECUTION_END.
+        """
+        return self._run_controls.request_interrupt(tenant_id, reason)
+
+    def queue_steering(self, tenant_id: str, text: str) -> bool:
+        """Inject a user message into the tenant's in-flight run.
+
+        The message is appended at the next turn boundary, letting the user
+        redirect a long task without restarting it. Returns False when the
+        tenant has no run in flight.
+        """
+        return self._run_controls.queue_steering(tenant_id, text)
+
+    def is_running(self, tenant_id: str) -> bool:
+        return self._run_controls.get(tenant_id) is not None
 
     # ==========================================================================
     # MAIN ENTRY POINT
