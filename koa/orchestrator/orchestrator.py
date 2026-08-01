@@ -838,105 +838,21 @@ class Orchestrator(
             final_response = ""
             exec_data: Dict[str, Any] = {}
 
-            from .react_loop import _ReactLoopLLMError
-
-            try:
-                async for event in self._react_loop_events(
-                    messages,
-                    tool_schemas,
-                    tenant_id,
-                    context=context,
-                    user_message=message,
-                    media=media,
-                    metadata=metadata,
-                    request_tools=request_tools,
-                ):
-                    if event.type == EventType.EXECUTION_END:
-                        exec_data = event.data
-                        final_response = exec_data.get("final_response", "")
-                    yield event
-            except _ReactLoopLLMError as loop_err:
-                # Model-level fallback: retry the entire ReAct loop with a
-                # different provider when the primary model fails after all
-                # per-call retries are exhausted.
-                fallback_client = self._resolve_model_fallback(loop_err)
-                if fallback_client is not None:
-                    logger.warning(
-                        f"[Orchestrator] ReAct loop failed (turn={loop_err.turn}, "
-                        f"kind={loop_err.error_kind.value}), retrying with fallback model"
-                    )
-                    # Rebuild messages to get a clean context for retry
-                    retry_messages = await self._build_llm_messages(
-                        context, message, needs_memory=intent.needs_memory
-                    )
-                    try:
-                        async for event in self._react_loop_events(
-                            retry_messages,
-                            tool_schemas,
-                            tenant_id,
-                            context=context,
-                            user_message=message,
-                            media=media,
-                            metadata=metadata,
-                            request_tools=request_tools,
-                            _llm_client_override=fallback_client,
-                        ):
-                            if event.type == EventType.EXECUTION_END:
-                                exec_data = event.data
-                                final_response = exec_data.get("final_response", "")
-                            yield event
-                    except _ReactLoopLLMError as retry_err:
-                        logger.error(
-                            f"[Orchestrator] Fallback model also failed: {retry_err.original}"
-                        )
-                        from .error_classifier import error_code_for_kind
-
-                        yield AgentEvent(
-                            type=EventType.ERROR,
-                            data={
-                                "code": error_code_for_kind(retry_err.error_kind),
-                                "error": str(retry_err.original),
-                                "error_type": type(retry_err.original).__name__,
-                            },
-                        )
-                        final_response = await generate_graceful_error(
-                            error=retry_err.original,
-                            llm_client=getattr(self, "llm_client", None),
-                        )
-                        exec_data = {
-                            "final_response": final_response,
-                            "turns": 0,
-                            "token_usage": {},
-                            "duration_ms": 0,
-                            "tool_calls_count": 0,
-                            "tool_calls": [],
-                        }
-                else:
-                    logger.error(
-                        f"[Orchestrator] ReAct loop failed, no fallback available: {loop_err.original}"
-                    )
-                    from .error_classifier import error_code_for_kind
-
-                    yield AgentEvent(
-                        type=EventType.ERROR,
-                        data={
-                            "code": error_code_for_kind(loop_err.error_kind),
-                            "error": str(loop_err.original),
-                            "error_type": type(loop_err.original).__name__,
-                        },
-                    )
-                    final_response = await generate_graceful_error(
-                        error=loop_err.original,
-                        llm_client=getattr(self, "llm_client", None),
-                    )
-                    exec_data = {
-                        "final_response": final_response,
-                        "turns": 0,
-                        "token_usage": {},
-                        "duration_ms": 0,
-                        "tool_calls_count": 0,
-                        "tool_calls": [],
-                    }
+            async for event in self._run_react_with_fallback(
+                messages=messages,
+                tool_schemas=tool_schemas,
+                tenant_id=tenant_id,
+                context=context,
+                user_message=message,
+                media=media,
+                metadata=metadata,
+                request_tools=request_tools,
+                needs_memory=intent.needs_memory,
+            ):
+                if event.type == EventType.EXECUTION_END:
+                    exec_data = event.data
+                    final_response = exec_data.get("final_response", "")
+                yield event
 
             # Step 8: Map loop results -> AgentResult
             pending_approvals = exec_data.get("pending_approvals", [])
@@ -1026,6 +942,110 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+
+    async def _run_react_with_fallback(
+        self,
+        *,
+        messages: List[Dict[str, Any]],
+        tool_schemas: List[Dict[str, Any]],
+        tenant_id: str,
+        context: Dict[str, Any],
+        user_message: str,
+        media: Optional[List[Dict[str, Any]]],
+        metadata: Dict[str, Any],
+        request_tools: List[Any],
+        needs_memory: bool,
+    ) -> AsyncIterator[AgentEvent]:
+        """Run the ReAct loop, retrying once on another model if the first fails.
+
+        A model that fails after exhausting its per-call retries raises
+        _ReactLoopLLMError. When a fallback provider is configured, the whole
+        loop is retried against it from freshly built messages -- the failed
+        attempt's transcript is discarded rather than resumed, since it may be
+        truncated mid-turn.
+
+        If there is no fallback, or the fallback fails too, this emits an ERROR
+        event and then a synthetic EXECUTION_END carrying a graceful,
+        user-facing message, so the caller sees the same event shape either way.
+        """
+        from .error_classifier import error_code_for_kind
+        from .graceful_response import generate_graceful_error
+        from .react_loop import _ReactLoopLLMError
+
+        async def _failed(err: "_ReactLoopLLMError") -> AsyncIterator[AgentEvent]:
+            yield AgentEvent(
+                type=EventType.ERROR,
+                data={
+                    "code": error_code_for_kind(err.error_kind),
+                    "error": str(err.original),
+                    "error_type": type(err.original).__name__,
+                },
+            )
+            yield AgentEvent(
+                type=EventType.EXECUTION_END,
+                data={
+                    "final_response": await generate_graceful_error(
+                        error=err.original,
+                        llm_client=getattr(self, "llm_client", None),
+                    ),
+                    "turns": 0,
+                    "token_usage": {},
+                    "duration_ms": 0,
+                    "tool_calls_count": 0,
+                    "tool_calls": [],
+                },
+            )
+
+        try:
+            async for event in self._react_loop_events(
+                messages,
+                tool_schemas,
+                tenant_id,
+                context=context,
+                user_message=user_message,
+                media=media,
+                metadata=metadata,
+                request_tools=request_tools,
+            ):
+                yield event
+            return
+        except _ReactLoopLLMError as loop_err:
+            fallback_client = self._resolve_model_fallback(loop_err)
+            if fallback_client is None:
+                logger.error(
+                    f"[Orchestrator] ReAct loop failed, no fallback available: "
+                    f"{loop_err.original}"
+                )
+                async for event in _failed(loop_err):
+                    yield event
+                return
+
+            logger.warning(
+                f"[Orchestrator] ReAct loop failed (turn={loop_err.turn}, "
+                f"kind={loop_err.error_kind.value}), retrying with fallback model"
+            )
+
+        # Rebuild messages so the retry starts from a clean transcript.
+        retry_messages = await self._build_llm_messages(
+            context, user_message, needs_memory=needs_memory
+        )
+        try:
+            async for event in self._react_loop_events(
+                retry_messages,
+                tool_schemas,
+                tenant_id,
+                context=context,
+                user_message=user_message,
+                media=media,
+                metadata=metadata,
+                request_tools=request_tools,
+                _llm_client_override=fallback_client,
+            ):
+                yield event
+        except _ReactLoopLLMError as retry_err:
+            logger.error(f"[Orchestrator] Fallback model also failed: {retry_err.original}")
+            async for event in _failed(retry_err):
+                yield event
 
     # ==========================================================================
     # SPECULATIVE EXECUTION
