@@ -740,62 +740,18 @@ class Orchestrator(
                 and intent.needs_clarification
                 and intent.source != "fallback"
             ):
-                clarify_q = (
-                    intent.clarification_question
-                    or "Could you share a bit more detail so I can help correctly?"
-                )
-                logger.info(
-                    "[IntentAnalyzer] needs_clarification=true "
-                    "confidence=%.2f; short-circuiting to clarify path",
-                    intent.confidence,
-                )
-                result = AgentResult(
-                    agent_type=self.__class__.__name__,
-                    status=AgentStatus.COMPLETED,
-                    raw_message=clarify_q,
-                    metadata={
-                        "clarification": True,
-                        "confidence": intent.confidence,
-                        "original_message": message,
-                    },
-                )
-                # Record the classification as a 'clarify' outcome so the
-                # feedback store can learn from it if a follow-up arrives.
-                self._record_intent_feedback(
-                    tenant_id=tenant_id,
-                    intent=intent,
-                    outcome="clarify",
-                )
-                yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q})
-                result = await self.post_process(result, context)
-                yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+                async for event in self._ask_for_clarification(
+                    intent, tenant_id, message, context
+                ):
+                    yield event
                 return
 
             # Step 4b: Multi-intent → DAG execution
             if intent.intent_type == "multi" and intent.sub_tasks:
-                final_response = ""
-                dag_exec_data: Dict[str, Any] = {}
-                async for event in self._stream_dag(intent, tenant_id, context, metadata):
-                    if event.type == EventType.EXECUTION_END:
-                        dag_exec_data = event.data
-                        final_response = dag_exec_data.get("final_response", "")
+                async for event in self._run_multi_intent(
+                    intent, tenant_id, message, context, metadata
+                ):
                     yield event
-                # Post-process
-                pending_approvals = dag_exec_data.get("pending_approvals", [])
-                if pending_approvals:
-                    status = AgentStatus.WAITING_FOR_APPROVAL
-                else:
-                    status = AgentStatus.COMPLETED
-                result = AgentResult(
-                    agent_type=self.__class__.__name__,
-                    status=status,
-                    raw_message=final_response,
-                )
-                tool_calls = dag_exec_data.get("tool_calls", [])
-                context["tool_calls"] = tool_calls
-                await self._save_tool_call_history(tenant_id, tool_calls)
-                result = await self.post_process(result, context)
-                yield AgentEvent(type=EventType.EXECUTION_END, data=result)
                 return
 
             # Step 5 & 6: Build tool schemas and LLM messages in parallel
@@ -909,6 +865,84 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+
+    async def _ask_for_clarification(
+        self,
+        intent: Any,
+        tenant_id: str,
+        message: str,
+        context: Dict[str, Any],
+    ) -> AsyncIterator[AgentEvent]:
+        """Short-circuit an ambiguous request by asking the user what they meant.
+
+        The classification is recorded as a 'clarify' outcome so the feedback
+        store can learn from whatever the user says next.
+        """
+        clarify_q = (
+            intent.clarification_question
+            or "Could you share a bit more detail so I can help correctly?"
+        )
+        logger.info(
+            "[IntentAnalyzer] needs_clarification=true "
+            "confidence=%.2f; short-circuiting to clarify path",
+            intent.confidence,
+        )
+        result = AgentResult(
+            agent_type=self.__class__.__name__,
+            status=AgentStatus.COMPLETED,
+            raw_message=clarify_q,
+            metadata={
+                "clarification": True,
+                "confidence": intent.confidence,
+                "original_message": message,
+            },
+        )
+        self._record_intent_feedback(tenant_id=tenant_id, intent=intent, outcome="clarify")
+
+        yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": clarify_q})
+        result = await self.post_process(result, context)
+        yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+
+    async def _run_multi_intent(
+        self,
+        intent: Any,
+        tenant_id: str,
+        message: str,
+        context: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> AsyncIterator[AgentEvent]:
+        """Run a decomposed request through the DAG and post-process the outcome.
+
+        The DAG's own EXECUTION_END is forwarded as-is (callers watching the
+        stream see per-sub-task progress), then a second EXECUTION_END carries
+        the post-processed AgentResult for the request as a whole.
+        """
+        final_response = ""
+        dag_exec_data: Dict[str, Any] = {}
+
+        async for event in self._stream_dag(intent, tenant_id, context, metadata):
+            if event.type == EventType.EXECUTION_END:
+                dag_exec_data = event.data
+                final_response = dag_exec_data.get("final_response", "")
+            yield event
+
+        status = (
+            AgentStatus.WAITING_FOR_APPROVAL
+            if dag_exec_data.get("pending_approvals")
+            else AgentStatus.COMPLETED
+        )
+        result = AgentResult(
+            agent_type=self.__class__.__name__,
+            status=status,
+            raw_message=final_response,
+        )
+
+        tool_calls = dag_exec_data.get("tool_calls", [])
+        context["tool_calls"] = tool_calls
+        await self._save_tool_call_history(tenant_id, tool_calls)
+
+        result = await self.post_process(result, context)
+        yield AgentEvent(type=EventType.EXECUTION_END, data=result)
 
     def _build_result_from_exec_data(
         self,
