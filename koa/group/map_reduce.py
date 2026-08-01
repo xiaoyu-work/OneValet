@@ -198,8 +198,8 @@ class MapReduceExecutor:
 
         # Process results
         for r in map_results:
-            if isinstance(r, Exception):
-                # Task itself raised an exception
+            if isinstance(r, BaseException):
+                # Task itself raised, or was cancelled
                 result.failed_items += 1
                 result.map_results.append(
                     MapResult(index=-1, input_item=None, output=None, success=False, error=str(r))

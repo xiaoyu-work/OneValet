@@ -62,17 +62,25 @@ class PostgreSQLStorage(CheckpointStorage):
         if self._owns_db and self._db is not None:
             await self._db.close()
 
-    def _ensure_initialized(self) -> None:
-        if not self._initialized:
+    def _ensure_initialized(self) -> "Database":
+        """Return the live connection, or refuse to run.
+
+        Returning it (rather than only asserting) is what lets callers use
+        `db = self._ensure_initialized()` and keeps the non-None invariant
+        visible to type checkers, instead of every query looking like it
+        might dereference None.
+        """
+        if not self._initialized or self._db is None:
             raise RuntimeError(
                 "PostgreSQLStorage not initialized. Call await storage.initialize() first."
             )
+        return self._db
 
     # -- CheckpointStorage interface ------------------------------------------
 
     async def save(self, checkpoint: Checkpoint) -> str:
-        self._ensure_initialized()
-        await self._db.execute(
+        db = self._ensure_initialized()
+        await db.execute(
             """
             INSERT INTO checkpoints (id, agent_id, agent_type, user_id, status, data, parent_checkpoint_id, timestamp)
             VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8)
@@ -93,8 +101,8 @@ class PostgreSQLStorage(CheckpointStorage):
         return checkpoint.id
 
     async def get(self, checkpoint_id: str) -> Optional[Checkpoint]:
-        self._ensure_initialized()
-        row = await self._db.fetchrow(
+        db = self._ensure_initialized()
+        row = await db.fetchrow(
             "SELECT data FROM checkpoints WHERE id = $1",
             checkpoint_id,
         )
@@ -103,8 +111,8 @@ class PostgreSQLStorage(CheckpointStorage):
         return self._parse_checkpoint(row["data"])
 
     async def delete(self, checkpoint_id: str) -> bool:
-        self._ensure_initialized()
-        result = await self._db.execute(
+        db = self._ensure_initialized()
+        result = await db.execute(
             "DELETE FROM checkpoints WHERE id = $1",
             checkpoint_id,
         )
@@ -117,8 +125,8 @@ class PostgreSQLStorage(CheckpointStorage):
         limit: int = 100,
         offset: int = 0,
     ) -> List[CheckpointMetadata]:
-        self._ensure_initialized()
-        rows = await self._db.fetch(
+        db = self._ensure_initialized()
+        rows = await db.fetch(
             """
             SELECT data FROM checkpoints
             WHERE agent_id = $1
@@ -137,8 +145,8 @@ class PostgreSQLStorage(CheckpointStorage):
         limit: int = 100,
         offset: int = 0,
     ) -> List[CheckpointMetadata]:
-        self._ensure_initialized()
-        rows = await self._db.fetch(
+        db = self._ensure_initialized()
+        rows = await db.fetch(
             """
             SELECT data FROM checkpoints
             WHERE user_id = $1
@@ -152,8 +160,8 @@ class PostgreSQLStorage(CheckpointStorage):
         return [CheckpointMetadata.from_checkpoint(self._parse_checkpoint(r["data"])) for r in rows]
 
     async def get_tree(self, agent_id: str) -> Optional[CheckpointTree]:
-        self._ensure_initialized()
-        rows = await self._db.fetch(
+        db = self._ensure_initialized()
+        rows = await db.fetch(
             """
             SELECT data FROM checkpoints
             WHERE agent_id = $1
@@ -171,8 +179,8 @@ class PostgreSQLStorage(CheckpointStorage):
         return tree
 
     async def get_latest(self, agent_id: str) -> Optional[Checkpoint]:
-        self._ensure_initialized()
-        row = await self._db.fetchrow(
+        db = self._ensure_initialized()
+        row = await db.fetchrow(
             """
             SELECT data FROM checkpoints
             WHERE agent_id = $1
@@ -186,16 +194,16 @@ class PostgreSQLStorage(CheckpointStorage):
         return self._parse_checkpoint(row["data"])
 
     async def clear_agent(self, agent_id: str) -> int:
-        self._ensure_initialized()
-        result = await self._db.execute(
+        db = self._ensure_initialized()
+        result = await db.execute(
             "DELETE FROM checkpoints WHERE agent_id = $1",
             agent_id,
         )
         return self._parse_delete_count(result)
 
     async def clear_user(self, user_id: str) -> int:
-        self._ensure_initialized()
-        result = await self._db.execute(
+        db = self._ensure_initialized()
+        result = await db.execute(
             "DELETE FROM checkpoints WHERE user_id = $1",
             user_id,
         )

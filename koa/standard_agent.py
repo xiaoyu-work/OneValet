@@ -1029,6 +1029,12 @@ class StandardAgent(BaseAgent):
 
     async def _run_react(self) -> AgentResult:
         """Core mini ReAct loop with agent tools."""
+        if self.llm_client is None:
+            raise RuntimeError(
+                f"{self.__class__.__name__} has tools but no llm_client; "
+                "it cannot run its ReAct loop."
+            )
+        llm = self.llm_client
         tool_schemas = [t.to_openai_schema() for t in self.tools]
         messages = self._react_messages
 
@@ -1043,7 +1049,7 @@ class StandardAgent(BaseAgent):
             # First turn: force tool use since orchestrator already routed here.
             # Subsequent turns: let LLM decide freely.
             tool_choice = "required" if turn == 0 and tool_schemas else "auto"
-            response: LLMResponse = await self.llm_client.chat_completion(
+            response: LLMResponse = await llm.chat_completion(
                 messages=messages,
                 tools=tool_schemas if tool_schemas else None,
                 tool_choice=tool_choice,
@@ -1099,7 +1105,7 @@ class StandardAgent(BaseAgent):
             }
         )
         try:
-            summary_resp = await self.llm_client.chat_completion(
+            summary_resp = await llm.chat_completion(
                 messages=messages,
                 tools=None,
             )
@@ -1107,7 +1113,10 @@ class StandardAgent(BaseAgent):
                 "I wasn't able to complete the task within the allowed steps. "
                 "Please try again with more specific information."
             )
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                f"[{self.__class__.__name__}:{self.name}] summary after max_turns failed: {e}"
+            )
             summary_msg = (
                 "I wasn't able to complete the task within the allowed steps. "
                 "Please try again with more specific information."

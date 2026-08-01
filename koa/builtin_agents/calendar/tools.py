@@ -159,7 +159,7 @@ def _format_event_time(start) -> str:
     if isinstance(start, datetime):
         return start.strftime("%a %b %d, %I:%M %p")
     if isinstance(start, dict):
-        dt_str = start.get("dateTime", start.get("date", ""))
+        dt_str = start.get("dateTime") or start.get("date") or ""
         try:
             dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
             return dt.strftime("%a %b %d, %I:%M %p")
