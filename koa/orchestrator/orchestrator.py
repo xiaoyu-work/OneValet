@@ -855,45 +855,12 @@ class Orchestrator(
                 yield event
 
             # Step 8: Map loop results -> AgentResult
-            pending_approvals = exec_data.get("pending_approvals", [])
-            result_status = exec_data.get("result_status")
-
-            if pending_approvals:
-                status = AgentStatus.WAITING_FOR_APPROVAL
-            elif result_status == "WAITING_FOR_INPUT":
-                status = AgentStatus.WAITING_FOR_INPUT
-            else:
-                status = AgentStatus.COMPLETED
-
-            result_metadata = {
-                "react_turns": exec_data.get("turns", 0),
-                "token_usage": exec_data.get("token_usage", {}),
-                "duration_ms": exec_data.get("duration_ms", 0),
-                "tool_calls_count": exec_data.get("tool_calls_count", 0),
-                "total_tool_count": len(tool_schemas),
-            }
-
-            # Carry conditional notification from notify_user tool
-            if context.get("cron_notification"):
-                result_metadata["cron_notification"] = context["cron_notification"]
-
-            result = AgentResult(
-                agent_type=self.__class__.__name__,
-                status=status,
-                raw_message=final_response,
-                metadata=result_metadata,
+            result = self._build_result_from_exec_data(
+                exec_data,
+                final_response=final_response,
+                context=context,
+                total_tool_count=len(tool_schemas),
             )
-
-            if pending_approvals:
-                result.metadata["pending_approvals"] = [
-                    {
-                        "agent_name": a.agent_name,
-                        "action_summary": a.action_summary,
-                        "details": a.details,
-                        "options": a.options,
-                    }
-                    for a in pending_approvals
-                ]
 
             # Expose tool call records to post-process hooks
             tool_calls = exec_data.get("tool_calls", [])
@@ -942,6 +909,59 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+
+    def _build_result_from_exec_data(
+        self,
+        exec_data: Dict[str, Any],
+        *,
+        final_response: str,
+        context: Dict[str, Any],
+        total_tool_count: int,
+    ) -> AgentResult:
+        """Map a finished ReAct loop's EXECUTION_END payload onto an AgentResult.
+
+        The status reflects why the loop stopped: a pending approval outranks
+        everything (the turn is not done until the user answers), then a request
+        for more input, otherwise the turn completed.
+        """
+        pending_approvals = exec_data.get("pending_approvals", [])
+
+        if pending_approvals:
+            status = AgentStatus.WAITING_FOR_APPROVAL
+        elif exec_data.get("result_status") == "WAITING_FOR_INPUT":
+            status = AgentStatus.WAITING_FOR_INPUT
+        else:
+            status = AgentStatus.COMPLETED
+
+        metadata: Dict[str, Any] = {
+            "react_turns": exec_data.get("turns", 0),
+            "token_usage": exec_data.get("token_usage", {}),
+            "duration_ms": exec_data.get("duration_ms", 0),
+            "tool_calls_count": exec_data.get("tool_calls_count", 0),
+            "total_tool_count": total_tool_count,
+        }
+
+        # Carry conditional notification from the notify_user tool
+        if context.get("cron_notification"):
+            metadata["cron_notification"] = context["cron_notification"]
+
+        if pending_approvals:
+            metadata["pending_approvals"] = [
+                {
+                    "agent_name": a.agent_name,
+                    "action_summary": a.action_summary,
+                    "details": a.details,
+                    "options": a.options,
+                }
+                for a in pending_approvals
+            ]
+
+        return AgentResult(
+            agent_type=self.__class__.__name__,
+            status=status,
+            raw_message=final_response,
+            metadata=metadata,
+        )
 
     async def _run_react_with_fallback(
         self,
