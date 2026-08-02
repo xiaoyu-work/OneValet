@@ -23,6 +23,7 @@ from .transcript_store import (
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_RUNNING,
+    STATUS_SUSPENDED,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,30 @@ class ResumeMixin:
         # needs a tool result under its own id. A decision the user made needs
         # acting on and then telling, because the id it was recorded against
         # belongs to an inner loop this transcript has never seen.
+        try:
+            async for event in self._continue_claimed_run(
+                run_id, transcript, messages, pending, answers
+            ):
+                yield event
+        except BaseException:
+            # The claim outlives us otherwise, and the run would sit unreachable
+            # until the lease expired. Cancellation and shutdown come through
+            # here too, which is exactly when a process stops without finishing.
+            logger.warning(f"[Resume] Run {run_id} did not finish; releasing it")
+            await store.mark(run_id, STATUS_SUSPENDED)
+            raise
+
+    async def _continue_claimed_run(
+        self,
+        run_id: str,
+        transcript: Any,
+        messages: List[Dict[str, Any]],
+        pending: List[Dict[str, Any]],
+        answers: Optional[Dict[str, str]],
+    ) -> AsyncIterator[AgentEvent]:
+        """Do the work of a resume, once this caller owns the run."""
+        store = self._transcript_store
+
         if pending:
             self._answer_pending_calls(messages, pending, answers or {})
         else:
