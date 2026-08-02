@@ -40,6 +40,12 @@ class CallbackNotification:
                 "source_event": meta.get("source_event", {}),
             },
         }
+        # An approval request is useless without the id needed to answer it,
+        # so those fields ride along when present rather than being dropped by
+        # the fixed shape above.
+        for key in ("ask_id", "run_id", "options"):
+            if meta.get(key):
+                payload["metadata"][key] = meta[key]
 
         for attempt in range(2):  # 1 initial + 1 retry
             try:

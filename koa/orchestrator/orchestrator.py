@@ -714,6 +714,15 @@ class Orchestrator(
                     yield event
                 return
 
+            # Step 3a: The user may be answering something we asked them
+            # earlier, on a surface that had no buttons. "yes" is an answer to
+            # that question, not a new task.
+            answered_run = await self.answer_from_message(tenant_id, message)
+            if answered_run:
+                async for event in self._continue_answered_run(answered_run, context):
+                    yield event
+                return
+
             # Step 3b: Speculative execution — kick off likely tools before LLM decides
             # For image requests, the LLM almost always calls google_search. Starting
             # it now lets us reuse the result later, saving 1-3 seconds of latency.
@@ -922,6 +931,34 @@ class Orchestrator(
                 return None
 
         return asyncio.ensure_future(_route())
+
+    async def _continue_answered_run(
+        self,
+        run_id: str,
+        context: Dict[str, Any],
+    ) -> AsyncIterator[AgentEvent]:
+        """Stream the run the user just unblocked.
+
+        A resume can legitimately produce nothing -- the run may still be
+        waiting on another ask, or its transcript may have been pruned. The
+        user still answered a question, so say so rather than replying with
+        silence.
+        """
+        produced = False
+        async for event in self.resume_run(run_id):
+            produced = True
+            yield event
+        if produced:
+            return
+
+        logger.info(f"[Orchestrator] Run {run_id} produced nothing on resume; acknowledging")
+        result = AgentResult(
+            agent_type="Orchestrator",
+            status=AgentStatus.COMPLETED,
+            raw_message="Got it — I've recorded your answer.",
+        )
+        async for event in self._emit_direct_result(await self.post_process(result, context)):
+            yield event
 
     async def _emit_direct_result(
         self,

@@ -60,7 +60,7 @@ from .constants import COMPLETE_TASK_SCHEMA, COMPLETE_TASK_TOOL_NAME
 from .fields import InputField
 from .llm.base import LLMResponse
 from .llm.base import ToolCall as LLMToolCall
-from .media_dedup import append_unique_media
+from .media_dedup import append_unique_media, stable_json
 from .message import Message
 from .models import AgentTool, AgentToolContext, RequiredField, ToolOutput
 from .protocols import LLMClientProtocol
@@ -72,6 +72,12 @@ if TYPE_CHECKING:
     from .agents.decorator import InputSpec, OutputSpec
 
 logger = logging.getLogger(__name__)
+
+#: What the Inbox says to do with an action on an unattended run.
+APPROVAL_APPROVED = "approved"
+APPROVAL_DECLINED = "declined"
+APPROVAL_ASKED = "asked"
+APPROVAL_UNAVAILABLE = "unavailable"
 
 
 def _log_task_exception(task: asyncio.Task) -> None:
@@ -1241,39 +1247,50 @@ class StandardAgent(BaseAgent):
             )
             if requires_approval and not self._is_attended():
                 # Nobody is watching this run, so pausing inline would strand
-                # it. Record the request in the Inbox instead: the user answers
-                # from wherever they are, and the run resumes from its
-                # transcript. Falls back to refusing when no Inbox is wired,
-                # which is still better than a silent stall.
-                asked = await self._ask_inbox_for_approval(tc, tool, args)
-                if asked:
-                    error_text = (
-                        f"'{tc.name}' needs approval. I've asked the user and will "
-                        "continue once they answer. Do not retry it in this run."
-                    )
-                    status = "asked"
+                # it. The Inbox carries the question instead: the user answers
+                # from wherever they are, and a later run finds their answer
+                # here rather than asking again.
+                decision = await self._ask_inbox_for_approval(tc, tool, args)
+
+                if decision == APPROVAL_APPROVED:
+                    # They already said yes. Fall through and do it -- this is
+                    # the run their approval was waiting for.
+                    requires_approval = False
                 else:
-                    error_text = (
-                        f"'{tc.name}' needs the user's approval, and this run is "
-                        "unattended (scheduled job or trigger), so nobody can give it. "
-                        "Skip this action and say what you would have done."
+                    if decision == APPROVAL_ASKED:
+                        error_text = (
+                            f"'{tc.name}' needs approval. I've asked the user and will "
+                            "continue once they answer. Do not retry it in this run."
+                        )
+                        status = "asked"
+                    elif decision == APPROVAL_DECLINED:
+                        error_text = (
+                            f"The user declined '{tc.name}'. Do not run it; "
+                            "continue without it and say so."
+                        )
+                        status = "declined"
+                    else:
+                        error_text = (
+                            f"'{tc.name}' needs the user's approval, and this run is "
+                            "unattended (scheduled job or trigger), so nobody can give it. "
+                            "Skip this action and say what you would have done."
+                        )
+                        status = "needs_approval"
+                    logger.info(
+                        f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
+                        f"approval required on an unattended run ({status})"
                     )
-                    status = "needs_approval"
-                logger.info(
-                    f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
-                    f"approval required on an unattended run ({status})"
-                )
-                self._tool_trace.append(
-                    {"tool": tc.name, "status": status, "summary": error_text[:240]}
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": error_text,
-                    }
-                )
-                continue
+                    self._tool_trace.append(
+                        {"tool": tc.name, "status": status, "summary": error_text[:240]}
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": error_text,
+                        }
+                    )
+                    continue
 
             if requires_approval:
                 if tool.get_preview:
@@ -1470,30 +1487,45 @@ class StandardAgent(BaseAgent):
         t_lower = t.lower()
         return any(s in t_lower for s in question_signals)
 
-    async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> bool:
-        """Record an approval request in the Inbox. True if it was recorded.
+    async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> str:
+        """Consult the Inbox about this action. Returns what to do with it.
 
-        The preview is what the user actually sees on their phone, so it is
-        generated the same way as for an inline prompt -- naming the real
-        file, recipient, or amount rather than just the tool.
+        An approval outlives the run that requested it. The run that asks
+        finishes without acting; the user answers minutes or hours later; a
+        resumed run replays the same reasoning and arrives back here. So the
+        question this method answers is not only "shall I ask" but "have they
+        already told me" -- and the answer has to be found again in a process
+        that never saw the original request.
+
+        That rules out matching on tool_call_id: those are minted fresh by the
+        model on every run and mean nothing outside the loop that produced
+        them. A decision is looked up by what it was a decision *about* --
+        this run, this tool, these arguments -- which is stable across replays.
+
+        Returns one of APPROVAL_APPROVED, APPROVAL_DECLINED, APPROVAL_ASKED,
+        or APPROVAL_UNAVAILABLE.
         """
         hints = self.context_hints or {}
         inbox = hints.get("inbox")
         run_id = hints.get("run_id")
         if inbox is None or not run_id or not getattr(inbox, "enabled", False):
-            return False
+            return APPROVAL_UNAVAILABLE
 
-        if tool.get_preview:
-            try:
-                preview = await tool.get_preview(args, self._build_tool_context())
-            except Exception as e:
-                logger.error(f"Preview generation failed for {tc.name}: {e}")
-                preview = f"Run {tc.name}?"
-        else:
-            preview = f"Run {tc.name}?"
-        if tool.risk_level == "destructive":
-            preview = f"[DESTRUCTIVE] {preview}"
+        prior = await self._prior_inbox_decision(inbox, run_id, tc.name, args)
+        if prior is not None:
+            if prior == "pending":
+                # Already asked on an earlier attempt at this run. Asking again
+                # would put a second copy of the same question in front of the
+                # user, so wait for the one that is already out there.
+                return APPROVAL_ASKED
+            approved = prior in ("approve", "approved", "yes", "y")
+            logger.info(
+                f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
+                f"user already {'approved' if approved else 'declined'} this"
+            )
+            return APPROVAL_APPROVED if approved else APPROVAL_DECLINED
 
+        preview = await self._approval_preview(tc, tool, args)
         try:
             ask = await inbox.create(
                 tenant_id=self.tenant_id,
@@ -1507,9 +1539,9 @@ class StandardAgent(BaseAgent):
             )
         except Exception as e:
             logger.error(f"Could not record approval ask for {tc.name}: {e}")
-            return False
+            return APPROVAL_UNAVAILABLE
         if ask is None:
-            return False
+            return APPROVAL_UNAVAILABLE
 
         # Deliver it to wherever the user is. Best-effort: the ask is durable,
         # so a failed notification means they find it in the app instead.
@@ -1519,7 +1551,50 @@ class StandardAgent(BaseAgent):
                 await mirror.mirror(ask)
             except Exception as e:
                 logger.warning(f"Could not mirror ask {ask.id}: {e}")
-        return True
+        return APPROVAL_ASKED
+
+    async def _prior_inbox_decision(
+        self, inbox: Any, run_id: str, tool_name: str, args: Dict[str, Any]
+    ) -> Optional[str]:
+        """What the user already said about this exact action on this run.
+
+        ``"pending"`` when the question is out but unanswered, the resolution
+        text when answered, and None when it has never been asked.
+        """
+        wanted = stable_json(args)
+        try:
+            asks = await inbox.for_run(run_id)
+        except Exception as e:
+            # Treating an unreadable Inbox as "never asked" would ask again and
+            # could act twice; treating it as pending stalls safely instead.
+            logger.warning(f"Could not read prior asks for run {run_id}: {e}")
+            return "pending"
+        for ask in asks:
+            data = ask.data or {}
+            if data.get("tool") != tool_name or stable_json(data.get("args")) != wanted:
+                continue
+            if ask.is_open:
+                return "pending"
+            return (ask.resolution or "").strip().lower()
+        return None
+
+    async def _approval_preview(self, tc, tool, args: Dict[str, Any]) -> str:
+        """What the user actually sees on their phone.
+
+        Generated the same way as for an inline prompt, so it names the real
+        file, recipient, or amount rather than just the tool.
+        """
+        if tool.get_preview:
+            try:
+                preview = await tool.get_preview(args, self._build_tool_context())
+            except Exception as e:
+                logger.error(f"Preview generation failed for {tc.name}: {e}")
+                preview = f"Run {tc.name}?"
+        else:
+            preview = f"Run {tc.name}?"
+        if tool.risk_level == "destructive":
+            preview = f"[DESTRUCTIVE] {preview}"
+        return preview
 
     def _is_attended(self) -> bool:
         """Whether a human can answer if this agent pauses for approval.

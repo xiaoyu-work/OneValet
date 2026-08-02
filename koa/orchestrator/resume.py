@@ -14,10 +14,10 @@ so a resume is safe to attempt more than once.
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
-from ..result import AgentResult, AgentStatus
 from ..streaming.models import AgentEvent, EventType
+from .ask_mirror import parse_reply
 from .transcript_store import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -31,9 +31,10 @@ class ResumeMixin:
     """Mixin providing resumption of suspended runs.
 
     Expects on ``self`` (provided by Orchestrator):
-    - ``_transcript_store``
+    - ``_transcript_store``, ``inbox``
     - ``_react_loop_events()`` (ReactLoopMixin)
     - ``_build_tool_schemas_with_domain_fallback()``
+    - ``_build_result_from_exec_data()``
     - ``post_process()``, ``prepare_context()``
     """
 
@@ -71,25 +72,23 @@ class ResumeMixin:
         pending = store.unanswered_tool_calls(messages)
 
         # Answers that arrived through the Inbox since this run stopped.
-        resolved = await self._collect_inbox_answers(run_id)
+        resolved, open_asks = await self._collect_inbox_answers(run_id)
         merged = {**resolved, **(answers or {})}
+
+        if open_asks:
+            # Waking now would answer the questions we have and record the rest
+            # as "never ran", so the answers still coming would arrive to a run
+            # that had already moved past them. One wake, once everything is in.
+            logger.info(
+                f"[Resume] Run {run_id} still waiting on {open_asks} ask(s); not resuming yet"
+            )
+            return
 
         if not pending:
             # Nothing was outstanding -- the run died between rounds rather
             # than mid-tool. Replaying the loop from here is still correct.
             logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
         else:
-            still_open = [
-                c
-                for c in pending
-                if c.get("id") and c["id"] not in merged
-            ]
-            if still_open and not merged:
-                logger.info(
-                    f"[Resume] Run {run_id} still waiting on "
-                    f"{len(still_open)} unanswered ask(s); not resuming yet"
-                )
-                return
             self._answer_pending_calls(messages, pending, merged)
 
         await store.save(
@@ -135,28 +134,73 @@ class ResumeMixin:
                 exec_data = event.data
             yield event
 
-        result = AgentResult(
-            agent_type=self.__class__.__name__,
-            status=AgentStatus.COMPLETED,
-            raw_message=exec_data.get("final_response", ""),
-            metadata={"resumed_run_id": run_id},
+        result = self._build_result_from_exec_data(
+            exec_data,
+            final_response=exec_data.get("final_response", ""),
+            context=context,
+            total_tool_count=len(tool_schemas),
         )
+        result.metadata["resumed_run_id"] = run_id
         await self.post_process(result, context)
 
-    async def _collect_inbox_answers(self, run_id: str) -> Dict[str, str]:
-        """Answers the user has given for this run's outstanding asks.
+    async def answer_from_message(
+        self,
+        tenant_id: str,
+        message: str,
+    ) -> Optional[str]:
+        """Resolve a pending ask if this message answers one. Returns its run id.
 
-        Keyed by tool_call_id so they slot straight into the transcript. An
-        approval becomes an instruction the model can act on rather than a
-        bare "approve", since by the time it resumes the model has to re-decide
-        what to do.
+        We ask people things on surfaces that have no buttons -- a text
+        message, a pair of glasses -- and tell them to reply. "yes" arriving
+        afterwards is an answer to that question, not a new instruction, and
+        running it through the agent as a fresh request would produce a
+        bewildered response instead of the action they just approved.
+
+        Only when exactly one ask is open. With none there is nothing to
+        answer; with several, a bare "yes" does not say which, so it is left
+        for the user to answer explicitly.
+        """
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled or not (message or "").strip():
+            return None
+        try:
+            open_asks = await inbox.pending(tenant_id, limit=2)
+        except Exception as e:
+            logger.warning(f"[Resume] Could not check pending asks for {tenant_id}: {e}")
+            return None
+        if len(open_asks) != 1:
+            return None
+
+        ask = open_asks[0]
+        decision = parse_reply(message, ask.options)
+        if decision is None:
+            return None
+        if not await inbox.resolve(ask.id, decision, resolved_by="reply"):
+            return None
+        logger.info(f"[Resume] Reply {decision!r} answered ask {ask.id} (run={ask.run_id})")
+        return ask.run_id
+
+    async def _collect_inbox_answers(self, run_id: str) -> Tuple[Dict[str, str], int]:
+        """Answers given for this run's asks, and how many are still open.
+
+        Answers are keyed by tool_call_id so they slot straight into the
+        transcript. An approval becomes an instruction the model can act on
+        rather than a bare "approve", since by the time it resumes the model
+        has to re-decide what to do.
+
+        The open count matters as much as the answers: a run with a question
+        still outstanding is not ready to continue.
         """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
-            return {}
+            return {}, 0
         out: Dict[str, str] = {}
+        open_count = 0
         for ask in await inbox.for_run(run_id):
-            if ask.is_open or not ask.resolution:
+            if ask.is_open:
+                open_count += 1
+                continue
+            if not ask.resolution:
                 continue
             tool_name = (ask.data or {}).get("tool", "the action")
             if ask.kind == "approval":
@@ -172,7 +216,7 @@ class ResumeMixin:
                     )
             else:
                 out[ask.tool_call_id] = ask.resolution
-        return out
+        return out, open_count
 
     async def answer_ask(
         self,

@@ -31,6 +31,7 @@ from .planning import PlanningMixin, PlanOutcome
 from .run_state import RunState
 from .tool_execution import ToolExecutionMixin, TurnOutcome
 from .transcript_repair import repair_transcript
+from .transcript_store import STATUS_COMPLETED, STATUS_SUSPENDED
 from .turn_gate import TurnGateMixin
 
 logger = logging.getLogger(__name__)
@@ -216,13 +217,38 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         context: Optional[Dict[str, Any]],
         status: str,
     ) -> None:
-        """Move a run's stored transcript to its final state."""
+        """Move a run's stored transcript to its final state.
+
+        A run that left a question with the user is not finished, whatever the
+        loop concluded. The ask may have been recorded several layers down, by
+        an agent tool this loop only saw return normally, so the Inbox is the
+        thing to consult rather than how the turn happened to end. Marking such
+        a run completed would make it unresumable, and the answer the user
+        eventually gives would have nowhere to go.
+        """
         store = getattr(self, "_transcript_store", None)
         if store is None or not store.enabled:
             return
         run_id = (context or {}).get("request_id")
-        if run_id:
-            await store.mark(run_id, status)
+        if not run_id:
+            return
+        if status == STATUS_COMPLETED and await self._has_open_asks(run_id):
+            logger.info(f"[ReAct] Run {run_id} is waiting on the user; keeping it resumable")
+            status = STATUS_SUSPENDED
+        await store.mark(run_id, status)
+
+    async def _has_open_asks(self, run_id: str) -> bool:
+        """Whether this run is still waiting on a person for anything."""
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled:
+            return False
+        try:
+            return any(ask.is_open for ask in await inbox.for_run(run_id))
+        except Exception as e:
+            # Reporting "nothing open" here would mark the run completed and
+            # strand a real ask, so an unreadable Inbox keeps it resumable.
+            logger.warning(f"[ReAct] Could not check open asks for {run_id}: {e}")
+            return True
 
     async def _route_for_run(
         self,
@@ -683,7 +709,9 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
 
         # An interrupted run keeps its transcript: the user stopped it, and it
         # may be worth continuing. A finished one is terminal and gets pruned.
-        await self._finish_transcript(context, "suspended" if state.interrupted else "completed")
+        await self._finish_transcript(
+            context, STATUS_SUSPENDED if state.interrupted else STATUS_COMPLETED
+        )
 
         if state.interrupted:
             # A run the user stopped still owes them a reply, and "Stopped."

@@ -22,6 +22,9 @@ STUCK_MESSAGE = (
     "Let me provide what I have so far."
 )
 
+#: Separator between the steps of a detected cycle, as shown in the log.
+_CYCLE_ARROW = "\u2194"
+
 
 def detect_loop(
     names: List[str],
@@ -59,7 +62,7 @@ def detect_loop(
         cycle = tail[:cycle_len]
         if all(tail[i] == cycle[i % cycle_len] for i in range(needed)):
             return (
-                f"Cycle detected: {'\u2194'.join(cycle)} "
+                f"Cycle detected: {_CYCLE_ARROW.join(cycle)} "
                 f"repeated {needed // cycle_len} times"
             )
 
