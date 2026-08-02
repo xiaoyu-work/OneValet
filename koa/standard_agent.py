@@ -1274,6 +1274,33 @@ class StandardAgent(BaseAgent):
                 or tool.risk_level in ("write", "destructive")
                 or bool(policy_decision and policy_decision.require_approval)
             )
+            if requires_approval and not self._is_attended():
+                # Nobody is watching this run, so pausing for approval would
+                # strand it silently -- the caller returns nothing and the
+                # user never learns the action was attempted. Refuse instead,
+                # and tell the model why so it can report back or pick a
+                # read-only alternative.
+                error_text = (
+                    f"'{tc.name}' needs the user's approval, and this run is "
+                    "unattended (scheduled job or trigger), so nobody can give it. "
+                    "Skip this action and say what you would have done."
+                )
+                logger.info(
+                    f"[{self.__class__.__name__}:{self.name}] refused {tc.name}: "
+                    "approval required but run is unattended"
+                )
+                self._tool_trace.append(
+                    {"tool": tc.name, "status": "needs_approval", "summary": error_text[:240]}
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": error_text,
+                    }
+                )
+                continue
+
             if requires_approval:
                 if tool.get_preview:
                     try:
@@ -1468,6 +1495,16 @@ class StandardAgent(BaseAgent):
         ]
         t_lower = t.lower()
         return any(s in t_lower for s in question_signals)
+
+    def _is_attended(self) -> bool:
+        """Whether a human can answer if this agent pauses for approval.
+
+        Defaults to True when the orchestrator did not say, so an unknown
+        surface keeps asking rather than acting unapproved.
+        """
+        if not self.context_hints:
+            return True
+        return bool(self.context_hints.get("attended", True))
 
     def _find_tool(self, name: str) -> Optional[AgentTool]:
         """Find an agent tool by name."""

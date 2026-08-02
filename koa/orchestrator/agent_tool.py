@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from ..message import Message
 from ..result import AgentStatus
+from .attendance import is_attended
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,10 @@ async def execute_agent_tool(
     permissions = (request_context or {}).get("metadata", {}).get("permissions")
     if permissions and isinstance(permissions, dict):
         enriched_hints["permissions"] = permissions
+    # Whether a human can answer if the agent needs approval mid-run. Cron
+    # jobs and triggers have nobody watching, so an agent that pauses there
+    # would strand the run.
+    enriched_hints["attended"] = is_attended((request_context or {}).get("metadata"))
     session_id = (request_context or {}).get("session_id")
     if session_id:
         enriched_hints["session_id"] = session_id
