@@ -18,6 +18,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 
 from ..streaming.models import AgentEvent, EventType
 from .ask_mirror import parse_reply
+from .inbox import is_approval
 from .transcript_store import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -75,12 +76,11 @@ class ResumeMixin:
         messages = list(transcript.messages)
         pending = store.unanswered_tool_calls(messages)
 
-        # Answers that arrived through the Inbox since this run stopped.
-        resolved, open_asks = await self._collect_inbox_answers(run_id)
-        merged = {**resolved, **(answers or {})}
+        # Decisions the user has made since this run stopped.
+        decisions, open_asks = await self._collect_inbox_answers(run_id)
 
         if open_asks:
-            # Waking now would answer the questions we have and record the rest
+            # Waking now would act on the answers we have and record the rest
             # as "never ran", so the answers still coming would arrive to a run
             # that had already moved past them. One wake, once everything is in.
             logger.info(
@@ -88,16 +88,17 @@ class ResumeMixin:
             )
             return
 
-        if not pending:
-            # The run died between rounds rather than mid-tool, or the thing
-            # it was waiting on was never a tool call of its own. Either way
-            # the transcript alone says nothing has changed, so the answers go
-            # in as turns the model will read.
-            logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
-            for text in merged.values():
-                messages.append({"role": "user", "content": text})
+        # Two different things can be outstanding, and they are answered in
+        # different currencies. A tool call the process died in the middle of
+        # needs a tool result under its own id. A decision the user made needs
+        # telling, because the id it was recorded against belongs to an inner
+        # loop this transcript has never seen.
+        if pending:
+            self._answer_pending_calls(messages, pending, answers or {})
         else:
-            self._answer_pending_calls(messages, pending, merged)
+            logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
+        for note in decisions:
+            messages.append({"role": "user", "content": note})
 
         await store.save(
             run_id,
@@ -124,8 +125,8 @@ class ResumeMixin:
         )
 
         logger.info(
-            f"[Resume] Continuing run {run_id} "
-            f"({len(messages)} messages, {len(pending)} answered)"
+            f"[Resume] Continuing run {run_id} ({len(messages)} messages, "
+            f"{len(pending)} tool call(s) answered, {len(decisions)} decision(s) applied)"
         )
 
         exec_data: Dict[str, Any] = {}
@@ -196,43 +197,44 @@ class ResumeMixin:
         logger.info(f"[Resume] Reply {decision!r} answered ask {ask.id} (run={ask.run_id})")
         return ask.run_id
 
-    async def _collect_inbox_answers(self, run_id: str) -> Tuple[Dict[str, str], int]:
-        """Answers given for this run's asks, and how many are still open.
+    async def _collect_inbox_answers(self, run_id: str) -> Tuple[List[str], int]:
+        """Decisions this run is still owed action on, and how many are unanswered.
 
-        Answers are keyed by tool_call_id so they slot straight into the
-        transcript. An approval becomes an instruction the model can act on
-        rather than a bare "approve", since by the time it resumes the model
-        has to re-decide what to do.
+        Returned as text for the model to read rather than keyed by tool call
+        id. The ids the Inbox holds come from the agent's own inner loop and
+        mean nothing in the orchestrator's transcript, so slotting them in as
+        tool results was never going to reach anything -- the model has to be
+        told in the one language it shares with both levels.
 
-        The open count matters as much as the answers: a run with a question
-        still outstanding is not ready to continue.
+        Decisions already acted on are left out. Repeating them would send the
+        model after work that is finished, and the gate would refuse it.
         """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
-            return {}, 0
-        out: Dict[str, str] = {}
+            return [], 0
+        notes: List[str] = []
         open_count = 0
         for ask in await inbox.for_run(run_id):
             if ask.is_open:
                 open_count += 1
                 continue
-            if not ask.resolution:
+            if not ask.resolution or not ask.awaits_execution:
                 continue
             tool_name = (ask.data or {}).get("tool", "the action")
-            if ask.kind == "approval":
-                if ask.resolution.strip().lower() in ("approve", "approved", "yes", "y"):
-                    out[ask.tool_call_id] = (
-                        f"The user approved this. Call {tool_name} again with the "
-                        "same arguments to carry it out."
-                    )
-                else:
-                    out[ask.tool_call_id] = (
-                        f"The user declined this. Do not run {tool_name}; "
-                        "continue without it and say so."
-                    )
+            agent = (ask.data or {}).get("agent", "the agent that asked")
+            if ask.kind != "approval":
+                notes.append(f"The user answered: {ask.resolution}")
+            elif is_approval(ask.resolution):
+                notes.append(
+                    f"The user approved '{tool_name}'. Continue the request that was "
+                    f"waiting on it -- {agent} will carry it out."
+                )
             else:
-                out[ask.tool_call_id] = ask.resolution
-        return out, open_count
+                notes.append(
+                    f"The user declined '{tool_name}'. Continue without it and tell "
+                    "them what you did not do."
+                )
+        return notes, open_count
 
     async def answer_ask(
         self,
