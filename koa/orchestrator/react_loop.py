@@ -12,15 +12,13 @@ import time
 from collections import namedtuple
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from ..constants import GENERATE_PLAN_SCHEMA
 from ..llm.tool_validator import ToolSchemaValidator
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import AgentToolResult
 from .approval import collect_batch_approvals
-from .attendance import is_attended
 from .error_classifier import LLMErrorKind
+from .planning import PlanningMixin, PlanOutcome
 from .react_config import (
-    COMPLETE_TASK_SCHEMA,
     COMPLETE_TASK_TOOL_NAME,
     CompleteTaskResult,
     ToolCallRecord,
@@ -118,7 +116,7 @@ def _tool_acknowledgment(tool_names: List[str], turn: int) -> Optional[str]:
     return random.choice(_CASUAL_ACKS)
 
 
-class ReactLoopMixin(ToolExecutionMixin):
+class ReactLoopMixin(ToolExecutionMixin, PlanningMixin):
     """Mixin providing the ReAct loop and its helpers.
 
     Expects the following attributes on ``self`` (provided by Orchestrator):
@@ -243,42 +241,6 @@ class ReactLoopMixin(ToolExecutionMixin):
         if run_id:
             await store.mark(run_id, status)
 
-    def _should_plan(
-        self,
-        context: Optional[Dict[str, Any]],
-        routing_score: int,
-    ) -> bool:
-        """Decide whether this request warrants an explicit plan first.
-
-        This used to read the model router's complexity score alone. That tied
-        planning to an optional cost-optimisation feature: routing is opt-in,
-        and routing_score stays at its -1 sentinel whenever it is off, the
-        classifier fails, or a fallback model is in use -- so with the default
-        config, planning could never fire at all.
-
-        The intent analyzer runs on every request and already answers the same
-        question more directly, at no extra round-trip. A request that needs
-        several agents coordinated is exactly what a plan is for; the router's
-        score is a fallback signal for when routing happens to be enabled.
-        """
-        if not self._react_config.planning_enabled:
-            return False
-
-        if routing_score >= self._react_config.planning_score_threshold:
-            return True
-
-        intent = (context or {}).get("intent_analysis")
-        if intent is None:
-            return False
-
-        # Genuinely independent tasks across different agents -- the case the
-        # DAG executor exists for, and the one worth showing the user first.
-        sub_tasks = getattr(intent, "sub_tasks", None) or []
-        if getattr(intent, "intent_type", "") == "multi" and len(sub_tasks) >= 2:
-            return True
-
-        return False
-
     async def _react_loop_events(
         self,
         messages: List[Dict[str, Any]],
@@ -373,102 +335,27 @@ class ReactLoopMixin(ToolExecutionMixin):
             )
 
         # -- Planning phase --
-        enable_planning = self._should_plan(context, routing_score)
+        plan_outcome = PlanOutcome()
+        async for event in self._plan_phase(
+            state,
+            plan_outcome,
+            context=context,
+            user_message=user_message,
+            metadata=metadata,
+            enable_planning=self._should_plan(context, routing_score),
+        ):
+            yield event
 
-        # Case 1: Pending plan from previous turn -- user is responding to it
-        # Check both persistent store and in-memory fallback.
-        plan_store = getattr(self, "_plan_store", None)
-        pending_plan_data = None
-        if plan_store is not None:
-            pending_plan_data = await plan_store.pop(tenant_id)
-        if pending_plan_data is None:
-            pending_plan_data = self._tenant_plans.pop(tenant_id, None)
+        if plan_outcome.messages is not None:
+            messages = plan_outcome.messages
 
-        if pending_plan_data and context:
-            pending_plan_text = self._format_plan_text(pending_plan_data)
-
-            logger.info("[ReAct] Pending plan found, injecting into prompt for LLM to handle")
-            messages = await self._build_llm_messages(
-                context,
-                user_message,
-                pending_plan=pending_plan_text,
+        if plan_outcome.awaiting_approval:
+            yield AgentEvent(
+                type=EventType.EXECUTION_END,
+                data=state.execution_end_payload(),
             )
-            enable_planning = False  # don't re-plan
-
-        # Case 2: New complex request -- generate plan and present to user
-        elif enable_planning:
-            logger.info(f"[ReAct] Planning phase triggered (score={routing_score})")
-            try:
-                plan_messages = await self._build_llm_messages(
-                    context,
-                    user_message,
-                    include_planning=True,
-                )
-                plan_schemas = [GENERATE_PLAN_SCHEMA, COMPLETE_TASK_SCHEMA]
-                plan_response = await self._llm_call_with_retry(
-                    plan_messages,
-                    plan_schemas,
-                    tool_choice="auto",
-                    llm_client_override=routed_llm_client,
-                )
-                plan_data = self._extract_plan_from_response(plan_response)
-
-                # Approval needs someone to give it. On a cron job or trigger
-                # the plan would be presented to nobody and the run would stop
-                # there, so those execute the plan directly.
-                await_approval = self._react_config.planning_requires_approval and is_attended(
-                    metadata
-                )
-                if plan_data and await_approval:
-                    # Present plan to user, pause execution
-                    plan_text = self._format_plan_text(plan_data)
-                    friendly = self._format_plan_for_user(plan_data)
-                    # Persist plan to survive restarts
-                    if plan_store is not None:
-                        await plan_store.save(tenant_id, plan_data)
-                    else:
-                        self._tenant_plans[tenant_id] = plan_data
-                    logger.info(
-                        f"[ReAct] Plan generated, awaiting approval: {plan_data.get('goal', '')}"
-                    )
-                    yield AgentEvent(
-                        type=EventType.PLAN_GENERATED,
-                        data={"plan": plan_data, "plan_text": plan_text},
-                    )
-                    # End this turn -- return plan as the response
-                    duration_ms = state.duration_ms
-                    yield AgentEvent(
-                        type=EventType.EXECUTION_END,
-                        data={
-                            "final_response": friendly,
-                            "result_status": "WAITING_FOR_APPROVAL",
-                            "turns": 0,
-                            "tool_calls": [],
-                            "token_usage": {"input_tokens": 0, "output_tokens": 0},
-                            "duration_ms": duration_ms,
-                            "pending_approvals": [],
-                        },
-                    )
-                    self._run_controls.finish(tenant_id, control)
-                    return  # stop the generator -- user needs to respond
-
-                elif plan_data:
-                    # Auto-execute without approval
-                    plan_text = self._format_plan_text(plan_data)
-                    yield AgentEvent(
-                        type=EventType.PLAN_GENERATED,
-                        data={"plan": plan_data, "plan_text": plan_text},
-                    )
-                    logger.info(f"[ReAct] Plan auto-approved: {plan_data.get('goal', '')}")
-                    messages = await self._build_llm_messages(
-                        context,
-                        user_message,
-                        approved_plan=plan_text,
-                    )
-                else:
-                    logger.info("[ReAct] LLM did not generate a plan, proceeding directly")
-            except Exception as e:
-                logger.warning(f"[ReAct] Planning phase failed, proceeding without plan: {e}")
+            self._run_controls.finish(tenant_id, control)
+            return  # stop the generator -- user needs to respond
 
         for turn in range(1, self._react_config.max_turns + 1):
             state.turn = turn
