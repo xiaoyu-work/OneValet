@@ -65,6 +65,24 @@ def _loads(value: Any, default: Any) -> Any:
     return value
 
 
+def action_key(tool_name: Any, args: Any) -> str:
+    """Identity of an action, stable across the runs that ask about it.
+
+    An approval outlives the run that requested it, so the run that acts on
+    it is a different process rebuilding the same arguments from scratch.
+    They are matched by value, which means both sides have to be rendered the
+    same way -- including the trip through the database, where a value that
+    is not JSON has already been flattened to a string by ``default=str``.
+    Rendering the live side any other way would leave a run unable to
+    recognise its own approval, and it would ask again.
+    """
+    try:
+        rendered = json.dumps(args, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        rendered = str(args)
+    return f"{tool_name}\x00{rendered}"
+
+
 def _row_to_ask(row: Any) -> Ask:
     return Ask(
         id=row["id"],

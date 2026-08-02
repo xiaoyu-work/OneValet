@@ -60,9 +60,10 @@ from .constants import COMPLETE_TASK_SCHEMA, COMPLETE_TASK_TOOL_NAME
 from .fields import InputField
 from .llm.base import LLMResponse
 from .llm.base import ToolCall as LLMToolCall
-from .media_dedup import append_unique_media, stable_json
+from .media_dedup import append_unique_media
 from .message import Message
 from .models import AgentTool, AgentToolContext, RequiredField, ToolOutput
+from .orchestrator.inbox import action_key
 from .protocols import LLMClientProtocol
 from .result import AgentResult, AgentStatus, ApprovalResult
 from .streaming.engine import StreamEngine
@@ -1561,7 +1562,7 @@ class StandardAgent(BaseAgent):
         ``"pending"`` when the question is out but unanswered, the resolution
         text when answered, and None when it has never been asked.
         """
-        wanted = stable_json(args)
+        wanted = action_key(tool_name, args)
         try:
             asks = await inbox.for_run(run_id)
         except Exception as e:
@@ -1571,7 +1572,7 @@ class StandardAgent(BaseAgent):
             return "pending"
         for ask in asks:
             data = ask.data or {}
-            if data.get("tool") != tool_name or stable_json(data.get("args")) != wanted:
+            if action_key(data.get("tool"), data.get("args")) != wanted:
                 continue
             if ask.is_open:
                 return "pending"

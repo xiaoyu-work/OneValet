@@ -26,6 +26,10 @@ from .transcript_store import (
 
 logger = logging.getLogger(__name__)
 
+#: An answer to a yes/no question is short. Longer than this and the message
+#: is a request in its own right, whatever words it happens to contain.
+_MAX_REPLY_WORDS = 6
+
 
 class ResumeMixin:
     """Mixin providing resumption of suspended runs.
@@ -161,8 +165,16 @@ class ResumeMixin:
         for the user to answer explicitly.
         """
         inbox = getattr(self, "inbox", None)
-        if inbox is None or not inbox.enabled or not (message or "").strip():
+        if inbox is None or not inbox.enabled:
             return None
+
+        text = (message or "").strip()
+        # Count the words before touching the database. Almost every message
+        # is a real request, and those must not pay for a query that could
+        # only ever have matched a short reply.
+        if not text or len(text.split()) > _MAX_REPLY_WORDS:
+            return None
+
         try:
             open_asks = await inbox.pending(tenant_id, limit=2)
         except Exception as e:
@@ -172,7 +184,7 @@ class ResumeMixin:
             return None
 
         ask = open_asks[0]
-        decision = parse_reply(message, ask.options)
+        decision = parse_reply(text, ask.options)
         if decision is None:
             return None
         if not await inbox.resolve(ask.id, decision, resolved_by="reply"):
