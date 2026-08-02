@@ -17,6 +17,7 @@ import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ..streaming.models import AgentEvent, EventType
+from .agent_tool import build_agent_hints
 from .ask_mirror import parse_reply
 from .transcript_store import (
     STATUS_COMPLETED,
@@ -96,7 +97,17 @@ class ResumeMixin:
         else:
             logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
 
-        decisions = await self._honour_decisions(run_id, transcript.tenant_id)
+        context = await self.prepare_context(
+            transcript.tenant_id,
+            transcript.user_message,
+            transcript.metadata,
+        )
+        context["request_id"] = run_id
+        context["resumed"] = True
+
+        # Before the model gets a turn: the approved actions happen, from the
+        # arguments the user saw, and their outcomes go in as turns it reads.
+        decisions = await self._honour_decisions(run_id, transcript.tenant_id, context)
         for note in decisions:
             messages.append({"role": "user", "content": note})
 
@@ -109,14 +120,6 @@ class ResumeMixin:
             turn=transcript.turn,
             status=STATUS_RUNNING,
         )
-
-        context = await self.prepare_context(
-            transcript.tenant_id,
-            transcript.user_message,
-            transcript.metadata,
-        )
-        context["request_id"] = run_id
-        context["resumed"] = True
 
         intent = context.get("intent_analysis")
         domains = getattr(intent, "domains", None) or ["all"]
@@ -197,7 +200,32 @@ class ResumeMixin:
         logger.info(f"[Resume] Reply {decision!r} answered ask {ask.id} (run={ask.run_id})")
         return ask.run_id
 
-    async def _honour_decisions(self, run_id: str, tenant_id: str) -> List[str]:
+    def _agent_type_for_class(self, class_name: str) -> Optional[str]:
+        """The registry name for an agent, given the class that recorded an ask.
+
+        Asks written before the registry name was recorded carry only the
+        Python class name, which the registry does not answer to. Without this
+        those decisions could never be routed, and a decision that cannot be
+        routed strands its run for good.
+        """
+        registry = getattr(self, "_agent_registry", None)
+        if registry is None or not class_name:
+            return None
+        try:
+            for name in registry.get_all_agent_names():
+                cls = registry.get_agent_class(name)
+                if cls is not None and cls.__name__ == class_name:
+                    return name
+        except Exception as e:
+            logger.warning(f"[Resume] Could not resolve agent class {class_name}: {e}")
+        return None
+
+    async def _honour_decisions(
+        self,
+        run_id: str,
+        tenant_id: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> List[str]:
         """Carry out every decision this run is still owed, and describe them.
 
         Done here rather than left to the replayed loop because the loop
@@ -206,9 +234,9 @@ class ResumeMixin:
         answer is never acted on and nothing notices -- the ask is answered,
         so no amount of waking the run again would help.
 
-        Each owning agent is asked directly instead. Agents that no longer
-        exist are skipped rather than failing the resume; their asks stay
-        unacted and keep the run listed as owing something.
+        Each owning agent is asked directly instead, built with the same
+        context the ReAct loop would have given it, because the approved tool
+        is the same tool and needs the same database and settings.
         """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
@@ -219,29 +247,31 @@ class ResumeMixin:
             logger.warning(f"[Resume] Could not read decisions for run {run_id}: {e}")
             return []
 
-        owners = []
+        owners: List[str] = []
         for ask in asks:
             if not ask.awaits_execution or ask.kind != "approval":
                 continue
-            owner = (ask.data or {}).get("agent_type")
+            data = ask.data or {}
+            owner = data.get("agent_type") or self._agent_type_for_class(data.get("agent", ""))
             if owner and owner not in owners:
                 owners.append(owner)
+            elif not owner:
+                logger.error(
+                    f"[Resume] Ask {ask.id} names no agent that can carry it out; "
+                    "the user's decision cannot be honoured"
+                )
         if not owners:
             return []
 
         notes: List[str] = []
         for agent_type in owners:
-            agent = await self.create_agent(
-                tenant_id,
+            hints = build_agent_hints(
+                self,
                 agent_type,
-                context_hints={
-                    "inbox": inbox,
-                    "run_id": run_id,
-                    "agent_type": agent_type,
-                    "attended": False,
-                    "resumed": True,
-                },
+                tenant_id,
+                request_context=dict(context or {}, resumed=True, request_id=run_id),
             )
+            agent = await self.create_agent(tenant_id, agent_type, context_hints=hints)
             if agent is None:
                 logger.warning(f"[Resume] Cannot reach {agent_type} to honour its approvals")
                 continue

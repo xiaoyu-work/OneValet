@@ -71,26 +71,23 @@ def _extract_recent_context(request_context: Optional[Dict[str, Any]], tenant_id
         return ""
 
 
-async def execute_agent_tool(
-    orchestrator,
+def build_agent_hints(
+    orchestrator: Any,
     agent_type: str,
     tenant_id: str,
-    tool_call_args: Dict[str, Any],
+    tool_call_args: Optional[Dict[str, Any]] = None,
     task_instruction: str = "",
     request_context: Optional[Dict[str, Any]] = None,
-) -> AgentToolResult:
-    """Execute an agent as a tool in the ReAct loop."""
-    from .approval import build_approval_request
+) -> Dict[str, Any]:
+    """Everything an agent needs from the orchestrator to do its work.
 
-    # Build structured handoff context
-    handoff = HandoffContext(
-        task_summary=task_instruction or f"Execute {agent_type} task",
-        known_entities={k: v for k, v in tool_call_args.items() if v is not None},
-        conversation_context=_extract_recent_context(request_context, tenant_id),
-        constraints=[],
-        session_memory=dict((request_context or {}).get("session_working_memory") or {}),
-    )
-
+    Built in one place because two callers need the same set and they
+    are easy to let drift: the ReAct loop invoking an agent as a tool,
+    and a resume going back to an agent to carry out what the user
+    approved. An agent built with less would fail on the database or the
+    timezone the first path takes for granted.
+    """
+    tool_call_args = tool_call_args or {}
     enriched_hints = dict(tool_call_args)
     # task_instruction is popped from args in _execute_single() and passed
     # separately — put it back into hints so the agent has access to it.
@@ -183,6 +180,38 @@ async def execute_agent_tool(
                 enriched_hints["embedder"] = embedder
         except Exception as e:
             logger.debug("embedder not available: %s", e)
+
+    return enriched_hints
+
+
+async def execute_agent_tool(
+    orchestrator,
+    agent_type: str,
+    tenant_id: str,
+    tool_call_args: Dict[str, Any],
+    task_instruction: str = "",
+    request_context: Optional[Dict[str, Any]] = None,
+) -> AgentToolResult:
+    """Execute an agent as a tool in the ReAct loop."""
+    from .approval import build_approval_request
+
+    # Build structured handoff context
+    handoff = HandoffContext(
+        task_summary=task_instruction or f"Execute {agent_type} task",
+        known_entities={k: v for k, v in tool_call_args.items() if v is not None},
+        conversation_context=_extract_recent_context(request_context, tenant_id),
+        constraints=[],
+        session_memory=dict((request_context or {}).get("session_working_memory") or {}),
+    )
+
+    enriched_hints = build_agent_hints(
+        orchestrator,
+        agent_type,
+        tenant_id,
+        tool_call_args,
+        task_instruction,
+        request_context,
+    )
 
     # Pass structured handoff via context_hints
     enriched_hints["session_working_memory"] = handoff.session_memory
