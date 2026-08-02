@@ -128,6 +128,10 @@ async def execute_agent_tool(
     run_id = (request_context or {}).get("request_id")
     if run_id:
         enriched_hints["run_id"] = run_id
+    # Only a resumed run can have approvals waiting to be carried out, so a
+    # first run should not pay for the lookup.
+    if (request_context or {}).get("resumed"):
+        enriched_hints["resumed"] = True
     session_id = (request_context or {}).get("session_id")
     if session_id:
         enriched_hints["session_id"] = session_id

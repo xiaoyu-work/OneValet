@@ -1517,6 +1517,11 @@ class StandardAgent(BaseAgent):
         run_id = hints.get("run_id")
         if inbox is None or not run_id or not getattr(inbox, "enabled", False):
             return []
+        if not hints.get("resumed"):
+            # Approvals are only ever answered after a run has ended, so a
+            # first run has nothing to carry out and should not pay for the
+            # lookup on every agent invocation.
+            return []
 
         try:
             asks = await inbox.for_run(run_id)
@@ -1541,16 +1546,37 @@ class StandardAgent(BaseAgent):
             if tool is None:
                 logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
                 continue
+
+            args = data.get("args") or {}
+            # The user's approval says they want this done; it does not
+            # override whether they are allowed to. A permission revoked since
+            # the question was asked still applies.
+            policy = self._evaluate_tool_policy(tool, args)
+            if policy is not None and not policy.allowed:
+                if await inbox.claim_execution(ask.id):
+                    notes.append(
+                        f"'{tool_name}' was approved but is no longer permitted: "
+                        f"{policy.reason}. It was not run."
+                    )
+                continue
+
             if not await inbox.claim_execution(ask.id):
                 logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
                 continue
 
-            note = await self._run_approved_tool(inbox, ask, tool, data.get("args") or {})
-            notes.append(note)
+            notes.append(await self._run_approved_tool(inbox, ask, tool, args))
         return notes
 
     async def _run_approved_tool(self, inbox: Any, ask: Any, tool: Any, args: Dict[str, Any]) -> str:
-        """Execute one approved action and describe the outcome."""
+        """Execute one approved action and describe the outcome.
+
+        The claim is never handed back. A tool that raised may still have done
+        its work -- a timeout in particular means only that we stopped waiting,
+        not that the provider stopped -- and retrying a send on that basis
+        risks doing it twice for something the user authorised once. The
+        failure is reported instead, and whether to try again is left to the
+        model, which can ask.
+        """
         name = tool.name
         try:
             result = await asyncio.wait_for(
@@ -1558,11 +1584,11 @@ class StandardAgent(BaseAgent):
                 timeout=self.tool_timeout,
             )
         except asyncio.TimeoutError:
-            # Never reached the point of doing anything observable, so the
-            # claim goes back and a later resume may try again.
-            await inbox.release_execution(ask.id)
             logger.warning(f"Approved action {name} timed out")
-            return f"'{name}' was approved but timed out. It has not been done."
+            return (
+                f"'{name}' was approved and started, but timed out before confirming. "
+                "It may or may not have completed -- check before trying again."
+            )
         except Exception as e:
             logger.error(f"Approved action {name} failed: {e}", exc_info=True)
             return f"'{name}' was approved but failed: {e}"

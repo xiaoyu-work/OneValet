@@ -229,11 +229,12 @@ class InboxStore:
         return row is not None
 
     async def release_execution(self, ask_id: str) -> None:
-        """Give the claim back when the action could not be attempted.
+        """Give the claim back so the action can be attempted again.
 
-        Only for failures that never reached the tool. Once a tool has run,
-        the claim stays: retrying is a decision for the model, not something
-        to do silently on the user's behalf.
+        Only for a failure that provably never reached the tool. Once a tool
+        has been entered the claim stays, including on timeout: we know only
+        that we stopped waiting, not that nothing happened, and retrying on
+        that basis would risk doing twice what the user approved once.
         """
         if not self._db:
             return
