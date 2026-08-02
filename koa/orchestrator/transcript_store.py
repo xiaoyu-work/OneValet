@@ -134,11 +134,11 @@ class TranscriptStore:
             turn=row["turn"] or 0,
         )
 
-    async def claim(self, run_id: str, stale_after_seconds: int = 900) -> bool:
+    async def claim(self, run_id: str, stale_after_seconds: int) -> bool:
         """Take exclusive ownership of continuing a run.
 
         Two answers to the same run can arrive within a second of each other,
-        and an operator can POST a resume for a run that is already going. Both
+        and an operator can ask to resume a run that is already going. Both
         would replay the same transcript concurrently: two loops making the
         same calls, and whichever finished last overwriting the other's record
         of what happened.
@@ -148,6 +148,11 @@ class TranscriptStore:
         died mid-run leaves that mark behind forever; one that has gone quiet
         for longer than the lease is treated as abandoned and may be taken
         over. A live run keeps its lease fresh by saving each turn.
+
+        The caller sets the lease, because only it knows how long a turn can
+        legitimately take. Erring long costs a slower recovery from a crash;
+        erring short means stealing a run that is still working, and running
+        its tools a second time.
         """
         if not self._db:
             return False
@@ -164,7 +169,7 @@ class TranscriptStore:
                 run_id,
                 STATUS_RUNNING,
                 STATUS_SUSPENDED,
-                str(stale_after_seconds),
+                str(int(stale_after_seconds)),
             )
         except Exception as e:
             logger.warning(f"Could not claim run {run_id}: {e}")

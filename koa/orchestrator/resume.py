@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 #: is a request in its own right, whatever words it happens to contain.
 _MAX_REPLY_WORDS = 6
 
+#: Slack on top of the longest a turn can take, before a quiet run is assumed
+#: dead. Half an hour: long enough that nothing legitimate is mistaken for a
+#: corpse, short enough that a real crash is recoverable the same day.
+_RESUME_LEASE_MARGIN = 1800
+
 
 class ResumeMixin:
     """Mixin providing resumption of suspended runs.
@@ -90,7 +95,7 @@ class ResumeMixin:
         # And only one continuation at a time. Answers can land together and a
         # resume can be asked for by hand, and two loops replaying the same
         # transcript would repeat each other's work and overwrite the record.
-        if not await store.claim(run_id):
+        if not await store.claim(run_id, self._resume_lease_seconds()):
             logger.info(f"[Resume] Run {run_id} is already being continued; leaving it alone")
             return
 
@@ -206,6 +211,23 @@ class ResumeMixin:
             return None
         logger.info(f"[Resume] Reply {decision!r} answered ask {ask.id} (run={ask.run_id})")
         return ask.run_id
+
+    def _resume_lease_seconds(self) -> int:
+        """How long a run may go quiet before it counts as abandoned.
+
+        A live run writes its transcript after each round of tools, so the
+        longest it can legitimately be silent is one round: a model call with
+        its retries, then the tools that round asked for. Both are bounded by
+        configuration, so the lease is derived from them rather than picked --
+        raise a timeout and the lease follows.
+
+        The margin is deliberately wide. Being too generous means a crashed
+        run waits longer before anyone can take it over; being too tight means
+        taking over a run that is still working, and running its tools twice.
+        """
+        cfg = self._react_config
+        llm_budget = (cfg.llm_max_retries + 1) * cfg.llm_retry_base_delay * 60
+        return int(cfg.agent_tool_execution_timeout + llm_budget + _RESUME_LEASE_MARGIN)
 
     def _agent_type_for_class(self, class_name: str) -> Optional[str]:
         """The registry name for an agent, given the class that recorded an ask.
