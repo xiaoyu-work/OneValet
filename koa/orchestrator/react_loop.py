@@ -200,6 +200,50 @@ class ReactLoopMixin:
                 await asyncio.sleep(0)  # yield control so SSE can flush
         yield AgentEvent(type=EventType.MESSAGE_END, data={})
 
+    async def _persist_transcript(
+        self,
+        context: Optional[Dict[str, Any]],
+        tenant_id: str,
+        messages: List[Dict[str, Any]],
+        user_message: str,
+        metadata: Optional[Dict[str, Any]],
+        turn: int,
+        status: str = "running",
+    ) -> None:
+        """Checkpoint the run so it can outlive this process.
+
+        Keyed by the request id already threaded through the audit log. A run
+        with no request id (a direct loop call in a test) is simply not stored.
+        """
+        store = getattr(self, "_transcript_store", None)
+        if store is None or not store.enabled:
+            return
+        run_id = (context or {}).get("request_id")
+        if not run_id:
+            return
+        await store.save(
+            run_id,
+            tenant_id,
+            messages,
+            user_message=user_message,
+            metadata=metadata or {},
+            turn=turn,
+            status=status,
+        )
+
+    async def _finish_transcript(
+        self,
+        context: Optional[Dict[str, Any]],
+        status: str,
+    ) -> None:
+        """Move a run's stored transcript to its final state."""
+        store = getattr(self, "_transcript_store", None)
+        if store is None or not store.enabled:
+            return
+        run_id = (context or {}).get("request_id")
+        if run_id:
+            await store.mark(run_id, status)
+
     def _should_plan(
         self,
         context: Optional[Dict[str, Any]],
@@ -1063,6 +1107,14 @@ class ReactLoopMixin:
                     tenant_id=tenant_id,
                 )
 
+                # Checkpoint the transcript now that this round's tool results
+                # are recorded. Every persisted copy therefore describes work
+                # that actually completed, so a resume never re-runs a tool
+                # whose result is already in the messages.
+                await self._persist_transcript(
+                    context, tenant_id, messages, user_message, metadata, turn
+                )
+
                 # Stop boundary: tool results are recorded, so the transcript is
                 # complete and it is safe to unwind here.
                 if control.cancelled:
@@ -1146,6 +1198,12 @@ class ReactLoopMixin:
 
         # This run is no longer signalable.
         self._run_controls.finish(tenant_id, control)
+
+        # An interrupted run keeps its transcript: the user stopped it, and it
+        # may be worth continuing. A finished one is terminal and gets pruned.
+        await self._finish_transcript(
+            context, "suspended" if interrupted else "completed"
+        )
 
         if interrupted:
             if not final_response:

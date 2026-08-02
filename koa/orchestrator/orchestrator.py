@@ -75,6 +75,7 @@ from .request_analysis import RequestAnalysisMixin
 from .run_control import RunControlRegistry
 from .tool_manager import ToolManagerMixin
 from .tool_policy import ToolPolicyFilter
+from .transcript_store import TranscriptStore
 
 if TYPE_CHECKING:
     from ..llm.router import ModelRouter
@@ -323,6 +324,9 @@ class Orchestrator(
         # request_interrupt()/queue_steering() with a tenant_id to signal the
         # run the ReAct loop is currently executing for that tenant.
         self._run_controls = RunControlRegistry()
+
+        # Durable transcripts so a run can outlive the process that started it.
+        self._transcript_store = TranscriptStore(database)
 
         # Intent-recognition infrastructure.  See
         # :mod:`koa.orchestrator.intent_feedback` and
