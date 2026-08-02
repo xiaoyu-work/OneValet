@@ -71,13 +71,23 @@ class ReactLoopConfig:
     model fails after exhausting retries. Example: ["anthropic_main", "deepseek"]."""
 
     # Planning
+    planning_enabled: bool = False
+    """Master switch for the planning phase.
+
+    Off by default because planning changes what the user sees: with
+    planning_requires_approval on, a qualifying request answers with a plan
+    and waits, rather than just doing the work. Turn it on deliberately."""
     planning_score_threshold: int = 40
-    """Minimum complexity score to trigger planning phase. Requests with
-    router score >= this value will generate a plan before executing.
-    Set to 0 to always plan, 101 to never plan."""
+    """Router complexity score at or above which a plan is generated.
+
+    Only consulted when model routing is enabled; the score is -1 otherwise.
+    Multi-intent requests trigger planning regardless of this value -- see
+    ReactLoopMixin._should_plan."""
     planning_requires_approval: bool = True
     """Whether to wait for user approval before executing the plan.
-    If False, plan is generated and executed automatically."""
+    If False, plan is generated and executed automatically. Unattended runs
+    (cron, triggers) ignore this and always auto-execute, since nobody is
+    there to approve."""
 
     # Extended reasoning (provider-agnostic via litellm reasoning_effort)
     reasoning_score_threshold: int = 51

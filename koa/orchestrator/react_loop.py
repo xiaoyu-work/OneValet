@@ -19,6 +19,7 @@ from ..models import ToolOutput
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import AgentToolResult
 from .approval import collect_batch_approvals
+from .attendance import is_attended
 from .error_classifier import LLMErrorKind
 from .react_config import (
     COMPLETE_TASK_SCHEMA,
@@ -199,6 +200,42 @@ class ReactLoopMixin:
                 await asyncio.sleep(0)  # yield control so SSE can flush
         yield AgentEvent(type=EventType.MESSAGE_END, data={})
 
+    def _should_plan(
+        self,
+        context: Optional[Dict[str, Any]],
+        routing_score: int,
+    ) -> bool:
+        """Decide whether this request warrants an explicit plan first.
+
+        This used to read the model router's complexity score alone. That tied
+        planning to an optional cost-optimisation feature: routing is opt-in,
+        and routing_score stays at its -1 sentinel whenever it is off, the
+        classifier fails, or a fallback model is in use -- so with the default
+        config, planning could never fire at all.
+
+        The intent analyzer runs on every request and already answers the same
+        question more directly, at no extra round-trip. A request that needs
+        several agents coordinated is exactly what a plan is for; the router's
+        score is a fallback signal for when routing happens to be enabled.
+        """
+        if not self._react_config.planning_enabled:
+            return False
+
+        if routing_score >= self._react_config.planning_score_threshold:
+            return True
+
+        intent = (context or {}).get("intent_analysis")
+        if intent is None:
+            return False
+
+        # Genuinely independent tasks across different agents -- the case the
+        # DAG executor exists for, and the one worth showing the user first.
+        sub_tasks = getattr(intent, "sub_tasks", None) or []
+        if getattr(intent, "intent_type", "") == "multi" and len(sub_tasks) >= 2:
+            return True
+
+        return False
+
     async def _react_loop_events(
         self,
         messages: List[Dict[str, Any]],
@@ -292,7 +329,9 @@ class ReactLoopMixin:
             except Exception as e:
                 logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
 
-        # Enable reasoning for complex requests on the first turn
+        # Enable reasoning for complex requests on the first turn. This still
+        # rides on the router's score, since "is this hard enough to think
+        # harder" is the same question the router already asked.
         enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
         if enable_reasoning:
             logger.info(
@@ -300,7 +339,7 @@ class ReactLoopMixin:
             )
 
         # -- Planning phase --
-        enable_planning = routing_score >= self._react_config.planning_score_threshold
+        enable_planning = self._should_plan(context, routing_score)
 
         # Case 1: Pending plan from previous turn -- user is responding to it
         # Check both persistent store and in-memory fallback.
@@ -339,7 +378,13 @@ class ReactLoopMixin:
                     llm_client_override=routed_llm_client,
                 )
                 plan_data = self._extract_plan_from_response(plan_response)
-                if plan_data and self._react_config.planning_requires_approval:
+                # Approval needs someone to give it. On a cron job or trigger
+                # the plan would be presented to nobody and the run would stop
+                # there, so those execute the plan directly.
+                await_approval = self._react_config.planning_requires_approval and is_attended(
+                    metadata
+                )
+                if plan_data and await_approval:
                     # Present plan to user, pause execution
                     plan_text = self._format_plan_text(plan_data)
                     friendly = self._format_plan_for_user(plan_data)
