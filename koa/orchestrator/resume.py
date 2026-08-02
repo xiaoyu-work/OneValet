@@ -89,9 +89,13 @@ class ResumeMixin:
             return
 
         if not pending:
-            # Nothing was outstanding -- the run died between rounds rather
-            # than mid-tool. Replaying the loop from here is still correct.
+            # The run died between rounds rather than mid-tool, or the thing
+            # it was waiting on was never a tool call of its own. Either way
+            # the transcript alone says nothing has changed, so the answers go
+            # in as turns the model will read.
             logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
+            for text in merged.values():
+                messages.append({"role": "user", "content": text})
         else:
             self._answer_pending_calls(messages, pending, merged)
 

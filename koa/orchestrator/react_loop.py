@@ -232,21 +232,29 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         run_id = (context or {}).get("request_id")
         if not run_id:
             return
-        if status == STATUS_COMPLETED and await self._has_open_asks(run_id):
-            logger.info(f"[ReAct] Run {run_id} is waiting on the user; keeping it resumable")
+        if status == STATUS_COMPLETED and await self._owes_the_user(run_id):
+            logger.info(f"[ReAct] Run {run_id} still owes the user; keeping it resumable")
             status = STATUS_SUSPENDED
         await store.mark(run_id, status)
 
-    async def _has_open_asks(self, run_id: str) -> bool:
-        """Whether this run is still waiting on a person for anything."""
+    async def _owes_the_user(self, run_id: str) -> bool:
+        """Whether this run has anything outstanding with a person.
+
+        Two kinds count. A question they have not answered, obviously. But
+        also an action they *did* approve that has not been carried out --
+        the run may have ended without reaching it, and marking it finished
+        would strand a decision the user already made.
+        """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
             return False
         try:
-            return any(ask.is_open for ask in await inbox.for_run(run_id))
+            return any(
+                ask.is_open or ask.awaits_execution for ask in await inbox.for_run(run_id)
+            )
         except Exception as e:
-            # Reporting "nothing open" here would mark the run completed and
-            # strand a real ask, so an unreadable Inbox keeps it resumable.
+            # Reporting "nothing outstanding" here would mark the run completed
+            # and strand a real ask, so an unreadable Inbox keeps it resumable.
             logger.warning(f"[ReAct] Could not check open asks for {run_id}: {e}")
             return True
 

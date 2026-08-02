@@ -228,24 +228,6 @@ class InboxStore:
             return False
         return row is not None
 
-    async def release_execution(self, ask_id: str) -> None:
-        """Give the claim back so the action can be attempted again.
-
-        Only for a failure that provably never reached the tool. Once a tool
-        has been entered the claim stays, including on timeout: we know only
-        that we stopped waiting, not that nothing happened, and retrying on
-        that basis would risk doing twice what the user approved once.
-        """
-        if not self._db:
-            return
-        try:
-            await self._db.execute(
-                "UPDATE pending_asks SET executed_at = NULL WHERE id = $1",
-                ask_id,
-            )
-        except Exception as e:
-            logger.warning(f"Could not release execution claim on {ask_id}: {e}")
-
     async def resolve(
         self,
         ask_id: str,

@@ -78,6 +78,7 @@ logger = logging.getLogger(__name__)
 APPROVAL_APPROVED = "approved"
 APPROVAL_DECLINED = "declined"
 APPROVAL_ASKED = "asked"
+APPROVAL_ALREADY_DONE = "already_done"
 APPROVAL_UNAVAILABLE = "unavailable"
 
 
@@ -1270,6 +1271,12 @@ class StandardAgent(BaseAgent):
                             "continue once they answer. Do not retry it in this run."
                         )
                         status = "asked"
+                    elif decision == APPROVAL_ALREADY_DONE:
+                        error_text = (
+                            f"'{tc.name}' was already carried out after the user approved "
+                            "it. Do not run it again; use the result you already have."
+                        )
+                        status = "already_done"
                     elif decision == APPROVAL_DECLINED:
                         error_text = (
                             f"The user declined '{tc.name}'. Do not run it; "
@@ -1564,10 +1571,10 @@ class StandardAgent(BaseAgent):
                 logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
                 continue
 
-            notes.append(await self._run_approved_tool(inbox, ask, tool, args))
+            notes.append(await self._run_approved_tool(tool, args))
         return notes
 
-    async def _run_approved_tool(self, inbox: Any, ask: Any, tool: Any, args: Dict[str, Any]) -> str:
+    async def _run_approved_tool(self, tool: Any, args: Dict[str, Any]) -> str:
         """Execute one approved action and describe the outcome.
 
         The claim is never handed back. A tool that raised may still have done
@@ -1627,18 +1634,8 @@ class StandardAgent(BaseAgent):
             return APPROVAL_UNAVAILABLE
 
         prior = await self._prior_inbox_decision(inbox, run_id, tc.name, args)
-        if prior is not None:
-            if prior == "pending":
-                # Already asked on an earlier attempt at this run. Asking again
-                # would put a second copy of the same question in front of the
-                # user, so wait for the one that is already out there.
-                return APPROVAL_ASKED
-            approved = is_approval(prior)
-            logger.info(
-                f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
-                f"user already {'approved' if approved else 'declined'} this"
-            )
-            return APPROVAL_APPROVED if approved else APPROVAL_DECLINED
+        if prior:
+            return prior
 
         preview = await self._approval_preview(tc, tool, args)
         try:
@@ -1661,7 +1658,7 @@ class StandardAgent(BaseAgent):
         # A conflict returns the row that already existed, which may carry an
         # answer given while this run was away.
         if not ask.is_open:
-            return APPROVAL_APPROVED if is_approval(ask.resolution) else APPROVAL_DECLINED
+            return await self._spend_decision(inbox, ask, tc.name)
 
         # Deliver it to wherever the user is. Best-effort: the ask is durable,
         # so a failed notification means they find it in the app instead.
@@ -1675,28 +1672,52 @@ class StandardAgent(BaseAgent):
 
     async def _prior_inbox_decision(
         self, inbox: Any, run_id: str, tool_name: str, args: Dict[str, Any]
-    ) -> Optional[str]:
+    ) -> str:
         """What the user already said about this exact action on this run.
 
-        ``"pending"`` when the question is out but unanswered, the resolution
-        text when answered, and None when it has never been asked.
+        Returns a decision constant, or "" when it has never been asked.
+
+        An approval authorises one execution. Finding one therefore *takes*
+        it, via the same compare-and-swap that guards the resume path -- so a
+        model that calls the tool again after being told it was done finds the
+        authorisation already spent rather than a second licence to act.
         """
         wanted = action_key(tool_name, args)
         try:
             asks = await inbox.for_run(run_id)
         except Exception as e:
-            # Treating an unreadable Inbox as "never asked" would ask again and
-            # could act twice; treating it as pending stalls safely instead.
+            # Treating an unreadable Inbox as "never asked" would ask again
+            # and could act twice; reporting it as outstanding stalls safely.
             logger.warning(f"Could not read prior asks for run {run_id}: {e}")
-            return "pending"
+            return APPROVAL_ASKED
         for ask in asks:
             data = ask.data or {}
             if action_key(data.get("tool"), data.get("args")) != wanted:
                 continue
-            if ask.is_open:
-                return "pending"
-            return (ask.resolution or "").strip().lower()
-        return None
+            return await self._spend_decision(inbox, ask, tool_name)
+        return ""
+
+    async def _spend_decision(self, inbox: Any, ask: Any, tool_name: str) -> str:
+        """Turn an existing ask into this call's decision, consuming it once."""
+        if ask.is_open:
+            # Already asked on an earlier attempt at this run. Asking again
+            # would put a second copy of the same question in front of the
+            # user, so wait for the one that is already out there.
+            return APPROVAL_ASKED
+        if not is_approval(ask.resolution):
+            logger.info(f"[{self.__class__.__name__}:{self.name}] {tool_name}: user declined this")
+            return APPROVAL_DECLINED
+        if await inbox.claim_execution(ask.id):
+            logger.info(
+                f"[{self.__class__.__name__}:{self.name}] {tool_name}: "
+                "user approved this; carrying it out"
+            )
+            return APPROVAL_APPROVED
+        logger.info(
+            f"[{self.__class__.__name__}:{self.name}] {tool_name}: "
+            "approval already spent; not repeating it"
+        )
+        return APPROVAL_ALREADY_DONE
 
     async def _approval_preview(self, tc, tool, args: Dict[str, Any]) -> str:
         """What the user actually sees on their phone.

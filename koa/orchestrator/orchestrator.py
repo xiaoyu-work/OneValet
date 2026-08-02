@@ -1470,7 +1470,9 @@ class Orchestrator(
         if session_prompt:
             context["session_memory_prompt"] = session_prompt
 
-        self._persist_long_term_memory(result, context, tenant_id, messages, status_value)
+        self._persist_long_term_memory(
+            result, context, tenant_id, messages, status_value, user_message
+        )
 
         # True Memory proposal extraction — runs synchronously so proposals
         # are available in result.metadata before the response is returned.
@@ -1551,8 +1553,14 @@ class Orchestrator(
         tenant_id: str,
         messages: List[Dict[str, Any]],
         status_value: str,
+        user_message: str,
     ) -> None:
         """Store the turn in long-term memory when governance allows it.
+
+        ``user_message`` is passed rather than read back off the context: a
+        resumed run replays a message that is already in memory, and judging
+        the turn on it would admit an assistant-only record on the strength of
+        something the record does not contain.
 
         The decision is recorded on the result either way, so a caller can see
         why a turn was or was not kept. The write itself is fire-and-forget:
@@ -1562,7 +1570,7 @@ class Orchestrator(
             return
 
         decision = self.memory_governance.decide_storage(
-            user_message=context.get("message", ""),
+            user_message=user_message,
             assistant_message=result.raw_message,
             result_status=status_value,
             metadata={**(context.get("metadata") or {}), **(result.metadata or {})},
