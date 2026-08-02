@@ -5,7 +5,6 @@ and its helper methods.
 """
 
 import asyncio
-import dataclasses
 import json
 import logging
 import random
@@ -15,7 +14,6 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ..constants import GENERATE_PLAN_SCHEMA
 from ..llm.tool_validator import ToolSchemaValidator
-from ..models import ToolOutput
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import AgentToolResult
 from .approval import collect_batch_approvals
@@ -25,10 +23,10 @@ from .react_config import (
     COMPLETE_TASK_SCHEMA,
     COMPLETE_TASK_TOOL_NAME,
     CompleteTaskResult,
-    TokenUsage,
     ToolCallRecord,
 )
 from .run_state import RunState
+from .tool_execution import ToolExecutionMixin, TurnOutcome
 from .transcript_repair import repair_transcript
 
 logger = logging.getLogger(__name__)
@@ -120,7 +118,7 @@ def _tool_acknowledgment(tool_names: List[str], turn: int) -> Optional[str]:
     return random.choice(_CASUAL_ACKS)
 
 
-class ReactLoopMixin:
+class ReactLoopMixin(ToolExecutionMixin):
     """Mixin providing the ReAct loop and its helpers.
 
     Expects the following attributes on ``self`` (provided by Orchestrator):
@@ -756,272 +754,24 @@ class ReactLoopMixin:
                         data={"tool_name": tc.name, "call_id": tc.id},
                     )
 
-                # Execute all tool calls concurrently with per-tool timing.
-                # When speculative tasks exist (image requests), check if a
-                # matching result is already available before executing.
-                speculative = (context or {}).get("_speculative_tasks", {})
-
-                async def _timed_execute(tc):
-                    t0 = time.monotonic()
-
-                    # Try to reuse a speculative result
-                    if speculative and tc.name == "google_search":
-                        try:
-                            args = (
-                                tc.arguments
-                                if isinstance(tc.arguments, dict)
-                                else json.loads(tc.arguments)
-                            )
-                        except (json.JSONDecodeError, TypeError):
-                            args = {}
-                        search_type = args.get("search_type", "web")
-                        spec_key = f"google_search:{search_type}"
-                        spec_task = speculative.pop(spec_key, None)
-                        if spec_task is not None:
-                            try:
-                                result = await spec_task
-                                if result is not None:
-                                    elapsed = int((time.monotonic() - t0) * 1000)
-                                    logger.info(
-                                        f"[Speculative] ♻️  Reused {spec_key} "
-                                        f"(waited {elapsed}ms for pre-started task)"
-                                    )
-                                    return TimedResult(result=result, duration_ms=elapsed)
-                            except Exception as e:
-                                logger.info(f"[Speculative] {spec_key} failed, falling back: {e}")
-
-                    # Normal execution path
-                    try:
-                        r = await control.race(
-                            self._execute_with_timeout(
-                                tc,
-                                tenant_id,
-                                metadata=metadata,
-                                request_tools=request_tools,
-                                request_context=context,
-                            ),
-                            interrupted=_INTERRUPTED,
-                        )
-                        if r is _INTERRUPTED:
-                            r = InterruptedError("Interrupted by user during execution.")
-                    except BaseException as exc:
-                        return TimedResult(
-                            result=exc, duration_ms=int((time.monotonic() - t0) * 1000)
-                        )
-                    return TimedResult(result=r, duration_ms=int((time.monotonic() - t0) * 1000))
-
-                # Execute tools eagerly: yield results as each completes
-                # instead of waiting for all to finish (asyncio.gather).
-                async def _timed_with_index(idx, tc):
-                    return (idx, await _timed_execute(tc))
-
                 # Token attribution for this turn
                 turn_tokens = state.turn_tokens(usage)
 
-                loop_broken = False
-                loop_broken_text = None
-
-                # Ordered results for watchdog/passthrough downstream
-                timed_results = [None] * len(tool_calls)
-
-                for _coro in asyncio.as_completed(
-                    [_timed_with_index(i, tc) for i, tc in enumerate(tool_calls)]
+                outcome = TurnOutcome()
+                async for event in self._run_tool_calls(
+                    tool_calls,
+                    messages,
+                    state,
+                    control,
+                    outcome,
+                    metadata=metadata,
+                    request_tools=request_tools,
+                    context=context,
+                    turn_tokens=turn_tokens,
+                    interrupted_sentinel=_INTERRUPTED,
                 ):
-                    _idx, timed = await _coro
-                    tc = tool_calls[_idx]
-                    timed_results[_idx] = timed
-                    tc_name = tc.name
-                    is_agent = self._is_agent_tool(tc_name)
-                    kind = "agent" if is_agent else "tool"
-                    # Unwrap TimedResult
-                    if isinstance(timed, TimedResult):
-                        result = timed.result
-                        tc_duration = timed.duration_ms
-                    else:
-                        result = timed
-                        tc_duration = 0
-
-                    try:
-                        args_summary = (
-                            tc.arguments
-                            if isinstance(tc.arguments, dict)
-                            else json.loads(tc.arguments)
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        args_summary = {}
-                    args_summary = {k: str(v)[:100] for k, v in args_summary.items()}
-
-                    if isinstance(result, BaseException):
-                        logger.warning(f"[ReAct]   {kind}={tc_name} ERROR: {result}")
-                        error_text = f"Error executing {tc_name}: {result}"
-                        messages.append(
-                            self._build_tool_result_message(tc.id, error_text, is_error=True)
-                        )
-                        state.tool_records.append(
-                            ToolCallRecord(
-                                name=tc_name,
-                                args_summary=args_summary,
-                                duration_ms=tc_duration,
-                                success=False,
-                                result_chars=len(error_text),
-                                token_attribution=turn_tokens,
-                            )
-                        )
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": kind,
-                                "success": False,
-                                "error": str(result),
-                                "result_preview": error_text[:240],
-                            },
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name,
-                            args_summary=args_summary,
-                            success=False,
-                            duration_ms=tc_duration,
-                            error=str(result),
-                            tenant_id=tenant_id,
-                        )
-
-                    elif isinstance(result, AgentToolResult) and not result.completed:
-                        logger.info(f"[ReAct]   {kind}={tc_name} WAITING")
-                        if result.agent:
-                            await self.agent_pool.add_agent(result.agent)
-                        if result.approval_request:
-                            state.pending_approvals.append(result.approval_request)
-                        waiting_text = result.result_text or "Agent is waiting for input."
-                        messages.append(self._build_tool_result_message(tc.id, waiting_text))
-                        waiting_status = (
-                            "WAITING_FOR_APPROVAL"
-                            if result.approval_request
-                            else "WAITING_FOR_INPUT"
-                        )
-                        state.tool_records.append(
-                            ToolCallRecord(
-                                name=tc_name,
-                                args_summary=args_summary,
-                                duration_ms=tc_duration,
-                                success=True,
-                                result_status=waiting_status,
-                                result_chars=len(waiting_text),
-                                token_attribution=turn_tokens,
-                            )
-                        )
-                        tool_trace: List = []
-                        if isinstance(result.metadata, dict):
-                            tool_trace = result.metadata.get("tool_trace") or []
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": "agent",
-                                "success": True,
-                                "waiting": True,
-                                "status": waiting_status,
-                                "result_preview": waiting_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                        yield AgentEvent(
-                            type=EventType.STATE_CHANGE,
-                            data={"agent_type": tc_name, "status": waiting_status},
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name,
-                            args_summary=args_summary,
-                            success=True,
-                            duration_ms=tc_duration,
-                            tenant_id=tenant_id,
-                        )
-                        loop_broken = True
-                        loop_broken_text = waiting_text
-
-                    else:
-                        # Extract text and optional media from the result
-                        result_media = []
-                        if isinstance(result, ToolOutput):
-                            result_text = result.text
-                            result_media = result.media or []
-                            tool_trace = []
-                        elif isinstance(result, AgentToolResult):
-                            result_text = result.result_text
-                            r_meta = result.metadata if isinstance(result.metadata, dict) else {}
-                            tool_trace = r_meta.get("tool_trace") or []
-                            # Collect media forwarded from agent's internal tools
-                            agent_media = r_meta.get("media") or []
-                            result_media = agent_media
-                        else:
-                            result_text = str(result) if result is not None else ""
-                            tool_trace = []
-                        result_chars_original = len(result_text)
-                        original_len = len(result_text)
-                        # Hard cap on tool result size
-                        result_text = self._cap_tool_result(result_text)
-                        result_text = self._context_manager.truncate_tool_result(result_text)
-                        if is_agent and len(result_text) > 2000:
-                            result_text = (
-                                result_text[:1500]
-                                + f"\n...[truncated from {original_len} to 1500 chars]"
-                            )
-                        elif len(result_text) < original_len:
-                            result_text += (
-                                f"\n...[truncated from {original_len} to {len(result_text)} chars]"
-                            )
-                        logger.info(
-                            f"[ReAct]   {kind}={tc_name} OK ({len(result_text)} chars, media={len(result_media)})"
-                        )
-                        messages.append(
-                            self._build_tool_result_message(
-                                tc.id,
-                                result_text,
-                                media=result_media,
-                            )
-                        )
-
-                        # Collect media for the final response:
-                        # - for_storage=True media (images) for client persistence
-                        # - inline_cards for frontend card rendering
-                        for m in result_media:
-                            meta = m.get("metadata", {})
-                            if meta.get("for_storage") or m.get("type") == "inline_cards":
-                                _append_unique_media(state.response_media, [m])
-
-                        state.tool_records.append(
-                            ToolCallRecord(
-                                name=tc_name,
-                                args_summary=args_summary,
-                                duration_ms=tc_duration,
-                                success=True,
-                                result_status="COMPLETED"
-                                if isinstance(result, AgentToolResult)
-                                else None,
-                                result_chars=result_chars_original,
-                                token_attribution=turn_tokens,
-                            )
-                        )
-                        yield AgentEvent(
-                            type=EventType.TOOL_RESULT,
-                            data={
-                                "tool_name": tc_name,
-                                "call_id": tc.id,
-                                "kind": kind,
-                                "success": True,
-                                "result_preview": result_text[:240],
-                                "tool_trace": tool_trace,
-                            },
-                        )
-                        self._audit.log_tool_execution(
-                            tool_name=tc_name,
-                            args_summary=args_summary,
-                            success=True,
-                            duration_ms=tc_duration,
-                            tenant_id=tenant_id,
-                        )
+                    yield event
+                timed_results = outcome.timed_results
 
                 # complete_task was called alongside other tools -- add its result
                 # AFTER all other tools' results have been appended to messages
@@ -1090,15 +840,17 @@ class ReactLoopMixin:
                     state.interrupted = True
                     break
 
-                if loop_broken:
-                    state.final_response = loop_broken_text or ""
+                if outcome.waiting:
+                    state.final_response = outcome.waiting_text or ""
                     state.result_status = (
                         "WAITING_FOR_APPROVAL" if state.pending_approvals else "WAITING_FOR_INPUT"
                     )
                     if state.pending_approvals:
                         state.pending_approvals = collect_batch_approvals(state.pending_approvals)
-                    if loop_broken_text:
-                        async for event in self._yield_chunked_response(loop_broken_text, turn):
+                    if outcome.waiting_text:
+                        async for event in self._yield_chunked_response(
+                            outcome.waiting_text, turn
+                        ):
                             yield event
                     break
 
