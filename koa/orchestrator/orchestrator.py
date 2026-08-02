@@ -758,7 +758,9 @@ class Orchestrator(
                 return
 
             # Step 5 & 6: Build tool schemas and LLM messages in parallel
-            tool_schemas_task = self._build_tool_schemas(tenant_id, domains=intent.domains)
+            tool_schemas_task = self._build_tool_schemas_with_domain_fallback(
+                tenant_id, domains=intent.domains
+            )
             messages_task = self._build_llm_messages(
                 context, message, needs_memory=intent.needs_memory
             )
@@ -1194,25 +1196,23 @@ class Orchestrator(
         tenant_id: str,
         domains: List[str],
     ) -> List[Dict[str, Any]]:
-        """Build tool schemas with domain filtering, falling back to all tools.
+        """Build tool schemas for a set of domains, falling back to all tools.
 
-        When a sub-task has a specific domain (e.g. "travel") but no agent-tools
-        match that domain, the sub-task would get zero agent-tools and fail
-        silently.  This helper detects that case and falls back to loading ALL
-        available tools so the sub-task can still execute.
+        Domain filtering is only as good as the intent classifier. When it
+        names a domain no agent serves -- a misclassification, or a domain
+        whose agents the tenant has not connected -- the filter yields zero
+        agent-tools. The model then has nothing to call and answers from its
+        own knowledge, which reads as a confident wrong answer rather than a
+        failure.
 
-        Args:
-            tenant_id: Tenant identifier for credential filtering.
-            domains: List of domains to attempt filtering by.
-
-        Returns:
-            Tool schemas list (domain-filtered, or all tools on fallback).
+        Falling back to the full toolset costs prompt tokens but keeps the
+        request answerable, so a classifier mistake degrades to "slower and
+        broader" instead of "silently wrong".
         """
         schemas = await self._build_tool_schemas(tenant_id, domains=domains)
 
-        # Count how many are actual agent-tools (not builtin tools or complete_task)
+        # Count how many are actual agent-tools (not builtin tools)
         builtin_names = {t.name for t in getattr(self, "builtin_tools", [])}
-        builtin_names.add("complete_task")
         agent_tool_count = sum(
             1
             for s in schemas
@@ -1221,8 +1221,8 @@ class Orchestrator(
 
         if agent_tool_count == 0:
             logger.warning(
-                f"[DAG] Domain filter {domains} yielded 0 agent-tools; "
-                f"falling back to all tools for this sub-task"
+                f"[Tools] Domain filter {domains} yielded 0 agent-tools; "
+                f"falling back to all tools"
             )
             schemas = await self._build_tool_schemas(tenant_id, domains=None)
 
