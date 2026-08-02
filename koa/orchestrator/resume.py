@@ -14,11 +14,10 @@ so a resume is safe to attempt more than once.
 from __future__ import annotations
 
 import logging
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ..streaming.models import AgentEvent, EventType
 from .ask_mirror import parse_reply
-from .inbox import is_approval
 from .transcript_store import (
     STATUS_COMPLETED,
     STATUS_FAILED,
@@ -76,9 +75,8 @@ class ResumeMixin:
         messages = list(transcript.messages)
         pending = store.unanswered_tool_calls(messages)
 
-        # Decisions the user has made since this run stopped.
-        decisions, open_asks = await self._collect_inbox_answers(run_id)
-
+        # A run wakes once, when nothing is left for the user to answer.
+        open_asks = await self._open_ask_count(run_id)
         if open_asks:
             # Waking now would act on the answers we have and record the rest
             # as "never ran", so the answers still coming would arrive to a run
@@ -91,12 +89,14 @@ class ResumeMixin:
         # Two different things can be outstanding, and they are answered in
         # different currencies. A tool call the process died in the middle of
         # needs a tool result under its own id. A decision the user made needs
-        # telling, because the id it was recorded against belongs to an inner
-        # loop this transcript has never seen.
+        # acting on and then telling, because the id it was recorded against
+        # belongs to an inner loop this transcript has never seen.
         if pending:
             self._answer_pending_calls(messages, pending, answers or {})
         else:
             logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
+
+        decisions = await self._honour_decisions(run_id, transcript.tenant_id)
         for note in decisions:
             messages.append({"role": "user", "content": note})
 
@@ -197,44 +197,83 @@ class ResumeMixin:
         logger.info(f"[Resume] Reply {decision!r} answered ask {ask.id} (run={ask.run_id})")
         return ask.run_id
 
-    async def _collect_inbox_answers(self, run_id: str) -> Tuple[List[str], int]:
-        """Decisions this run is still owed action on, and how many are unanswered.
+    async def _honour_decisions(self, run_id: str, tenant_id: str) -> List[str]:
+        """Carry out every decision this run is still owed, and describe them.
 
-        Returned as text for the model to read rather than keyed by tool call
-        id. The ids the Inbox holds come from the agent's own inner loop and
-        mean nothing in the orchestrator's transcript, so slotting them in as
-        tool results was never going to reach anything -- the model has to be
-        told in the one language it shares with both levels.
+        Done here rather than left to the replayed loop because the loop
+        cannot be relied on: the model would have to choose, unprompted, to go
+        back to the agent that owns the action. When it does not, the user's
+        answer is never acted on and nothing notices -- the ask is answered,
+        so no amount of waking the run again would help.
 
-        Decisions already acted on are left out. Repeating them would send the
-        model after work that is finished, and the gate would refuse it.
+        Each owning agent is asked directly instead. Agents that no longer
+        exist are skipped rather than failing the resume; their asks stay
+        unacted and keep the run listed as owing something.
         """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
-            return [], 0
+            return []
+        try:
+            asks = await inbox.for_run(run_id)
+        except Exception as e:
+            logger.warning(f"[Resume] Could not read decisions for run {run_id}: {e}")
+            return []
+
+        owners = []
+        for ask in asks:
+            if not ask.awaits_execution or ask.kind != "approval":
+                continue
+            owner = (ask.data or {}).get("agent_type")
+            if owner and owner not in owners:
+                owners.append(owner)
+        if not owners:
+            return []
+
         notes: List[str] = []
-        open_count = 0
-        for ask in await inbox.for_run(run_id):
-            if ask.is_open:
-                open_count += 1
+        for agent_type in owners:
+            agent = await self.create_agent(
+                tenant_id,
+                agent_type,
+                context_hints={
+                    "inbox": inbox,
+                    "run_id": run_id,
+                    "agent_type": agent_type,
+                    "attended": False,
+                    "resumed": True,
+                },
+            )
+            if agent is None:
+                logger.warning(f"[Resume] Cannot reach {agent_type} to honour its approvals")
                 continue
-            if not ask.resolution or not ask.awaits_execution:
-                continue
-            tool_name = (ask.data or {}).get("tool", "the action")
-            agent = (ask.data or {}).get("agent", "the agent that asked")
-            if ask.kind != "approval":
-                notes.append(f"The user answered: {ask.resolution}")
-            elif is_approval(ask.resolution):
-                notes.append(
-                    f"The user approved '{tool_name}'. Continue the request that was "
-                    f"waiting on it -- {agent} will carry it out."
-                )
-            else:
-                notes.append(
-                    f"The user declined '{tool_name}'. Continue without it and tell "
-                    "them what you did not do."
-                )
-        return notes, open_count
+            try:
+                notes.extend(await agent._carry_out_approved_actions())
+            except Exception as e:
+                logger.error(f"[Resume] {agent_type} failed honouring approvals: {e}")
+            finally:
+                # Created only to honour these decisions; leaving it in the
+                # pool would count against the tenant's agent limit and could
+                # be picked up as a live conversation.
+                await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
+        return notes
+
+    async def _open_ask_count(self, run_id: str) -> int:
+        """How many of this run's questions the user has not answered yet.
+
+        A run wakes once, when the count reaches zero. Waking earlier would
+        act on the answers in hand and record the rest as never having run, so
+        the answers still on their way would arrive to a run that had already
+        moved past them.
+        """
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled:
+            return 0
+        try:
+            return sum(1 for ask in await inbox.for_run(run_id) if ask.is_open)
+        except Exception as e:
+            # Resuming on a guess could act on a decision the user has not
+            # made, so an unreadable Inbox holds the run rather than waking it.
+            logger.warning(f"[Resume] Could not count open asks for {run_id}: {e}")
+            return 1
 
     async def answer_ask(
         self,

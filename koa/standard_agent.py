@@ -1677,7 +1677,12 @@ class StandardAgent(BaseAgent):
                 title=f"Approve {tc.name}?",
                 body=preview,
                 options=["approve", "reject"],
-                data={"tool": tc.name, "args": args, "agent": self.__class__.__name__},
+                data={
+                    "tool": tc.name,
+                    "args": args,
+                    "agent": self.__class__.__name__,
+                    "agent_type": hints.get("agent_type", ""),
+                },
             )
         except Exception as e:
             logger.error(f"Could not record approval ask for {tc.name}: {e}")

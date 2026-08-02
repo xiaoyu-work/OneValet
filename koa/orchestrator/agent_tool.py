@@ -128,6 +128,10 @@ async def execute_agent_tool(
     run_id = (request_context or {}).get("request_id")
     if run_id:
         enriched_hints["run_id"] = run_id
+    # The name the orchestrator invokes this agent by. Recorded on any ask the
+    # agent raises, so a resume can go straight back to it instead of hoping
+    # the model chooses to.
+    enriched_hints["agent_type"] = agent_type
     # Only a resumed run can have approvals waiting to be carried out, so a
     # first run should not pay for the lookup.
     if (request_context or {}).get("resumed"):
