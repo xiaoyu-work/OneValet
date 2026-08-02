@@ -1,7 +1,19 @@
-"""ReAct loop mixin for the Orchestrator.
+"""The ReAct loop: think, act, look at what came back, repeat.
 
-Contains the core ReAct (Reasoning + Acting) loop implementation
-and its helper methods.
+This module holds the loop itself and the decisions that belong to a run
+as a whole -- which model to use, when to stop, what to say at the end.
+The work of a single turn lives next door:
+
+- ``planning.py``   -- draft a plan first, when the request warrants one
+- ``turn_gate.py``  -- screen the calls the model asked for
+- ``tool_execution.py`` -- run them and turn each result into an event
+- ``watchdog.py``   -- notice when the run has stopped making progress
+- ``run_state.py``  -- what the run accumulates from start to finish
+
+A turn ends for one of several reasons -- the model answered, it called
+complete_task, an agent needs the user, a single agent already said
+everything worth saying, the run is repeating itself, the budget ran out.
+Each is a guarded break in the loop body, and they read in that order.
 """
 
 import asyncio
