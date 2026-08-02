@@ -303,5 +303,20 @@ class ResumeMixin:
         tenant_id: str,
         limit: int = 20,
     ) -> List[Dict[str, Any]]:
-        """Runs for this tenant that stopped before finishing."""
-        return await self._transcript_store.list_resumable(tenant_id, limit)
+        """Runs for this tenant that stopped before finishing.
+
+        Includes runs holding a decision the user made that was never acted
+        on. Those are invisible to every other path -- both ways of waking a
+        run begin with answering a question that is still open, and theirs has
+        been answered -- so without this they would sit forever.
+        """
+        runs = await self._transcript_store.list_resumable(tenant_id, limit)
+        seen = {r.get("run_id") for r in runs}
+
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled:
+            return runs
+        for run_id in await inbox.runs_awaiting_execution(tenant_id, limit):
+            if run_id not in seen:
+                runs.append({"run_id": run_id, "status": "awaiting_action"})
+        return runs

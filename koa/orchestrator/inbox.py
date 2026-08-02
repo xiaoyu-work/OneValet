@@ -30,7 +30,6 @@ KIND_PLAN = "plan"
 
 STATE_PENDING = "pending"
 STATE_RESOLVED = "resolved"
-STATE_CANCELLED = "cancelled"
 
 
 @dataclass
@@ -228,6 +227,34 @@ class InboxStore:
             return False
         return row is not None
 
+    async def runs_awaiting_execution(self, tenant_id: str, limit: int = 20) -> List[str]:
+        """Runs holding a decision the user made that was never acted on.
+
+        A run reaches this state when the model, on resuming, did not go back
+        to the agent that owns the approved action. Nothing else will notice:
+        both ways of waking a run start from answering a question that is
+        still open, and this question has been answered. Without a way to list
+        them, the user's decision sits in the database forever.
+        """
+        if not self._db:
+            return []
+        try:
+            rows = await self._db.fetch(
+                """
+                SELECT DISTINCT run_id FROM pending_asks
+                WHERE tenant_id = $1 AND state = $2 AND executed_at IS NULL
+                ORDER BY run_id
+                LIMIT $3
+                """,
+                tenant_id,
+                STATE_RESOLVED,
+                limit,
+            )
+        except Exception as e:
+            logger.warning(f"Could not list runs awaiting execution for {tenant_id}: {e}")
+            return []
+        return [r["run_id"] for r in rows]
+
     async def resolve(
         self,
         ask_id: str,
@@ -323,25 +350,3 @@ class InboxStore:
             logger.warning(f"Could not list asks for run {run_id}: {e}")
             return []
         return [_row_to_ask(r) for r in rows]
-
-    async def cancel_run(self, run_id: str, reason: str = "run cancelled") -> int:
-        """Close a run's open asks. An ask nobody can act on is noise."""
-        if not self._db:
-            return 0
-        try:
-            rows = await self._db.fetch(
-                """
-                UPDATE pending_asks
-                   SET state = $2, resolution = $3, resolved_at = NOW()
-                 WHERE run_id = $1 AND state = $4
-                RETURNING id
-                """,
-                run_id,
-                STATE_CANCELLED,
-                reason,
-                STATE_PENDING,
-            )
-            return len(rows)
-        except Exception as e:
-            logger.warning(f"Could not cancel asks for run {run_id}: {e}")
-            return 0

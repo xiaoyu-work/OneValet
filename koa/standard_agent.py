@@ -1541,38 +1541,67 @@ class StandardAgent(BaseAgent):
             if not ask.awaits_execution or ask.kind != "approval":
                 continue
             data = ask.data or {}
-            tool_name = data.get("tool")
-            if not is_approval(ask.resolution):
-                # Declined. Stamp it so a later resume does not reconsider,
-                # and tell the model so it can say what it did not do.
-                if await inbox.claim_execution(ask.id):
-                    notes.append(f"The user declined '{tool_name}'. It was not run.")
+            # Asks are keyed by run, and a run can involve several agents. One
+            # agent must not consume another's decision: it does not own the
+            # tool, so stamping the ask here would mark the action done when
+            # the agent that can actually perform it has not seen it yet.
+            owner = data.get("agent")
+            if owner and owner != self.__class__.__name__:
                 continue
-
-            tool = self._find_tool(tool_name) if tool_name else None
-            if tool is None:
-                logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
+            try:
+                note = await self._honour_decision(inbox, ask, data)
+            except Exception as e:
+                # One ask failing must not discard the notes for actions that
+                # already happened -- those side effects are real and the model
+                # has to be told about them.
+                logger.error(f"Could not honour ask {ask.id}: {e}", exc_info=True)
                 continue
-
-            args = data.get("args") or {}
-            # The user's approval says they want this done; it does not
-            # override whether they are allowed to. A permission revoked since
-            # the question was asked still applies.
-            policy = self._evaluate_tool_policy(tool, args)
-            if policy is not None and not policy.allowed:
-                if await inbox.claim_execution(ask.id):
-                    notes.append(
-                        f"'{tool_name}' was approved but is no longer permitted: "
-                        f"{policy.reason}. It was not run."
-                    )
-                continue
-
-            if not await inbox.claim_execution(ask.id):
-                logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
-                continue
-
-            notes.append(await self._run_approved_tool(tool, args))
+            if note:
+                notes.append(note)
         return notes
+
+    async def _honour_decision(self, inbox: Any, ask: Any, data: Dict[str, Any]) -> str:
+        """Act on one decision the user made, and say what happened."""
+        tool_name = data.get("tool")
+
+        if not is_approval(ask.resolution):
+            # Declined. Stamp it so a later resume does not reconsider,
+            # and tell the model so it can say what it did not do.
+            if await inbox.claim_execution(ask.id):
+                return f"The user declined '{tool_name}'. It was not run."
+            return ""
+
+        tool = self._find_tool(tool_name) if tool_name else None
+        if tool is None:
+            # Ours to do, and we cannot. Stamping it is what keeps the run from
+            # sitting suspended forever waiting on a tool that is gone; saying
+            # so is what stops the decision being lost silently.
+            logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
+            if await inbox.claim_execution(ask.id):
+                return (
+                    f"The user approved '{tool_name}', but it is no longer available. "
+                    "Tell them it could not be carried out."
+                )
+            return ""
+
+        args = data.get("args") or {}
+        # The user's approval says they want this done; it does not override
+        # whether they are allowed to. A permission revoked since the question
+        # was asked still applies.
+        policy = self._evaluate_tool_policy(tool, args)
+        if policy is not None and not policy.allowed:
+            if await inbox.claim_execution(ask.id):
+                return (
+                    f"'{tool_name}' was approved but is no longer permitted: "
+                    f"{policy.reason}. It was not run."
+                )
+            return ""
+
+        if not await inbox.claim_execution(ask.id):
+            logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
+            return ""
+
+        return await self._run_approved_tool(tool, args)
 
     async def _run_approved_tool(self, tool: Any, args: Dict[str, Any]) -> str:
         """Execute one approved action and describe the outcome.
