@@ -9,11 +9,10 @@ import json
 import logging
 import random
 import time
-from collections import namedtuple
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ..streaming.models import AgentEvent, EventType
-from .agent_tool import AgentToolResult
+from . import watchdog
 from .approval import collect_batch_approvals
 from .error_classifier import LLMErrorKind
 from .planning import PlanningMixin, PlanOutcome
@@ -24,47 +23,14 @@ from .turn_gate import TurnGateMixin
 
 logger = logging.getLogger(__name__)
 
-TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
-
 #: Sentinel distinguishing "the run was interrupted" from a real (possibly
 #: falsy) result when racing an awaitable against the cancel signal.
 _INTERRUPTED = object()
 
-
-def _stable_json(value: Any) -> str:
-    try:
-        return json.dumps(value, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def _media_key(item: Dict[str, Any]) -> str:
-    if item.get("type") == "inline_cards":
-        data = item.get("data")
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return f"inline_cards:{_stable_json(data)}"
-    return _stable_json(
-        {
-            "type": item.get("type"),
-            "data": item.get("data"),
-            "media_type": item.get("media_type"),
-            "metadata": item.get("metadata"),
-        }
-    )
-
-
-def _append_unique_media(target: List[Dict[str, Any]], media: List[Dict[str, Any]]) -> None:
-    seen = {_media_key(item) for item in target}
-    for item in media:
-        key = _media_key(item)
-        if key in seen:
-            continue
-        seen.add(key)
-        target.append(item)
+#: A window this small cannot hold a system prompt plus a few tool results,
+#: so a run against it fails before starting rather than partway through.
+_CONTEXT_HARD_MIN = 16_000
+_CONTEXT_WARN_BELOW = 32_000
 
 
 class _ReactLoopLLMError(Exception):
@@ -79,6 +45,16 @@ class _ReactLoopLLMError(Exception):
         self.error_kind = error_kind
         self.turn = turn
         super().__init__(str(original))
+
+
+class _ReactLoopAuthError(_ReactLoopLLMError):
+    """The provider rejected our credentials.
+
+    Separate from its parent because it is the one LLM failure worth
+    reporting to the user immediately: switching models cannot fix
+    credentials, so the fallback the caller would otherwise attempt only
+    delays the same answer.
+    """
 
 
 # ── Tool acknowledgment messages ──────────────────────────────────
@@ -236,6 +212,122 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         if run_id:
             await store.mark(run_id, status)
 
+    async def _route_for_run(
+        self,
+        state: RunState,
+        messages: List[Dict[str, Any]],
+        override: Optional[Any],
+        routing_task: Optional["asyncio.Task"],
+    ) -> None:
+        """Pick the model for this run and decide whether to let it think.
+
+        Classification happens once, before the first turn, and every turn
+        reuses the result: the request does not get harder halfway through,
+        and re-asking would add a round-trip per turn.
+        """
+        state.llm_client = override
+        if override is None and (routing_task is not None or self._model_router):
+            try:
+                # The caller may have started classification in parallel with
+                # other setup (see _start_routing); await that rather than
+                # issuing a second identical call here.
+                if routing_task is not None:
+                    decision = await routing_task
+                else:
+                    decision = await self._model_router.route(messages)
+                if decision is not None:
+                    state.routing_score = decision.score
+                    state.llm_client = self._model_router.registry.get(decision.provider)
+                    if state.llm_client:
+                        logger.info(
+                            f"[ReAct] ModelRouter selected provider='{decision.provider}' "
+                            f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
+                        )
+            except Exception as e:
+                logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
+
+        # "Is this hard enough to think harder about" is the same question the
+        # router already asked, so the answer rides on its score.
+        state.enable_reasoning = (
+            state.routing_score >= self._react_config.reasoning_score_threshold
+        )
+        if state.enable_reasoning:
+            logger.info(
+                f"[ReAct] Reasoning enabled (score={state.routing_score}, "
+                f"effort={self._react_config.reasoning_effort})"
+            )
+
+    async def _call_model(
+        self,
+        messages: List[Dict[str, Any]],
+        tool_schemas: List[Dict[str, Any]],
+        state: RunState,
+        control: Any,
+        *,
+        tool_choice: Any,
+        media: Optional[List[Dict[str, Any]]],
+    ) -> Any:
+        """One model round-trip, or _INTERRUPTED if the user stopped it.
+
+        Raises _ReactLoopLLMError so the caller can try a different model.
+        Auth failures raise _ReactLoopAuthError instead: no other model will
+        accept credentials this one rejected, so retrying only costs time.
+        """
+        extra_kwargs: Dict[str, Any] = {}
+        # Reasoning and images both belong to the opening turn: the first is
+        # about the request, and later turns are about tool output.
+        if state.turn == 1:
+            if state.enable_reasoning:
+                extra_kwargs["reasoning_effort"] = self._react_config.reasoning_effort
+            if media:
+                extra_kwargs["media"] = media
+
+        try:
+            return await control.race(
+                self._llm_call_with_retry(
+                    messages,
+                    tool_schemas,
+                    tool_choice=tool_choice,
+                    llm_client_override=state.llm_client,
+                    **extra_kwargs,
+                ),
+                interrupted=_INTERRUPTED,
+            )
+        except Exception as e:
+            from .error_classifier import classify_llm_error
+
+            error_kind = classify_llm_error(e)
+            if error_kind == LLMErrorKind.AUTH:
+                raise _ReactLoopAuthError(e, error_kind, state.turn) from e
+            raise _ReactLoopLLMError(e, error_kind, state.turn) from e
+
+    async def _summarize_after_max_turns(
+        self,
+        messages: List[Dict[str, Any]],
+        state: RunState,
+    ) -> str:
+        """Get a closing answer once the turn budget is spent."""
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "You have used all available turns. Please provide your best "
+                    "final answer based on the information gathered so far."
+                ),
+            }
+        )
+        try:
+            response = await self._llm_call_with_retry(
+                messages,
+                tool_schemas=None,
+                llm_client_override=state.llm_client,
+            )
+        except Exception as e:
+            logger.warning(f"[ReAct] Summary call after max_turns failed: {e}")
+            return "I was unable to complete the request within the allowed turns."
+        state.add_usage(getattr(response, "usage", None))
+        return response.content or ""
+
     async def _react_loop_events(
         self,
         messages: List[Dict[str, Any]],
@@ -261,19 +353,22 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         state.pending_approvals, token_usage, tool_calls records, etc.) so callers
         can build AgentResult or persist to memory as needed.
         """
-        # --- Change A: Context window pre-flight guard ---
-        CONTEXT_HARD_MIN = 16_000
-        CONTEXT_WARN_BELOW = 32_000
+        # A model whose window cannot hold a system prompt plus a few tool
+        # results has no useful run to attempt, so this fails before starting
+        # rather than partway through.
         context_tokens = getattr(self.llm_client, "context_window", 128_000)
-        if context_tokens < CONTEXT_HARD_MIN:
+        if context_tokens < _CONTEXT_HARD_MIN:
             yield AgentEvent(
                 type=EventType.ERROR,
                 data={
-                    "message": f"Model context window too small: {context_tokens} tokens (minimum: {CONTEXT_HARD_MIN})"
+                    "message": (
+                        f"Model context window too small: {context_tokens} tokens "
+                        f"(minimum: {_CONTEXT_HARD_MIN})"
+                    )
                 },
             )
             return
-        if context_tokens < CONTEXT_WARN_BELOW:
+        if context_tokens < _CONTEXT_WARN_BELOW:
             logger.warning(f"Low context window: {context_tokens} tokens")
 
         # Bind the real window of the model in use so trimming thresholds track
@@ -295,39 +390,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         )
 
         # Model routing: classify once before the loop, reuse for all turns.
-        # If a model-level override is provided (e.g. from fallback), use it
-        # directly and skip routing. When the caller pre-started the
-        # classification (see _start_routing), await that instead of issuing a
-        # second round-trip here.
-        routed_llm_client = _llm_client_override
-        routing_score = -1
-        if routed_llm_client is None and (routing_task is not None or self._model_router):
-            try:
-                if routing_task is not None:
-                    decision = await routing_task
-                else:
-                    decision = await self._model_router.route(messages)
-                if decision is not None:
-                    routing_score = decision.score
-                    routed_llm_client = self._model_router.registry.get(decision.provider)
-                    if routed_llm_client:
-                        logger.info(
-                            f"[ReAct] ModelRouter selected provider='{decision.provider}' "
-                            f"(score={decision.score}, {decision.latency_ms:.0f}ms)"
-                        )
-            except Exception as e:
-                logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
-        state.llm_client = routed_llm_client
-        state.routing_score = routing_score
-
-        # Enable reasoning for complex requests on the first turn. This still
-        # rides on the router's score, since "is this hard enough to think
-        # harder" is the same question the router already asked.
-        state.enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
-        if state.enable_reasoning:
-            logger.info(
-                f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})"
-            )
+        await self._route_for_run(state, messages, _llm_client_override, routing_task)
 
         # -- Planning phase --
         plan_outcome = PlanOutcome()
@@ -337,7 +400,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             context=context,
             user_message=user_message,
             metadata=metadata,
-            enable_planning=self._should_plan(context, routing_score),
+            enable_planning=self._should_plan(context, state.routing_score),
         ):
             yield event
 
@@ -392,54 +455,32 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
 
             # LLM call
             try:
-                tool_choice = first_turn_tool_choice if turn == 1 else "auto"
-                # Enable reasoning only on the first turn for complex requests
-                extra_kwargs = {}
-                if state.enable_reasoning and turn == 1:
-                    extra_kwargs["reasoning_effort"] = self._react_config.reasoning_effort
-                # Pass images only on the first turn
-                if media and turn == 1:
-                    extra_kwargs["media"] = media
-                response = await control.race(
-                    self._llm_call_with_retry(
-                        messages,
-                        tool_schemas,
-                        tool_choice=tool_choice,
-                        llm_client_override=routed_llm_client,
-                        **extra_kwargs,
-                    ),
-                    interrupted=_INTERRUPTED,
+                response = await self._call_model(
+                    messages,
+                    tool_schemas,
+                    state,
+                    control,
+                    tool_choice=first_turn_tool_choice if turn == 1 else "auto",
+                    media=media,
                 )
-                if response is _INTERRUPTED:
-                    logger.info(f"[ReAct] Interrupted during LLM call (turn={turn})")
-                    state.interrupted = True
-                    break
-            except Exception as e:
-                # Classify the error to decide whether to retry at model level
-                from .error_classifier import LLMErrorKind, classify_llm_error
+            except _ReactLoopAuthError as e:
+                from .error_classifier import error_code_for_kind
 
-                error_kind = classify_llm_error(e)
+                yield AgentEvent(
+                    type=EventType.ERROR,
+                    data={
+                        "code": error_code_for_kind(e.error_kind),
+                        "error": str(e.original),
+                        "error_type": type(e.original).__name__,
+                    },
+                )
+                self._run_controls.finish(tenant_id, control)
+                return
 
-                if error_kind == LLMErrorKind.AUTH:
-                    # Auth errors are not recoverable at model level
-                    from .error_classifier import error_code_for_kind
-
-                    yield AgentEvent(
-                        type=EventType.ERROR,
-                        data={
-                            "code": error_code_for_kind(error_kind),
-                            "error": str(e),
-                            "error_type": type(e).__name__,
-                        },
-                    )
-                    self._run_controls.finish(tenant_id, control)
-                    return
-
-                # For other errors: signal the caller to attempt model-level
-                # fallback by raising with classification metadata. The caller
-                # re-enters this loop, which registers a fresh control, so the
-                # entry left behind here is replaced rather than leaked.
-                raise _ReactLoopLLMError(e, error_kind, turn) from e
+            if response is _INTERRUPTED:
+                logger.info(f"[ReAct] Interrupted during LLM call (turn={turn})")
+                state.interrupted = True
+                break
 
             # Accumulate token usage
             usage = getattr(response, "usage", None)
@@ -468,193 +509,154 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                         yield event
                 break
 
-            if tool_calls:
-                # Append assistant message with tool_calls
-                messages.append(self._assistant_message_from_response(response))
+            # Append assistant message with tool_calls
+            messages.append(self._assistant_message_from_response(response))
 
-                # ----------------------------------------------------------
-                # complete_task never executes: it is the model saying it is
-                # done. Pull it out, then screen what is left.
-                # ----------------------------------------------------------
-                intercept = self._intercept_complete_task(tool_calls, messages)
+            # ----------------------------------------------------------
+            # complete_task never executes: it is the model saying it is
+            # done. Pull it out, then screen what is left.
+            # ----------------------------------------------------------
+            intercept = self._intercept_complete_task(tool_calls, messages)
 
-                if intercept.ends_turn_alone:
-                    self._settle_complete_task(intercept, messages, state)
-                    async for event in self._yield_chunked_response(state.final_response, turn):
-                        yield event
-                    break
-
-                tool_calls = intercept.remaining or tool_calls
-
-                # Stop boundary: the assistant message with its tool_calls is
-                # already in history, so every call must still be answered even
-                # though none of them will run.
-                if control.cancelled:
-                    logger.info(
-                        f"[ReAct] Interrupted before executing {len(tool_calls)} "
-                        f"tool call(s) (turn={turn})"
-                    )
-                    self._compensate_pending_tool_calls(tool_calls, messages)
-                    state.interrupted = True
-                    break
-
-                validated_tool_calls = self._validate_tool_calls(
-                    tool_calls, tool_schemas, messages, state
-                )
-                if not validated_tool_calls:
-                    # All calls rejected — continue the loop so the model
-                    # can retry with valid tools.  Guarded by max_turns.
-                    continue
-                tool_calls = validated_tool_calls
-
-                tool_names = [tc.name for tc in tool_calls]
-                logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
-
-                # Emit a brief acknowledgment before tool execution so the
-                # user sees "Looking into that..." while tools run.
-                ack = _tool_acknowledgment(tool_names, turn)
-                if ack:
-                    yield AgentEvent(type=EventType.ACKNOWLEDGMENT, data={"text": ack})
-
-                # Yield tool call start events
-                for tc in tool_calls:
-                    yield AgentEvent(
-                        type=EventType.TOOL_CALL_START,
-                        data={"tool_name": tc.name, "call_id": tc.id},
-                    )
-
-                # Token attribution for this turn
-                turn_tokens = state.turn_tokens(usage)
-
-                outcome = TurnOutcome()
-                async for event in self._run_tool_calls(
-                    tool_calls,
-                    messages,
-                    state,
-                    control,
-                    outcome,
-                    metadata=metadata,
-                    request_tools=request_tools,
-                    context=context,
-                    turn_tokens=turn_tokens,
-                    interrupted_sentinel=_INTERRUPTED,
-                ):
+            if intercept.ends_turn_alone:
+                self._settle_complete_task(intercept, messages, state)
+                async for event in self._yield_chunked_response(state.final_response, turn):
                     yield event
-                timed_results = outcome.timed_results
+                break
 
-                # complete_task was called alongside other tools -- add its result
-                # AFTER all other tools' results have been appended to messages
-                if intercept.result:
-                    self._settle_complete_task(intercept, messages, state, tool_names)
-                    async for event in self._yield_chunked_response(state.final_response, turn):
+            tool_calls = intercept.remaining or tool_calls
+
+            # Stop boundary: the assistant message with its tool_calls is
+            # already in history, so every call must still be answered even
+            # though none of them will run.
+            if control.cancelled:
+                logger.info(
+                    f"[ReAct] Interrupted before executing {len(tool_calls)} "
+                    f"tool call(s) (turn={turn})"
+                )
+                self._compensate_pending_tool_calls(tool_calls, messages)
+                state.interrupted = True
+                break
+
+            validated_tool_calls = self._validate_tool_calls(
+                tool_calls, tool_schemas, messages, state
+            )
+            if not validated_tool_calls:
+                # All calls rejected — continue the loop so the model
+                # can retry with valid tools.  Guarded by max_turns.
+                continue
+            tool_calls = validated_tool_calls
+
+            tool_names = [tc.name for tc in tool_calls]
+            logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
+
+            # Emit a brief acknowledgment before tool execution so the
+            # user sees "Looking into that..." while tools run.
+            ack = _tool_acknowledgment(tool_names, turn)
+            if ack:
+                yield AgentEvent(type=EventType.ACKNOWLEDGMENT, data={"text": ack})
+
+            # Yield tool call start events
+            for tc in tool_calls:
+                yield AgentEvent(
+                    type=EventType.TOOL_CALL_START,
+                    data={"tool_name": tc.name, "call_id": tc.id},
+                )
+
+            # Token attribution for this turn
+            turn_tokens = state.turn_tokens(usage)
+
+            outcome = TurnOutcome()
+            async for event in self._run_tool_calls(
+                tool_calls,
+                messages,
+                state,
+                control,
+                outcome,
+                metadata=metadata,
+                request_tools=request_tools,
+                context=context,
+                turn_tokens=turn_tokens,
+                interrupted_sentinel=_INTERRUPTED,
+            ):
+                yield event
+            timed_results = outcome.timed_results
+
+            # complete_task was called alongside other tools -- add its result
+            # AFTER all other tools' results have been appended to messages
+            if intercept.result:
+                self._settle_complete_task(intercept, messages, state, tool_names)
+                async for event in self._yield_chunked_response(state.final_response, turn):
+                    yield event
+                break
+
+            # Watchdog: a run that keeps making the same call is not going to
+            # reach a different answer by making it again.
+            loop_desc = watchdog.verdict(state, tool_calls, timed_results)
+            if loop_desc:
+                logger.warning(f"[ReAct] {loop_desc}")
+                state.final_response = watchdog.STUCK_MESSAGE
+                async for event in self._yield_chunked_response(state.final_response, turn):
+                    yield event
+                break
+
+            # Audit: log turn summary
+            self._audit.log_react_turn(
+                turn=turn,
+                tool_calls=tool_names,
+                final_answer=False,
+                tenant_id=tenant_id,
+            )
+
+            # Checkpoint the transcript now that this round's tool results
+            # are recorded. Every persisted copy therefore describes work
+            # that actually completed, so a resume never re-runs a tool
+            # whose result is already in the messages.
+            await self._persist_transcript(
+                context, tenant_id, messages, user_message, metadata, turn
+            )
+
+            # Stop boundary: tool results are recorded, so the transcript is
+            # complete and it is safe to unwind here.
+            if control.cancelled:
+                logger.info(f"[ReAct] Interrupted after tool execution (turn={turn})")
+                state.interrupted = True
+                break
+
+            if outcome.waiting:
+                # An agent needs the user before it can go further, so the run
+                # ends here holding whatever it was waiting on.
+                state.final_response = outcome.waiting_text or ""
+                state.result_status = (
+                    "WAITING_FOR_APPROVAL" if state.pending_approvals else "WAITING_FOR_INPUT"
+                )
+                if state.pending_approvals:
+                    state.pending_approvals = collect_batch_approvals(state.pending_approvals)
+                if outcome.waiting_text:
+                    async for event in self._yield_chunked_response(outcome.waiting_text, turn):
                         yield event
-                    break
+                break
 
-                # Watchdog: detect loops (enhanced with args + result hashes)
-                for tc, timed in zip(tool_calls, timed_results):
-                    result_val = timed.result if isinstance(timed, TimedResult) else timed
-                    state.observe_for_watchdog(tc.name, tc.arguments, result_val)
-
-                loop_desc = self._detect_loop(
-                    state.recent_names,
-                    state.recent_fingerprints,
-                    state.recent_result_hashes,
+            # One agent, finished, nothing else called: its answer is already
+            # the answer, and asking the model to restate it costs a round-trip
+            # and loses detail.
+            passthrough = self._agent_passthrough_text(tool_calls, timed_results)
+            if passthrough is not None:
+                logger.info(
+                    f"[ReAct] turn={turn} agent_passthrough "
+                    f"({len(passthrough)} chars from {tool_calls[0].name})"
                 )
-                if loop_desc:
-                    logger.warning(f"[ReAct] {loop_desc}")
-                    state.final_response = "I noticed I was repeating the same actions without making progress. Let me provide what I have so far."
-                    async for event in self._yield_chunked_response(state.final_response, turn):
-                        yield event
-                    break
-
-                # Audit: log turn summary
-                self._audit.log_react_turn(
-                    turn=turn,
-                    tool_calls=tool_names,
-                    final_answer=False,
-                    tenant_id=tenant_id,
-                )
-
-                # Checkpoint the transcript now that this round's tool results
-                # are recorded. Every persisted copy therefore describes work
-                # that actually completed, so a resume never re-runs a tool
-                # whose result is already in the messages.
-                await self._persist_transcript(
-                    context, tenant_id, messages, user_message, metadata, turn
-                )
-
-                # Stop boundary: tool results are recorded, so the transcript is
-                # complete and it is safe to unwind here.
-                if control.cancelled:
-                    logger.info(f"[ReAct] Interrupted after tool execution (turn={turn})")
-                    state.interrupted = True
-                    break
-
-                if outcome.waiting:
-                    state.final_response = outcome.waiting_text or ""
-                    state.result_status = (
-                        "WAITING_FOR_APPROVAL" if state.pending_approvals else "WAITING_FOR_INPUT"
-                    )
-                    if state.pending_approvals:
-                        state.pending_approvals = collect_batch_approvals(state.pending_approvals)
-                    if outcome.waiting_text:
-                        async for event in self._yield_chunked_response(
-                            outcome.waiting_text, turn
-                        ):
-                            yield event
-                    break
-
-                # Agent passthrough: single completed agent-tool skips LLM re-summary
-                _first_result = (
-                    timed_results[0].result
-                    if isinstance(timed_results[0], TimedResult)
-                    else timed_results[0]
-                )
-                if (
-                    len(tool_calls) == 1
-                    and self._is_agent_tool(tool_calls[0].name)
-                    and isinstance(_first_result, AgentToolResult)
-                    and _first_result.completed
-                ):
-                    agent_text = _first_result.result_text
-                    logger.info(
-                        f"[ReAct] turn={turn} agent_passthrough "
-                        f"({len(agent_text)} chars from {tool_calls[0].name})"
-                    )
-                    state.final_response = agent_text
-                    async for event in self._yield_chunked_response(agent_text, turn):
-                        yield event
-                    break
+                state.final_response = passthrough
+                async for event in self._yield_chunked_response(passthrough, turn):
+                    yield event
+                break
 
         else:
-            # max_turns reached: ask LLM for summary without tools
-            messages.append(
-                {
-                    "role": "user",
-                    "content": (
-                        "You have used all available turns. Please provide your best "
-                        "final answer based on the information gathered so far."
-                    ),
-                }
-            )
-            try:
-                response = await self._llm_call_with_retry(
-                    messages,
-                    tool_schemas=None,
-                    llm_client_override=routed_llm_client,
-                )
-                final_text = response.content or ""
-                usage = getattr(response, "usage", None)
-                if usage:
-                    state.usage.input_tokens += getattr(usage, "prompt_tokens", 0)
-                    state.usage.output_tokens += getattr(usage, "completion_tokens", 0)
-                    state.usage.cost_usd += getattr(usage, "cost", 0) or 0
-            except Exception as e:
-                logger.warning(f"[ReAct] Summary call after max_turns failed: {e}")
-                final_text = "I was unable to complete the request within the allowed turns."
-
-            state.final_response = final_text
-            async for event in self._yield_chunked_response(final_text, turn):
+            # Every turn was used and the model still had not finished. Ask it
+            # once more with no tools, so it has to answer from what it has
+            # rather than reaching for another call it cannot make.
+            state.final_response = await self._summarize_after_max_turns(messages, state)
+            async for event in self._yield_chunked_response(state.final_response, turn):
                 yield event
 
         # Cancel any speculative tasks that were not consumed
@@ -672,6 +674,8 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         await self._finish_transcript(context, "suspended" if state.interrupted else "completed")
 
         if state.interrupted:
+            # A run the user stopped still owes them a reply, and "Stopped."
+            # is a truer one than the empty string it would otherwise carry.
             if not state.final_response:
                 state.final_response = "Stopped."
             if state.result_status is None:
@@ -685,10 +689,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 },
             )
 
-        yield AgentEvent(
-            type=EventType.EXECUTION_END,
-            data=state.execution_end_payload(),
-        )
+        yield AgentEvent(type=EventType.EXECUTION_END, data=state.execution_end_payload())
 
     async def _save_tool_call_history(
         self,
@@ -849,46 +850,3 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             ]
         return msg
 
-    @staticmethod
-    def _detect_loop(
-        tool_history: list,
-        fingerprint_history: Optional[list] = None,
-        result_hash_history: Optional[list] = None,
-    ) -> Optional[str]:
-        """Detect if the LLM is repeating the same actions.
-
-        Checks three layers:
-        1. Same tool+args called consecutively (exact repeat)
-        2. Different tools but identical results (no progress)
-        3. Tool name pattern cycles (A-B-A-B)
-        """
-        # Layer 1: Same tool + same args 3 times (exact repeat — strongest signal)
-        if fingerprint_history and len(fingerprint_history) >= 3:
-            if len(set(fingerprint_history[-3:])) == 1:
-                return f"Exact repeat: {fingerprint_history[-1]} called 3 times with same args"
-
-        # Layer 2: Consecutive identical results (no progress)
-        if result_hash_history and len(result_hash_history) >= 2:
-            if result_hash_history[-1] == result_hash_history[-2]:
-                # Same tool producing same output — wasting tokens
-                if fingerprint_history and len(fingerprint_history) >= 2:
-                    if fingerprint_history[-1] == fingerprint_history[-2]:
-                        return "No progress: same tool returned identical results twice"
-
-        # Layer 3: Tool name pattern cycles (fallback to original logic)
-        if len(tool_history) >= 3 and len(set(tool_history[-3:])) == 1:
-            # Only flag if we don't have fingerprint data or fingerprints also match
-            if not fingerprint_history or len(set(fingerprint_history[-3:])) == 1:
-                return f"Loop detected: {tool_history[-1]} called 3 times consecutively"
-
-        for cycle_len in range(2, 5):
-            needed = cycle_len * 2
-            if len(tool_history) < needed:
-                continue
-            tail = tool_history[-needed:]
-            cycle = tail[:cycle_len]
-            if all(tail[i] == cycle[i % cycle_len] for i in range(needed)):
-                pattern = "↔".join(cycle)
-                return f"Cycle detected: {pattern} repeated {needed // cycle_len} times"
-
-        return None

@@ -60,6 +60,7 @@ from .constants import COMPLETE_TASK_SCHEMA, COMPLETE_TASK_TOOL_NAME
 from .fields import InputField
 from .llm.base import LLMResponse
 from .llm.base import ToolCall as LLMToolCall
+from .media_dedup import append_unique_media
 from .message import Message
 from .models import AgentTool, AgentToolContext, RequiredField, ToolOutput
 from .protocols import LLMClientProtocol
@@ -80,42 +81,6 @@ def _log_task_exception(task: asyncio.Task) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("Background task failed: %s", exc, exc_info=exc)
-
-
-def _stable_json(value: Any) -> str:
-    try:
-        return json.dumps(value, sort_keys=True, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def _media_key(item: Dict[str, Any]) -> str:
-    if item.get("type") == "inline_cards":
-        data = item.get("data")
-        if isinstance(data, str):
-            try:
-                data = json.loads(data)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return f"inline_cards:{_stable_json(data)}"
-    return _stable_json(
-        {
-            "type": item.get("type"),
-            "data": item.get("data"),
-            "media_type": item.get("media_type"),
-            "metadata": item.get("metadata"),
-        }
-    )
-
-
-def _append_unique_media(target: List[Dict[str, Any]], media: List[Dict[str, Any]]) -> None:
-    seen = {_media_key(item) for item in target}
-    for item in media:
-        key = _media_key(item)
-        if key in seen:
-            continue
-        seen.add(key)
-        target.append(item)
 
 
 # ===== State Transitions =====
@@ -1352,7 +1317,7 @@ class StandardAgent(BaseAgent):
                 if isinstance(tool_result, ToolOutput):
                     result_str = tool_result.text
                     if tool_result.media:
-                        _append_unique_media(self._collected_media, tool_result.media)
+                        append_unique_media(self._collected_media, tool_result.media)
                 else:
                     result_str = str(tool_result)
                 if len(result_str) > self.max_tool_result_chars:

@@ -16,15 +16,20 @@ import asyncio
 import json
 import logging
 import time
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from ..media_dedup import append_unique_media
 from ..models import ToolOutput
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import AgentToolResult
 from .run_state import RunState
 
 logger = logging.getLogger(__name__)
+
+#: A tool result paired with how long the call took.
+TimedResult = namedtuple("TimedResult", ["result", "duration_ms"])
 
 #: Agent results are summaries already; past this they crowd out the
 #: transcript they are supposed to inform.
@@ -78,8 +83,6 @@ class ToolExecutionMixin:
         interrupted_sentinel: Any,
     ) -> Any:
         """Run one tool call, timing it and never raising."""
-        from .react_loop import TimedResult
-
         t0 = time.monotonic()
 
         reused = await self._try_speculative(tc, speculative, t0)
@@ -107,8 +110,6 @@ class ToolExecutionMixin:
 
     async def _try_speculative(self, tc: Any, speculative: Dict[str, Any], t0: float) -> Any:
         """Return a pre-started result for this call, or None to run it."""
-        from .react_loop import TimedResult
-
         if not speculative or tc.name != "google_search":
             return None
         try:
@@ -313,12 +314,10 @@ class ToolExecutionMixin:
 
         # Media the client has to keep (images) or render (cards) travels
         # with the final response; the rest only mattered to the model.
-        from .react_loop import _append_unique_media
-
         for m in media:
             meta = m.get("metadata", {})
             if meta.get("for_storage") or m.get("type") == "inline_cards":
-                _append_unique_media(state.response_media, [m])
+                append_unique_media(state.response_media, [m])
 
         state.record_tool_call(
             name=tc.name,
@@ -347,6 +346,28 @@ class ToolExecutionMixin:
             duration_ms=duration_ms,
             tenant_id=state.tenant_id,
         )
+
+    def _agent_passthrough_text(
+        self,
+        tool_calls: List[Any],
+        timed_results: List[Any],
+    ) -> Optional[str]:
+        """The agent's own answer, when it can stand as the run's answer.
+
+        Only when a single agent tool was called and it finished. With
+        anything else in the turn the model still has to reconcile the
+        results, and an unfinished agent has nothing to pass through.
+
+        Worth checking because the alternative is a round-trip that asks the
+        model to restate an answer it was just handed, which costs latency
+        and tends to lose detail.
+        """
+        if len(tool_calls) != 1 or not self._is_agent_tool(tool_calls[0].name):
+            return None
+        result, _ = _unpack(timed_results[0])
+        if isinstance(result, AgentToolResult) and result.completed:
+            return result.result_text
+        return None
 
     def _fit_tool_result(self, text: str, is_agent: bool) -> str:
         """Shrink a result to fit the window, saying so when it is cut."""
