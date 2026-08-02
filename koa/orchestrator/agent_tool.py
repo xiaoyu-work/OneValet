@@ -117,6 +117,14 @@ async def execute_agent_tool(
     # jobs and triggers have nobody watching, so an agent that pauses there
     # would strand the run.
     enriched_hints["attended"] = is_attended((request_context or {}).get("metadata"))
+    # The Inbox and the run it belongs to, so an agent that needs approval on
+    # an unattended run can record the request instead of stalling.
+    inbox = getattr(orchestrator, "inbox", None)
+    if inbox is not None:
+        enriched_hints["inbox"] = inbox
+    run_id = (request_context or {}).get("request_id")
+    if run_id:
+        enriched_hints["run_id"] = run_id
     session_id = (request_context or {}).get("session_id")
     if session_id:
         enriched_hints["session_id"] = session_id

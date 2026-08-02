@@ -168,6 +168,42 @@ class TranscriptStore:
             logger.warning(f"Could not prune transcripts: {e}")
             return 0
 
+    async def list_resumable(
+        self,
+        tenant_id: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Runs for this tenant that stopped before reaching a terminal state."""
+        if not self._db:
+            return []
+        try:
+            rows = await self._db.fetch(
+                """
+                SELECT run_id, status, user_message, turn, updated_at
+                FROM run_transcripts
+                WHERE tenant_id = $1 AND status IN ($2, $3)
+                ORDER BY updated_at DESC
+                LIMIT $4
+                """,
+                tenant_id,
+                STATUS_RUNNING,
+                STATUS_SUSPENDED,
+                limit,
+            )
+        except Exception as e:
+            logger.warning(f"Could not list resumable runs for {tenant_id}: {e}")
+            return []
+        return [
+            {
+                "run_id": r["run_id"],
+                "status": r["status"],
+                "user_message": r["user_message"],
+                "turn": r["turn"],
+                "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+            }
+            for r in rows
+        ]
+
     @staticmethod
     def unanswered_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Tool calls from the final assistant turn that have no result yet.

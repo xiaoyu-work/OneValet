@@ -1275,22 +1275,31 @@ class StandardAgent(BaseAgent):
                 or bool(policy_decision and policy_decision.require_approval)
             )
             if requires_approval and not self._is_attended():
-                # Nobody is watching this run, so pausing for approval would
-                # strand it silently -- the caller returns nothing and the
-                # user never learns the action was attempted. Refuse instead,
-                # and tell the model why so it can report back or pick a
-                # read-only alternative.
-                error_text = (
-                    f"'{tc.name}' needs the user's approval, and this run is "
-                    "unattended (scheduled job or trigger), so nobody can give it. "
-                    "Skip this action and say what you would have done."
-                )
+                # Nobody is watching this run, so pausing inline would strand
+                # it. Record the request in the Inbox instead: the user answers
+                # from wherever they are, and the run resumes from its
+                # transcript. Falls back to refusing when no Inbox is wired,
+                # which is still better than a silent stall.
+                asked = await self._ask_inbox_for_approval(tc, tool, args)
+                if asked:
+                    error_text = (
+                        f"'{tc.name}' needs approval. I've asked the user and will "
+                        "continue once they answer. Do not retry it in this run."
+                    )
+                    status = "asked"
+                else:
+                    error_text = (
+                        f"'{tc.name}' needs the user's approval, and this run is "
+                        "unattended (scheduled job or trigger), so nobody can give it. "
+                        "Skip this action and say what you would have done."
+                    )
+                    status = "needs_approval"
                 logger.info(
-                    f"[{self.__class__.__name__}:{self.name}] refused {tc.name}: "
-                    "approval required but run is unattended"
+                    f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
+                    f"approval required on an unattended run ({status})"
                 )
                 self._tool_trace.append(
-                    {"tool": tc.name, "status": "needs_approval", "summary": error_text[:240]}
+                    {"tool": tc.name, "status": status, "summary": error_text[:240]}
                 )
                 messages.append(
                     {
@@ -1495,6 +1504,46 @@ class StandardAgent(BaseAgent):
         ]
         t_lower = t.lower()
         return any(s in t_lower for s in question_signals)
+
+    async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> bool:
+        """Record an approval request in the Inbox. True if it was recorded.
+
+        The preview is what the user actually sees on their phone, so it is
+        generated the same way as for an inline prompt -- naming the real
+        file, recipient, or amount rather than just the tool.
+        """
+        hints = self.context_hints or {}
+        inbox = hints.get("inbox")
+        run_id = hints.get("run_id")
+        if inbox is None or not run_id or not getattr(inbox, "enabled", False):
+            return False
+
+        if tool.get_preview:
+            try:
+                preview = await tool.get_preview(args, self._build_tool_context())
+            except Exception as e:
+                logger.error(f"Preview generation failed for {tc.name}: {e}")
+                preview = f"Run {tc.name}?"
+        else:
+            preview = f"Run {tc.name}?"
+        if tool.risk_level == "destructive":
+            preview = f"[DESTRUCTIVE] {preview}"
+
+        try:
+            ask = await inbox.create(
+                tenant_id=self.tenant_id,
+                run_id=run_id,
+                tool_call_id=tc.id,
+                kind="approval",
+                title=f"Approve {tc.name}?",
+                body=preview,
+                options=["approve", "reject"],
+                data={"tool": tc.name, "args": args, "agent": self.__class__.__name__},
+            )
+        except Exception as e:
+            logger.error(f"Could not record approval ask for {tc.name}: {e}")
+            return False
+        return ask is not None
 
     def _is_attended(self) -> bool:
         """Whether a human can answer if this agent pauses for approval.

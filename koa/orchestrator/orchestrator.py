@@ -61,6 +61,7 @@ from .audit_logger import AuditLogger
 from .context_manager import ContextManager
 from .dag_loop import DagLoopMixin
 from .execution_policy import ExecutionPolicyEngine
+from .inbox import InboxStore
 from .llm_manager import LLMManagerMixin
 from .models import (
     CALLBACK_HANDLER_ATTR,
@@ -72,6 +73,7 @@ from .prompt_builder import PromptBuilderMixin
 from .react_config import ReactLoopConfig
 from .react_loop import ReactLoopMixin
 from .request_analysis import RequestAnalysisMixin
+from .resume import ResumeMixin
 from .run_control import RunControlRegistry
 from .tool_manager import ToolManagerMixin
 from .tool_policy import ToolPolicyFilter
@@ -133,6 +135,7 @@ class Orchestrator(
     AgentLifecycleMixin,
     RequestAnalysisMixin,
     PromptBuilderMixin,
+    ResumeMixin,
     ToolManagerMixin,
     LLMManagerMixin,
 ):
@@ -327,6 +330,10 @@ class Orchestrator(
 
         # Durable transcripts so a run can outlive the process that started it.
         self._transcript_store = TranscriptStore(database)
+
+        # The human-attention queue: what the assistant is waiting on a person
+        # for, and where their answer comes back in.
+        self.inbox = InboxStore(database)
 
         # Intent-recognition infrastructure.  See
         # :mod:`koa.orchestrator.intent_feedback` and
