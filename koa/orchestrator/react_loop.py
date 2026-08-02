@@ -28,6 +28,7 @@ from .react_config import (
     TokenUsage,
     ToolCallRecord,
 )
+from .run_state import RunState
 from .transcript_repair import repair_transcript
 
 logger = logging.getLogger(__name__)
@@ -301,8 +302,8 @@ class ReactLoopMixin:
         implementation, eliminating the previous code duplication between
         the inline stream_message loop and react_loop().
 
-        The final EXECUTION_END event carries all metadata (final_response,
-        pending_approvals, token_usage, tool_calls records, etc.) so callers
+        The final EXECUTION_END event carries all metadata (state.final_response,
+        state.pending_approvals, token_usage, tool_calls records, etc.) so callers
         can build AgentResult or persist to memory as needed.
         """
         # --- Change A: Context window pre-flight guard ---
@@ -329,18 +330,7 @@ class ReactLoopMixin:
         # Register this run so surfaces can interrupt or steer it.
         control = self._run_controls.start(tenant_id)
 
-        start_time = time.monotonic()
-        turn = 0
-        all_tool_records: List[ToolCallRecord] = []
-        total_usage = TokenUsage()
-        pending_approvals = []
-        final_response = ""
-        result_status = None
-        _recent_tool_names: List[str] = []  # watchdog loop detection
-        _recent_tool_fingerprints: List[str] = []  # tool name + args hash
-        _recent_result_hashes: List[str] = []  # result content hash
-        _response_media: List[Dict[str, Any]] = []  # images for client storage
-        interrupted = False
+        state = RunState(tenant_id=tenant_id)
 
         logger.info(f"[ReAct] tenant={tenant_id}")
 
@@ -372,12 +362,14 @@ class ReactLoopMixin:
                         )
             except Exception as e:
                 logger.warning(f"[ReAct] ModelRouter failed, using default LLM: {e}")
+        state.llm_client = routed_llm_client
+        state.routing_score = routing_score
 
         # Enable reasoning for complex requests on the first turn. This still
         # rides on the router's score, since "is this hard enough to think
         # harder" is the same question the router already asked.
-        enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
-        if enable_reasoning:
+        state.enable_reasoning = routing_score >= self._react_config.reasoning_score_threshold
+        if state.enable_reasoning:
             logger.info(
                 f"[ReAct] Reasoning enabled (score={routing_score}, effort={self._react_config.reasoning_effort})"
             )
@@ -422,6 +414,7 @@ class ReactLoopMixin:
                     llm_client_override=routed_llm_client,
                 )
                 plan_data = self._extract_plan_from_response(plan_response)
+
                 # Approval needs someone to give it. On a cron job or trigger
                 # the plan would be presented to nobody and the run would stop
                 # there, so those execute the plan directly.
@@ -445,7 +438,7 @@ class ReactLoopMixin:
                         data={"plan": plan_data, "plan_text": plan_text},
                     )
                     # End this turn -- return plan as the response
-                    duration_ms = int((time.monotonic() - start_time) * 1000)
+                    duration_ms = state.duration_ms
                     yield AgentEvent(
                         type=EventType.EXECUTION_END,
                         data={
@@ -480,9 +473,10 @@ class ReactLoopMixin:
                 logger.warning(f"[ReAct] Planning phase failed, proceeding without plan: {e}")
 
         for turn in range(1, self._react_config.max_turns + 1):
+            state.turn = turn
             budget = self._react_config.react_timeout
             if budget is not None:
-                elapsed = time.monotonic() - start_time
+                elapsed = state.elapsed_seconds
                 if elapsed > budget:
                     logger.warning(
                         f"[ReAct] Wall-clock budget exhausted after {elapsed:.1f}s (limit={budget}s)"
@@ -498,7 +492,7 @@ class ReactLoopMixin:
             # Stop boundary: the user asked to stop between turns.
             if control.cancelled:
                 logger.info(f"[ReAct] Interrupted at turn boundary (turn={turn})")
-                interrupted = True
+                state.interrupted = True
                 break
 
             # Steering boundary: apply any messages the user sent mid-run so the
@@ -521,7 +515,7 @@ class ReactLoopMixin:
                 tool_choice = first_turn_tool_choice if turn == 1 else "auto"
                 # Enable reasoning only on the first turn for complex requests
                 extra_kwargs = {}
-                if enable_reasoning and turn == 1:
+                if state.enable_reasoning and turn == 1:
                     extra_kwargs["reasoning_effort"] = self._react_config.reasoning_effort
                 # Pass images only on the first turn
                 if media and turn == 1:
@@ -538,7 +532,7 @@ class ReactLoopMixin:
                 )
                 if response is _INTERRUPTED:
                     logger.info(f"[ReAct] Interrupted during LLM call (turn={turn})")
-                    interrupted = True
+                    state.interrupted = True
                     break
             except Exception as e:
                 # Classify the error to decide whether to retry at model level
@@ -569,11 +563,8 @@ class ReactLoopMixin:
 
             # Accumulate token usage
             usage = getattr(response, "usage", None)
-            if usage:
-                prompt_tokens = getattr(usage, "prompt_tokens", 0)
-                total_usage.input_tokens += prompt_tokens
-                total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
-                total_usage.cost_usd += getattr(usage, "cost", 0) or 0
+            prompt_tokens = state.add_usage(usage)
+            if prompt_tokens:
                 # The prompt-side total that actually occupied the window on this
                 # round-trip -- the trigger signal for the next iteration's guard.
                 self._context_manager.observe_usage(prompt_tokens)
@@ -585,15 +576,15 @@ class ReactLoopMixin:
             # recover from here: an assistant turn without tool calls simply
             # ends the loop.)
             if not tool_calls:
-                final_response = (getattr(response, "content", None) or "").strip()
+                state.final_response = (getattr(response, "content", None) or "").strip()
                 self._audit.log_react_turn(
                     turn=turn,
                     tool_calls=[],
                     final_answer=True,
                     tenant_id=tenant_id,
                 )
-                if final_response:
-                    async for event in self._yield_chunked_response(final_response, turn):
+                if state.final_response:
+                    async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                 break
 
@@ -642,7 +633,7 @@ class ReactLoopMixin:
                     messages.append(
                         self._build_tool_result_message(_complete_task_tc_id, "Task completed.")
                     )
-                    all_tool_records.append(
+                    state.tool_records.append(
                         ToolCallRecord(
                             name=COMPLETE_TASK_TOOL_NAME,
                             args_summary={"result": complete_task_result.result[:100]},
@@ -652,14 +643,14 @@ class ReactLoopMixin:
                             result_chars=len(complete_task_result.result),
                         )
                     )
-                    final_response = complete_task_result.result
+                    state.final_response = complete_task_result.result
                     self._audit.log_react_turn(
                         turn=turn,
                         tool_calls=[COMPLETE_TASK_TOOL_NAME],
                         final_answer=True,
                         tenant_id=tenant_id,
                     )
-                    async for event in self._yield_chunked_response(final_response, turn):
+                    async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                     break
 
@@ -675,7 +666,7 @@ class ReactLoopMixin:
                         f"tool call(s) (turn={turn})"
                     )
                     self._compensate_pending_tool_calls(tool_calls, messages)
-                    interrupted = True
+                    state.interrupted = True
                     break
 
                 # ----------------------------------------------------------
@@ -732,7 +723,7 @@ class ReactLoopMixin:
                             is_error=True,
                         )
                     )
-                    all_tool_records.append(
+                    state.tool_records.append(
                         ToolCallRecord(
                             name=tc.name,
                             args_summary={"rejected_reason": reason},
@@ -825,12 +816,7 @@ class ReactLoopMixin:
                     return (idx, await _timed_execute(tc))
 
                 # Token attribution for this turn
-                turn_tokens = None
-                if usage:
-                    turn_tokens = TokenUsage(
-                        input_tokens=getattr(usage, "prompt_tokens", 0),
-                        output_tokens=getattr(usage, "completion_tokens", 0),
-                    )
+                turn_tokens = state.turn_tokens(usage)
 
                 loop_broken = False
                 loop_broken_text = None
@@ -871,7 +857,7 @@ class ReactLoopMixin:
                         messages.append(
                             self._build_tool_result_message(tc.id, error_text, is_error=True)
                         )
-                        all_tool_records.append(
+                        state.tool_records.append(
                             ToolCallRecord(
                                 name=tc_name,
                                 args_summary=args_summary,
@@ -906,7 +892,7 @@ class ReactLoopMixin:
                         if result.agent:
                             await self.agent_pool.add_agent(result.agent)
                         if result.approval_request:
-                            pending_approvals.append(result.approval_request)
+                            state.pending_approvals.append(result.approval_request)
                         waiting_text = result.result_text or "Agent is waiting for input."
                         messages.append(self._build_tool_result_message(tc.id, waiting_text))
                         waiting_status = (
@@ -914,7 +900,7 @@ class ReactLoopMixin:
                             if result.approval_request
                             else "WAITING_FOR_INPUT"
                         )
-                        all_tool_records.append(
+                        state.tool_records.append(
                             ToolCallRecord(
                                 name=tc_name,
                                 args_summary=args_summary,
@@ -1003,9 +989,9 @@ class ReactLoopMixin:
                         for m in result_media:
                             meta = m.get("metadata", {})
                             if meta.get("for_storage") or m.get("type") == "inline_cards":
-                                _append_unique_media(_response_media, [m])
+                                _append_unique_media(state.response_media, [m])
 
-                        all_tool_records.append(
+                        state.tool_records.append(
                             ToolCallRecord(
                                 name=tc_name,
                                 args_summary=args_summary,
@@ -1043,7 +1029,7 @@ class ReactLoopMixin:
                     messages.append(
                         self._build_tool_result_message(_complete_task_tc_id, "Task completed.")
                     )
-                    all_tool_records.append(
+                    state.tool_records.append(
                         ToolCallRecord(
                             name=COMPLETE_TASK_TOOL_NAME,
                             args_summary={"result": complete_task_result.result[:100]},
@@ -1053,49 +1039,31 @@ class ReactLoopMixin:
                             result_chars=len(complete_task_result.result),
                         )
                     )
-                    final_response = complete_task_result.result
+                    state.final_response = complete_task_result.result
                     self._audit.log_react_turn(
                         turn=turn,
                         tool_calls=tool_names + [COMPLETE_TASK_TOOL_NAME],
                         final_answer=True,
                         tenant_id=tenant_id,
                     )
-                    async for event in self._yield_chunked_response(final_response, turn):
+                    async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                     break
 
                 # Watchdog: detect loops (enhanced with args + result hashes)
-                import hashlib
-
                 for tc, timed in zip(tool_calls, timed_results):
-                    _recent_tool_names.append(tc.name)
-                    # Fingerprint: tool name + serialized args
-                    try:
-                        args_str = json.dumps(
-                            tc.arguments
-                            if isinstance(tc.arguments, dict)
-                            else json.loads(tc.arguments),
-                            sort_keys=True,
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        args_str = str(tc.arguments)
-                    fp = f"{tc.name}:{hashlib.md5(args_str.encode()).hexdigest()[:8]}"
-                    _recent_tool_fingerprints.append(fp)
-                    # Result hash
                     result_val = timed.result if isinstance(timed, TimedResult) else timed
-                    result_str = str(result_val) if result_val is not None else ""
-                    rh = hashlib.md5(result_str[:2000].encode()).hexdigest()[:8]
-                    _recent_result_hashes.append(rh)
+                    state.observe_for_watchdog(tc.name, tc.arguments, result_val)
 
                 loop_desc = self._detect_loop(
-                    _recent_tool_names,
-                    _recent_tool_fingerprints,
-                    _recent_result_hashes,
+                    state.recent_names,
+                    state.recent_fingerprints,
+                    state.recent_result_hashes,
                 )
                 if loop_desc:
                     logger.warning(f"[ReAct] {loop_desc}")
-                    final_response = "I noticed I was repeating the same actions without making progress. Let me provide what I have so far."
-                    async for event in self._yield_chunked_response(final_response, turn):
+                    state.final_response = "I noticed I was repeating the same actions without making progress. Let me provide what I have so far."
+                    async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                     break
 
@@ -1119,16 +1087,16 @@ class ReactLoopMixin:
                 # complete and it is safe to unwind here.
                 if control.cancelled:
                     logger.info(f"[ReAct] Interrupted after tool execution (turn={turn})")
-                    interrupted = True
+                    state.interrupted = True
                     break
 
                 if loop_broken:
-                    final_response = loop_broken_text or ""
-                    result_status = (
-                        "WAITING_FOR_APPROVAL" if pending_approvals else "WAITING_FOR_INPUT"
+                    state.final_response = loop_broken_text or ""
+                    state.result_status = (
+                        "WAITING_FOR_APPROVAL" if state.pending_approvals else "WAITING_FOR_INPUT"
                     )
-                    if pending_approvals:
-                        pending_approvals = collect_batch_approvals(pending_approvals)
+                    if state.pending_approvals:
+                        state.pending_approvals = collect_batch_approvals(state.pending_approvals)
                     if loop_broken_text:
                         async for event in self._yield_chunked_response(loop_broken_text, turn):
                             yield event
@@ -1151,7 +1119,7 @@ class ReactLoopMixin:
                         f"[ReAct] turn={turn} agent_passthrough "
                         f"({len(agent_text)} chars from {tool_calls[0].name})"
                     )
-                    final_response = agent_text
+                    state.final_response = agent_text
                     async for event in self._yield_chunked_response(agent_text, turn):
                         yield event
                     break
@@ -1176,18 +1144,16 @@ class ReactLoopMixin:
                 final_text = response.content or ""
                 usage = getattr(response, "usage", None)
                 if usage:
-                    total_usage.input_tokens += getattr(usage, "prompt_tokens", 0)
-                    total_usage.output_tokens += getattr(usage, "completion_tokens", 0)
-                    total_usage.cost_usd += getattr(usage, "cost", 0) or 0
+                    state.usage.input_tokens += getattr(usage, "prompt_tokens", 0)
+                    state.usage.output_tokens += getattr(usage, "completion_tokens", 0)
+                    state.usage.cost_usd += getattr(usage, "cost", 0) or 0
             except Exception as e:
                 logger.warning(f"[ReAct] Summary call after max_turns failed: {e}")
                 final_text = "I was unable to complete the request within the allowed turns."
 
-            final_response = final_text
+            state.final_response = final_text
             async for event in self._yield_chunked_response(final_text, turn):
                 yield event
-
-        duration_ms = int((time.monotonic() - start_time) * 1000)
 
         # Cancel any speculative tasks that were not consumed
         speculative = (context or {}).get("_speculative_tasks", {})
@@ -1201,42 +1167,25 @@ class ReactLoopMixin:
 
         # An interrupted run keeps its transcript: the user stopped it, and it
         # may be worth continuing. A finished one is terminal and gets pruned.
-        await self._finish_transcript(
-            context, "suspended" if interrupted else "completed"
-        )
+        await self._finish_transcript(context, "suspended" if state.interrupted else "completed")
 
-        if interrupted:
-            if not final_response:
-                final_response = "Stopped."
-            if result_status is None:
-                result_status = "INTERRUPTED"
+        if state.interrupted:
+            if not state.final_response:
+                state.final_response = "Stopped."
+            if state.result_status is None:
+                state.result_status = "INTERRUPTED"
             yield AgentEvent(
                 type=EventType.INTERRUPTED,
                 data={
                     "reason": control.cancel_reason,
-                    "turns": turn,
-                    "tool_calls_count": len(all_tool_records),
+                    "turns": state.turn,
+                    "tool_calls_count": len(state.tool_records),
                 },
             )
 
         yield AgentEvent(
             type=EventType.EXECUTION_END,
-            data={
-                "duration_ms": duration_ms,
-                "turns": turn,
-                "tool_calls_count": len(all_tool_records),
-                "final_response": final_response,
-                "result_status": result_status,
-                "interrupted": interrupted,
-                "pending_approvals": pending_approvals,
-                "media": _response_media or None,
-                "token_usage": {
-                    "input_tokens": total_usage.input_tokens,
-                    "output_tokens": total_usage.output_tokens,
-                    "cost_usd": round(total_usage.cost_usd, 6),
-                },
-                "tool_calls": [dataclasses.asdict(r) for r in all_tool_records],
-            },
+            data=state.execution_end_payload(),
         )
 
     async def _save_tool_call_history(
