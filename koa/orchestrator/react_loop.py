@@ -12,20 +12,15 @@ import time
 from collections import namedtuple
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from ..llm.tool_validator import ToolSchemaValidator
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import AgentToolResult
 from .approval import collect_batch_approvals
 from .error_classifier import LLMErrorKind
 from .planning import PlanningMixin, PlanOutcome
-from .react_config import (
-    COMPLETE_TASK_TOOL_NAME,
-    CompleteTaskResult,
-    ToolCallRecord,
-)
 from .run_state import RunState
 from .tool_execution import ToolExecutionMixin, TurnOutcome
 from .transcript_repair import repair_transcript
+from .turn_gate import TurnGateMixin
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +111,7 @@ def _tool_acknowledgment(tool_names: List[str], turn: int) -> Optional[str]:
     return random.choice(_CASUAL_ACKS)
 
 
-class ReactLoopMixin(ToolExecutionMixin, PlanningMixin):
+class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
     """Mixin providing the ReAct loop and its helpers.
 
     Expects the following attributes on ``self`` (provided by Orchestrator):
@@ -478,69 +473,18 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin):
                 messages.append(self._assistant_message_from_response(response))
 
                 # ----------------------------------------------------------
-                # Intercept complete_task: handle synchronously, skip execution
+                # complete_task never executes: it is the model saying it is
+                # done. Pull it out, then screen what is left.
                 # ----------------------------------------------------------
-                complete_task_result: Optional[CompleteTaskResult] = None
-                _complete_task_tc_id: Optional[str] = None
-                remaining_tool_calls = []
-                for tc in tool_calls:
-                    if tc.name == COMPLETE_TASK_TOOL_NAME:
-                        try:
-                            _ct_args = (
-                                tc.arguments
-                                if isinstance(tc.arguments, dict)
-                                else json.loads(tc.arguments)
-                            )
-                        except (json.JSONDecodeError, TypeError):
-                            _ct_args = {}
-                        _ct_text = _ct_args.get("result", "")
-                        if _ct_text:
-                            complete_task_result = CompleteTaskResult(result=_ct_text)
-                            _complete_task_tc_id = tc.id
-                            logger.info(
-                                f"[ReAct] turn={turn} complete_task called ({len(_ct_text)} chars)"
-                            )
-                        else:
-                            # Missing result -- append error, let LLM retry
-                            messages.append(
-                                self._build_tool_result_message(
-                                    tc.id,
-                                    'Error: "result" argument is required for complete_task.',
-                                    is_error=True,
-                                )
-                            )
-                            remaining_tool_calls.append(tc)
-                    else:
-                        remaining_tool_calls.append(tc)
+                intercept = self._intercept_complete_task(tool_calls, messages)
 
-                # Pure complete_task with no other tools -- break immediately
-                if complete_task_result and not remaining_tool_calls:
-                    messages.append(
-                        self._build_tool_result_message(_complete_task_tc_id, "Task completed.")
-                    )
-                    state.tool_records.append(
-                        ToolCallRecord(
-                            name=COMPLETE_TASK_TOOL_NAME,
-                            args_summary={"result": complete_task_result.result[:100]},
-                            duration_ms=0,
-                            success=True,
-                            result_status="COMPLETED",
-                            result_chars=len(complete_task_result.result),
-                        )
-                    )
-                    state.final_response = complete_task_result.result
-                    self._audit.log_react_turn(
-                        turn=turn,
-                        tool_calls=[COMPLETE_TASK_TOOL_NAME],
-                        final_answer=True,
-                        tenant_id=tenant_id,
-                    )
+                if intercept.ends_turn_alone:
+                    self._settle_complete_task(intercept, messages, state)
                     async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                     break
 
-                # complete_task was called alongside other tools -- add its result
-                tool_calls = remaining_tool_calls if remaining_tool_calls else tool_calls
+                tool_calls = intercept.remaining or tool_calls
 
                 # Stop boundary: the assistant message with its tool_calls is
                 # already in history, so every call must still be answered even
@@ -554,71 +498,9 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin):
                     state.interrupted = True
                     break
 
-                # ----------------------------------------------------------
-                # Validate tool calls against the schema sent to the LLM.
-                # Reject hallucinated tool names and schema-mismatched args.
-                # Rejected calls become error tool_results so the model can
-                # self-correct on the next turn instead of crashing the loop.
-                # ----------------------------------------------------------
-                validator = ToolSchemaValidator.from_openai_tools(tool_schemas)
-                validated_tool_calls = []
-                for tc in tool_calls:
-                    # complete_task is synthetic; always allow.
-                    if tc.name == COMPLETE_TASK_TOOL_NAME:
-                        validated_tool_calls.append(tc)
-                        continue
-                    try:
-                        args_for_validation = (
-                            tc.arguments
-                            if isinstance(tc.arguments, dict)
-                            else json.loads(tc.arguments or "{}")
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        args_for_validation = None
-                    if args_for_validation is None:
-                        reason = "arguments_not_json"
-                        details: Dict[str, Any] = {"name": tc.name}
-                    else:
-                        vr = validator.validate(tc.name, args_for_validation)
-                        if vr.ok:
-                            validated_tool_calls.append(tc)
-                            continue
-                        reason = vr.reason
-                        details = vr.details or {}
-                    logger.warning(
-                        "[ReAct] Rejecting tool call %r: %s %s",
-                        tc.name,
-                        reason,
-                        details,
-                    )
-                    self._audit.log_tool_execution(
-                        tool_name=tc.name,
-                        args_summary={"rejected_reason": reason},
-                        success=False,
-                        duration_ms=0,
-                        error=f"schema_validation:{reason}",
-                        tenant_id=tenant_id,
-                    )
-                    messages.append(
-                        self._build_tool_result_message(
-                            tc.id,
-                            f"Error: tool call rejected by schema validation "
-                            f"({reason}). details={json.dumps(details, default=str)[:256]}. "
-                            f"Allowed tools: {', '.join(validator.known_names[:20])}",
-                            is_error=True,
-                        )
-                    )
-                    state.tool_records.append(
-                        ToolCallRecord(
-                            name=tc.name,
-                            args_summary={"rejected_reason": reason},
-                            duration_ms=0,
-                            success=False,
-                            result_status="REJECTED",
-                            result_chars=0,
-                        )
-                    )
-
+                validated_tool_calls = self._validate_tool_calls(
+                    tool_calls, tool_schemas, messages, state
+                )
                 if not validated_tool_calls:
                     # All calls rejected — continue the loop so the model
                     # can retry with valid tools.  Guarded by max_turns.
@@ -662,27 +544,8 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin):
 
                 # complete_task was called alongside other tools -- add its result
                 # AFTER all other tools' results have been appended to messages
-                if complete_task_result:
-                    messages.append(
-                        self._build_tool_result_message(_complete_task_tc_id, "Task completed.")
-                    )
-                    state.tool_records.append(
-                        ToolCallRecord(
-                            name=COMPLETE_TASK_TOOL_NAME,
-                            args_summary={"result": complete_task_result.result[:100]},
-                            duration_ms=0,
-                            success=True,
-                            result_status="COMPLETED",
-                            result_chars=len(complete_task_result.result),
-                        )
-                    )
-                    state.final_response = complete_task_result.result
-                    self._audit.log_react_turn(
-                        turn=turn,
-                        tool_calls=tool_names + [COMPLETE_TASK_TOOL_NAME],
-                        final_answer=True,
-                        tenant_id=tenant_id,
-                    )
+                if intercept.result:
+                    self._settle_complete_task(intercept, messages, state, tool_names)
                     async for event in self._yield_chunked_response(state.final_response, turn):
                         yield event
                     break
