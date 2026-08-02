@@ -306,14 +306,7 @@ class Koa:
             self._trigger_engine._notifications.append(callback_notification)
             logger.info(f"CallbackNotification configured: {callback_url}")
 
-        # 8. Checkpoint storage (PostgreSQL)
-        from .checkpoint import CheckpointManager, PostgreSQLStorage
-
-        checkpoint_storage = PostgreSQLStorage(db=self._database)
-        await checkpoint_storage.initialize()
-        checkpoint_manager = CheckpointManager(storage=checkpoint_storage)
-
-        # 9. Orchestrator
+        # 8. Orchestrator
         from .orchestrator import Orchestrator
         from .orchestrator.reminder_guard import reminder_guard_hook
 
@@ -327,12 +320,11 @@ class Koa:
             system_prompt_mode=cfg.get("system_prompt_mode", "append"),
             trigger_engine=self._trigger_engine,
             model_router=self._model_router,
-            checkpoint_manager=checkpoint_manager,
             post_process_hooks=[reminder_guard_hook],
         )
         await self._orchestrator.initialize()
 
-        # 9b. MCP Servers (optional)
+        # 8b. MCP Servers (optional)
         mcp_servers_cfg = cfg.get("mcp_servers", {})
         if mcp_servers_cfg:
             try:

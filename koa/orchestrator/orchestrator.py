@@ -77,7 +77,6 @@ from .tool_manager import ToolManagerMixin
 from .tool_policy import ToolPolicyFilter
 
 if TYPE_CHECKING:
-    from ..checkpoint import CheckpointManager
     from ..llm.router import ModelRouter
     from ..memory.momex import MomexMemory
     from ..msghub import MessageHub
@@ -219,7 +218,6 @@ class Orchestrator(
         credential_store: Optional[Any] = None,
         database: Optional[Any] = None,
         trigger_engine: Optional[Any] = None,
-        checkpoint_manager: Optional["CheckpointManager"] = None,
         message_hub: Optional["MessageHub"] = None,
         guardrails_checker: Optional[Any] = None,
         rate_limiter: Optional[Callable] = None,
@@ -253,7 +251,6 @@ class Orchestrator(
             react_config: ReAct loop configuration (max_turns, timeouts, etc.)
             credential_store: CredentialStore for tool execution context
             trigger_engine: TriggerEngine for proactive trigger tasks
-            checkpoint_manager: Checkpoint manager for state persistence
             message_hub: Message hub for multi-agent communication
             guardrails_checker: Optional safety checker with async ``check_input(msg)``
                 and ``check_output(msg, tenant_id)`` methods.  ``check_input``
@@ -279,7 +276,6 @@ class Orchestrator(
         # Core dependencies
         self.momex = momex
         self.llm_client = llm_client
-        self.checkpoint_manager = checkpoint_manager
         self.message_hub = message_hub
         self.credential_store = credential_store
         self.database = database

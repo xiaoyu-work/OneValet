@@ -256,7 +256,7 @@ class StandardAgent(BaseAgent):
         self._pause_requested = False
         self._status_before_pause: Optional[AgentStatus] = None
 
-        # Execution state (for checkpoint/restore)
+        # Free-form runtime state a subclass can use across state handlers
         self.execution_state: Dict[str, Any] = {}
         self.context: Dict[str, Any] = {}
         self._message_history: List["Message"] = []
@@ -787,7 +787,7 @@ class StandardAgent(BaseAgent):
         return self.status == AgentStatus.COMPLETED
 
     def get_message_history(self) -> List["Message"]:
-        """Get copy of message history for checkpoint."""
+        """Get a copy of this agent's message history."""
         return self._message_history.copy()
 
     def add_to_history(self, msg: "Message") -> None:

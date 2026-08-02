@@ -23,7 +23,7 @@ class AgentLifecycleMixin:
 
     Expects the following on ``self`` (provided by Orchestrator):
     - ``agent_pool``, ``_agent_registry``, ``config``, ``llm_client``
-    - ``_audit``, ``_execution_policy``, ``checkpoint_manager``
+    - ``_audit``, ``_execution_policy``
     - ``message_hub``, ``trigger_engine``
     - ``STALE_AGENT_THRESHOLD_SECONDS``
     - ``_create_callback_invoker()`` (Orchestrator)
@@ -152,7 +152,6 @@ class AgentLifecycleMixin:
             agent = self._agent_registry.create_agent(
                 name=agent_type,
                 tenant_id=tenant_id,
-                checkpoint_manager=self.checkpoint_manager,
                 message_hub=self.message_hub,
                 orchestrator_callback=self._create_callback_invoker(tenant_id),
                 context_hints=context_hints,
@@ -331,7 +330,6 @@ class AgentLifecycleMixin:
         agent = self._agent_registry.create_agent(
             name=entry.agent_type,
             tenant_id=entry.tenant_id,
-            checkpoint_manager=self.checkpoint_manager,
             message_hub=self.message_hub,
             orchestrator_callback=self._create_callback_invoker(entry.tenant_id),
         )
