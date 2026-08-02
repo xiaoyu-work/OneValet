@@ -93,12 +93,13 @@ def build_agent_hints(
     # separately — put it back into hints so the agent has access to it.
     if task_instruction:
         enriched_hints["task_instruction"] = task_instruction
-    if orchestrator.database:
+    if getattr(orchestrator, "database", None):
         enriched_hints["db"] = orchestrator.database
-    if orchestrator.trigger_engine:
-        enriched_hints["trigger_engine"] = orchestrator.trigger_engine
-        if orchestrator.trigger_engine.cron_service:
-            enriched_hints["cron_service"] = orchestrator.trigger_engine.cron_service
+    trigger_engine = getattr(orchestrator, "trigger_engine", None)
+    if trigger_engine:
+        enriched_hints["trigger_engine"] = trigger_engine
+        if trigger_engine.cron_service:
+            enriched_hints["cron_service"] = trigger_engine.cron_service
     # Pass user images to agent tools (e.g. for receipt scanning)
     current_images = (request_context or {}).get("user_images")
     if current_images:

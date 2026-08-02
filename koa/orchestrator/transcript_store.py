@@ -134,6 +134,43 @@ class TranscriptStore:
             turn=row["turn"] or 0,
         )
 
+    async def claim(self, run_id: str, stale_after_seconds: int = 900) -> bool:
+        """Take exclusive ownership of continuing a run.
+
+        Two answers to the same run can arrive within a second of each other,
+        and an operator can POST a resume for a run that is already going. Both
+        would replay the same transcript concurrently: two loops making the
+        same calls, and whichever finished last overwriting the other's record
+        of what happened.
+
+        The state change is the claim, so the database picks the winner. A run
+        already marked running is not simply refused, because a process that
+        died mid-run leaves that mark behind forever; one that has gone quiet
+        for longer than the lease is treated as abandoned and may be taken
+        over. A live run keeps its lease fresh by saving each turn.
+        """
+        if not self._db:
+            return False
+        try:
+            row = await self._db.fetchrow(
+                """
+                UPDATE run_transcripts
+                   SET status = $2, updated_at = NOW()
+                 WHERE run_id = $1
+                   AND (status = $3
+                        OR (status = $2 AND updated_at < NOW() - ($4 || ' seconds')::interval))
+                RETURNING run_id
+                """,
+                run_id,
+                STATUS_RUNNING,
+                STATUS_SUSPENDED,
+                str(stale_after_seconds),
+            )
+        except Exception as e:
+            logger.warning(f"Could not claim run {run_id}: {e}")
+            return False
+        return row is not None
+
     async def mark(self, run_id: str, status: str) -> None:
         """Move a run to a terminal or suspended state."""
         if not self._db:

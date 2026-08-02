@@ -87,6 +87,13 @@ class ResumeMixin:
             )
             return
 
+        # And only one continuation at a time. Answers can land together and a
+        # resume can be asked for by hand, and two loops replaying the same
+        # transcript would repeat each other's work and overwrite the record.
+        if not await store.claim(run_id):
+            logger.info(f"[Resume] Run {run_id} is already being continued; leaving it alone")
+            return
+
         # Two different things can be outstanding, and they are answered in
         # different currencies. A tool call the process died in the middle of
         # needs a tool result under its own id. A decision the user made needs
@@ -247,9 +254,17 @@ class ResumeMixin:
             logger.warning(f"[Resume] Could not read decisions for run {run_id}: {e}")
             return []
 
+        notes_direct: List[str] = []
         owners: List[str] = []
         for ask in asks:
-            if not ask.awaits_execution or ask.kind != "approval":
+            if not ask.awaits_execution:
+                continue
+            if ask.kind != "approval":
+                # Nothing to carry out, but the answer is still owed a place in
+                # the run. Left unstamped it would keep the run listed as owing
+                # something with nothing able to clear it.
+                if await inbox.claim_execution(ask.id):
+                    notes_direct.append(f"The user answered: {ask.resolution}")
                 continue
             data = ask.data or {}
             owner = data.get("agent_type") or self._agent_type_for_class(data.get("agent", ""))
@@ -261,9 +276,9 @@ class ResumeMixin:
                     "the user's decision cannot be honoured"
                 )
         if not owners:
-            return []
+            return notes_direct
 
-        notes: List[str] = []
+        notes: List[str] = list(notes_direct)
         for agent_type in owners:
             hints = build_agent_hints(
                 self,
