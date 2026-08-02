@@ -176,6 +176,50 @@ class TranscriptStore:
             return False
         return row is not None
 
+    async def release(self, run_id: str) -> None:
+        """Hand a claimed run back, but only if it is still ours to hand back.
+
+        The loop sets the run's final status before the caller has finished
+        with it, so a failure in that tail must not rewrite a run that
+        completed into one that looks unfinished. Only a row still marked
+        running is one nobody has concluded.
+        """
+        if not self._db:
+            return
+        try:
+            await self._db.execute(
+                """
+                UPDATE run_transcripts
+                   SET status = $2, updated_at = NOW()
+                 WHERE run_id = $1 AND status = $3
+                """,
+                run_id,
+                STATUS_SUSPENDED,
+                STATUS_RUNNING,
+            )
+        except Exception as e:
+            logger.warning(f"Could not release run {run_id}: {e}")
+
+    async def touch(self, run_id: str) -> None:
+        """Say the run is still alive, without rewriting its transcript.
+
+        The lease is what stops a second caller taking over a run that is
+        still working, and it is only as good as the last time the run said
+        anything. A turn that ends without recording new work -- every tool
+        call rejected, say -- still needs to count as a sign of life.
+        """
+        if not self._db:
+            return
+        try:
+            await self._db.execute(
+                "UPDATE run_transcripts SET updated_at = NOW() "
+                "WHERE run_id = $1 AND status = $2",
+                run_id,
+                STATUS_RUNNING,
+            )
+        except Exception as e:
+            logger.debug(f"Could not touch run {run_id}: {e}")
+
     async def mark(self, run_id: str, status: str) -> None:
         """Move a run to a terminal or suspended state."""
         if not self._db:

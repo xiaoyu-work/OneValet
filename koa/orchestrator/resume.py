@@ -13,6 +13,7 @@ so a resume is safe to attempt more than once.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -36,6 +37,18 @@ _MAX_REPLY_WORDS = 6
 #: dead. Half an hour: long enough that nothing legitimate is mistaken for a
 #: corpse, short enough that a real crash is recoverable the same day.
 _RESUME_LEASE_MARGIN = 1800
+
+#: The longest a single model request can take before the client gives up.
+#: Streaming is the slower of the two ceilings in LLMConfig, so it is the one
+#: a lease has to survive.
+_LLM_REQUEST_CEILING = 120
+
+#: How many times to wait for a busy run to finish before giving up on
+#: continuing it, and how long each successive wait grows by. Together these
+#: span several minutes -- longer than a turn, so a run that is merely
+#: finishing is caught, while one that is genuinely wedged is left to the lease.
+_RESUME_ATTEMPTS = 6
+_RESUME_RETRY_DELAY = 20
 
 
 class ResumeMixin:
@@ -114,8 +127,11 @@ class ResumeMixin:
             # The claim outlives us otherwise, and the run would sit unreachable
             # until the lease expired. Cancellation and shutdown come through
             # here too, which is exactly when a process stops without finishing.
+            # Conditional, because the loop sets the run's final status before
+            # this returns: a failure in the tail must not reopen a run that
+            # actually completed.
             logger.warning(f"[Resume] Run {run_id} did not finish; releasing it")
-            await store.mark(run_id, STATUS_SUSPENDED)
+            await store.release(run_id)
             raise
 
     async def _continue_claimed_run(
@@ -240,19 +256,22 @@ class ResumeMixin:
     def _resume_lease_seconds(self) -> int:
         """How long a run may go quiet before it counts as abandoned.
 
-        A live run writes its transcript after each round of tools, so the
-        longest it can legitimately be silent is one round: a model call with
-        its retries, then the tools that round asked for. Both are bounded by
-        configuration, so the lease is derived from them rather than picked --
-        raise a timeout and the lease follows.
+        A live run says so at the top of every turn, so the window to cover is
+        one turn: up to two model calls -- the summarizer that trims history,
+        then the one that decides -- each with its retries, plus the tools that
+        turn asked for. Tools run concurrently, so that term is the slowest
+        single call rather than their sum.
 
-        The margin is deliberately wide. Being too generous means a crashed
-        run waits longer before anyone can take it over; being too tight means
-        taking over a run that is still working, and running its tools twice.
+        Derived from the timeouts it depends on, so raising one raises this.
+        The margin is wide on purpose: being too generous means a crashed run
+        waits longer before anyone takes it over, which nobody notices; being
+        too tight means taking a run away from the process still working on it
+        and running its tools a second time.
         """
         cfg = self._react_config
-        llm_budget = (cfg.llm_max_retries + 1) * cfg.llm_retry_base_delay * 60
-        return int(cfg.agent_tool_execution_timeout + llm_budget + _RESUME_LEASE_MARGIN)
+        attempts = cfg.llm_max_retries + 1
+        per_call = _LLM_REQUEST_CEILING * attempts + cfg.llm_retry_base_delay * (2**attempts)
+        return int(cfg.agent_tool_execution_timeout + 2 * per_call + _RESUME_LEASE_MARGIN)
 
     def _agent_type_for_class(self, class_name: str) -> Optional[str]:
         """The registry name for an agent, given the class that recorded an ask.
@@ -347,6 +366,50 @@ class ResumeMixin:
                 # be picked up as a live conversation.
                 await self.agent_pool.remove_agent(tenant_id, agent.agent_id)
         return notes
+
+    async def resume_when_free(self, run_id: str) -> None:
+        """Continue a run, waiting for it to finish if it is still going.
+
+        The user is told about an ask while the run that raised it is still
+        working, so a fast reply arrives to a run that already holds its own
+        claim. Refusing that outright would be the end of it: nothing polls,
+        and the run will not come back to the decision by itself, so the
+        answer would be lost with the user having been told it was recorded.
+
+        So a lost claim is waited out rather than given up on. The run is
+        finishing, not stuck -- if it were stuck the lease would cover it --
+        and the attempts span comfortably longer than a turn.
+        """
+        for attempt in range(_RESUME_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_RESUME_RETRY_DELAY * attempt)
+            if not await self._still_owed(run_id):
+                return
+            produced = False
+            try:
+                async for _ in self.resume_run(run_id):
+                    produced = True
+            except Exception as e:
+                logger.error(f"[Resume] Continuing run {run_id} failed: {e}", exc_info=True)
+                return
+            if produced:
+                return
+        logger.error(
+            f"[Resume] Gave up continuing run {run_id} after {_RESUME_ATTEMPTS} attempts; "
+            "the user's decision is recorded but not acted on"
+        )
+
+    async def _still_owed(self, run_id: str) -> bool:
+        """Whether this run has anything left to do for the user."""
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled:
+            return True
+        try:
+            return any(
+                ask.is_open or ask.awaits_execution for ask in await inbox.for_run(run_id)
+            )
+        except Exception:
+            return True
 
     async def _open_ask_count(self, run_id: str) -> int:
         """How many of this run's questions the user has not answered yet.

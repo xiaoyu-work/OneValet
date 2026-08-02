@@ -212,6 +212,15 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             status=status,
         )
 
+    async def _touch_transcript(self, context: Optional[Dict[str, Any]]) -> None:
+        """Refresh this run's lease without rewriting what it has done."""
+        store = getattr(self, "_transcript_store", None)
+        if store is None or not store.enabled:
+            return
+        run_id = (context or {}).get("request_id")
+        if run_id:
+            await store.touch(run_id)
+
     async def _finish_transcript(
         self,
         context: Optional[Dict[str, Any]],
@@ -463,6 +472,10 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
 
         for turn in range(1, self._react_config.max_turns + 1):
             state.turn = turn
+            # Say the run is still alive. Not every turn records new work -- one
+            # whose calls are all rejected loops without saving -- and a run
+            # that goes quiet long enough is assumed dead and taken over.
+            await self._touch_transcript(context)
             budget = self._react_config.react_timeout
             if budget is not None:
                 elapsed = state.elapsed_seconds

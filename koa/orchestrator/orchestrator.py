@@ -951,11 +951,17 @@ class Orchestrator(
         if produced:
             return
 
-        logger.info(f"[Orchestrator] Run {run_id} produced nothing on resume; acknowledging")
+        # The run it belongs to is still finishing, so it holds its own claim.
+        # Hand off to a background waiter rather than dropping the answer, and
+        # tell the user it is recorded -- which it is.
+        logger.info(f"[Orchestrator] Run {run_id} is busy; continuing it in the background")
+        self.task_registry.create_task(
+            self.resume_when_free(run_id), name=f"resume:{run_id}"
+        )
         result = AgentResult(
             agent_type="Orchestrator",
             status=AgentStatus.COMPLETED,
-            raw_message="Got it — I've recorded your answer.",
+            raw_message="Got it — I've recorded your answer and I'm on it.",
         )
         async for event in self._emit_direct_result(await self.post_process(result, context)):
             yield event

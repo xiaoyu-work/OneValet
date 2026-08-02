@@ -66,17 +66,11 @@ async def answer(ask_id: str, req: AnswerRequest):
     if run_id is None:
         return {"status": "already_resolved", "resumed": False}
 
-    # Resume in the background: the caller should not wait out a full agent
-    # run just to have their tap acknowledged.
-    async def _resume():
-        try:
-            async for _ in orch.resume_run(run_id):
-                pass
-        except Exception as e:
-            logger.error(f"[Inbox] Resuming run {run_id} failed: {e}", exc_info=True)
-
-    orch.task_registry.create_task(_resume(), name=f"resume:{run_id}")
-    return {"status": "resolved", "resumed": True, "run_id": run_id}
+    # Continue in the background: the caller should not wait out a full agent
+    # run to have their tap acknowledged. The run may still be finishing, so
+    # this waits for it rather than giving up on the first refusal.
+    orch.task_registry.create_task(orch.resume_when_free(run_id), name=f"resume:{run_id}")
+    return {"status": "resolved", "run_id": run_id}
 
 
 @router.get("/api/runs/{tenant_id}/resumable", dependencies=[Depends(verify_api_key)])
