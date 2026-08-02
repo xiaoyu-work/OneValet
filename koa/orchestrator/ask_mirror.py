@@ -49,6 +49,12 @@ def parse_reply(text: str, options: Optional[List[str]] = None) -> Optional[str]
     than the literal option word, so accept the obvious synonyms. Returns None
     when the reply is not recognisable as a decision -- better to leave the ask
     open than to act on a guess.
+
+    Deliberately absent from the synonyms: "stop", "cancel", "don't". Those
+    are how people interrupt an assistant, not how they answer a question that
+    may have been raised by a background job days ago. Reading them as a
+    refusal would consume a real instruction and record a decision the user
+    did not make, and the record cannot be taken back.
     """
     if not text:
         return None
@@ -62,8 +68,8 @@ def parse_reply(text: str, options: Optional[List[str]] = None) -> Optional[str]
 
     affirmative = {"yes", "y", "ok", "okay", "sure", "approve", "approved",
                    "go ahead", "do it", "confirm", "yep", "yeah", "是", "好", "确认"}
-    negative = {"no", "n", "nope", "reject", "rejected", "deny", "cancel",
-                "don't", "dont", "stop", "不", "不要", "取消"}
+    negative = {"no", "n", "nope", "reject", "rejected", "deny",
+                "no thanks", "不", "不要"}
 
     if reply in affirmative:
         return "approve" if "approve" in opts or not opts else opts[0]

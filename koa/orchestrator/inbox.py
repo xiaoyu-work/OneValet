@@ -49,9 +49,20 @@ class Ask:
     resolution: Optional[str] = None
     data: Dict[str, Any] = field(default_factory=dict)
 
+    #: Identity of the action this is about -- see ``action_key``.
+    action_key: str = ""
+
+    #: When the approved action was carried out. None means it still owes one.
+    executed_at: Optional[Any] = None
+
     @property
     def is_open(self) -> bool:
         return self.state == STATE_PENDING
+
+    @property
+    def awaits_execution(self) -> bool:
+        """Approved by the user, but the action has not happened yet."""
+        return self.state == STATE_RESOLVED and self.executed_at is None
 
 
 def _loads(value: Any, default: Any) -> Any:
@@ -83,6 +94,19 @@ def action_key(tool_name: Any, args: Any) -> str:
     return f"{tool_name}\x00{rendered}"
 
 
+_COLUMNS = """id, tenant_id, run_id, tool_call_id, kind, title, body,
+                       options, state, resolution, data, action_key, executed_at"""
+
+#: Answers that mean "go ahead". Anything else is a refusal, so an answer we
+#: do not understand stops the action rather than performing it.
+_AFFIRMATIVE = {"approve", "approved", "yes", "y", "ok", "okay", "confirm", "allow", "accept"}
+
+
+def is_approval(resolution: Optional[str]) -> bool:
+    """Whether a recorded answer authorises the action."""
+    return (resolution or "").strip().lower() in _AFFIRMATIVE
+
+
 def _row_to_ask(row: Any) -> Ask:
     return Ask(
         id=row["id"],
@@ -96,7 +120,20 @@ def _row_to_ask(row: Any) -> Ask:
         state=row["state"],
         resolution=row["resolution"],
         data=_loads(row["data"], {}),
+        action_key=_key_of(row),
+        executed_at=_get(row, "executed_at"),
     )
+
+
+def _get(row: Any, name: str) -> Any:
+    try:
+        return row[name]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _key_of(row: Any) -> str:
+    return _get(row, "action_key") or ""
 
 
 class InboxStore:
@@ -116,30 +153,34 @@ class InboxStore:
         run_id: str,
         tool_call_id: str,
         kind: str,
+        action_key: str,
         title: str = "",
         body: str = "",
         options: Optional[List[str]] = None,
         data: Optional[Dict[str, Any]] = None,
     ) -> Optional[Ask]:
-        """Record an ask, or return the existing one for this tool call.
+        """Record an ask, or return the existing one for this action.
 
-        Idempotent by (run_id, tool_call_id): resuming a run that already asked
-        must not ask again. The returned ask may therefore already be resolved,
-        which is how a resume discovers the answer it was waiting for.
+        Idempotent by (run_id, action_key) -- the identity of the action
+        itself, not of the tool call that happened to raise it. A replayed run
+        mints new tool call ids, so keying on those would let the same
+        question be asked again; keying on the action means a replay finds the
+        answer instead. The returned ask may therefore already be resolved,
+        which is how a resume discovers what the user decided.
         """
         if not self._db:
             return None
         ask_id = uuid.uuid4().hex
         try:
             row = await self._db.fetchrow(
-                """
+                f"""
                 INSERT INTO pending_asks
-                    (id, tenant_id, run_id, tool_call_id, kind, title, body, options, data)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb)
-                ON CONFLICT (run_id, tool_call_id) DO UPDATE
-                    SET tool_call_id = pending_asks.tool_call_id
-                RETURNING id, tenant_id, run_id, tool_call_id, kind, title, body,
-                          options, state, resolution, data
+                    (id, tenant_id, run_id, tool_call_id, kind, title, body,
+                     options, data, action_key)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+                ON CONFLICT (run_id, action_key) DO UPDATE
+                    SET action_key = pending_asks.action_key
+                RETURNING {_COLUMNS}
                 """,
                 ask_id,
                 tenant_id,
@@ -150,6 +191,7 @@ class InboxStore:
                 body,
                 json.dumps(options or []),
                 json.dumps(data or {}, default=str),
+                action_key,
             )
         except Exception as e:
             logger.error(f"Could not create ask for run {run_id}: {e}", exc_info=True)
@@ -160,6 +202,48 @@ class InboxStore:
         if ask.id == ask_id:
             logger.info(f"[Inbox] Asked {tenant_id}: {title or kind} (run={run_id})")
         return ask
+
+    async def claim_execution(self, ask_id: str) -> bool:
+        """Take ownership of carrying out an approved action.
+
+        An approval authorises one action, once. Two resumes of the same run
+        can race here, so the stamp is the claim: whoever sets executed_at
+        performs the action and everyone else is told they lost.
+        """
+        if not self._db:
+            return False
+        try:
+            row = await self._db.fetchrow(
+                """
+                UPDATE pending_asks
+                   SET executed_at = NOW()
+                 WHERE id = $1 AND state = $2 AND executed_at IS NULL
+                RETURNING id
+                """,
+                ask_id,
+                STATE_RESOLVED,
+            )
+        except Exception as e:
+            logger.error(f"Could not claim execution of ask {ask_id}: {e}", exc_info=True)
+            return False
+        return row is not None
+
+    async def release_execution(self, ask_id: str) -> None:
+        """Give the claim back when the action could not be attempted.
+
+        Only for failures that never reached the tool. Once a tool has run,
+        the claim stays: retrying is a decision for the model, not something
+        to do silently on the user's behalf.
+        """
+        if not self._db:
+            return
+        try:
+            await self._db.execute(
+                "UPDATE pending_asks SET executed_at = NULL WHERE id = $1",
+                ask_id,
+            )
+        except Exception as e:
+            logger.warning(f"Could not release execution claim on {ask_id}: {e}")
 
     async def resolve(
         self,
@@ -203,9 +287,8 @@ class InboxStore:
             return None
         try:
             row = await self._db.fetchrow(
-                """
-                SELECT id, tenant_id, run_id, tool_call_id, kind, title, body,
-                       options, state, resolution, data
+                f"""
+                SELECT {_COLUMNS}
                 FROM pending_asks WHERE id = $1
                 """,
                 ask_id,
@@ -221,9 +304,8 @@ class InboxStore:
             return []
         try:
             rows = await self._db.fetch(
-                """
-                SELECT id, tenant_id, run_id, tool_call_id, kind, title, body,
-                       options, state, resolution, data
+                f"""
+                SELECT {_COLUMNS}
                 FROM pending_asks
                 WHERE tenant_id = $1 AND state = $2
                 ORDER BY created_at DESC
@@ -248,9 +330,8 @@ class InboxStore:
             return []
         try:
             rows = await self._db.fetch(
-                """
-                SELECT id, tenant_id, run_id, tool_call_id, kind, title, body,
-                       options, state, resolution, data
+                f"""
+                SELECT {_COLUMNS}
                 FROM pending_asks WHERE run_id = $1 ORDER BY created_at
                 """,
                 run_id,

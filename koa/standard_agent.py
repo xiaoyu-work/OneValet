@@ -63,7 +63,7 @@ from .llm.base import ToolCall as LLMToolCall
 from .media_dedup import append_unique_media
 from .message import Message
 from .models import AgentTool, AgentToolContext, RequiredField, ToolOutput
-from .orchestrator.inbox import action_key
+from .orchestrator.inbox import action_key, is_approval
 from .protocols import LLMClientProtocol
 from .result import AgentResult, AgentStatus, ApprovalResult
 from .streaming.engine import StreamEngine
@@ -1010,6 +1010,12 @@ class StandardAgent(BaseAgent):
         tool_schemas = [t.to_openai_schema() for t in self.tools]
         messages = self._react_messages
 
+        # Anything the user approved while this run was away happens now, from
+        # the arguments they saw -- before the model gets a turn and could
+        # propose something else.
+        for note in await self._carry_out_approved_actions():
+            messages.append({"role": "user", "content": note})
+
         if self._remaining_tool_calls:
             result = await self._execute_tool_calls(self._remaining_tool_calls, messages)
             self._remaining_tool_calls = []
@@ -1488,6 +1494,88 @@ class StandardAgent(BaseAgent):
         t_lower = t.lower()
         return any(s in t_lower for s in question_signals)
 
+    async def _carry_out_approved_actions(self) -> List[str]:
+        """Perform what the user approved while this run was away.
+
+        An approval is a contract about one specific action -- this tool,
+        these arguments -- and the arguments are the part that matters. The
+        earlier attempt at this run recorded them; this does not ask the model
+        to produce them again. It could not safely: a model rewriting an email
+        body between runs would either be sending something the user never
+        saw, or, if we insisted the text match, be asked to approve the same
+        message forever.
+
+        So the stored arguments are executed verbatim. ``claim_execution`` is
+        a compare-and-swap, so an approval is honoured once even if two
+        instances resume the same run together, and a claim is only handed
+        back when the action never reached the tool.
+
+        Returns a line per action for the model to read.
+        """
+        hints = self.context_hints or {}
+        inbox = hints.get("inbox")
+        run_id = hints.get("run_id")
+        if inbox is None or not run_id or not getattr(inbox, "enabled", False):
+            return []
+
+        try:
+            asks = await inbox.for_run(run_id)
+        except Exception as e:
+            logger.warning(f"Could not read approved actions for run {run_id}: {e}")
+            return []
+
+        notes: List[str] = []
+        for ask in asks:
+            if not ask.awaits_execution or ask.kind != "approval":
+                continue
+            data = ask.data or {}
+            tool_name = data.get("tool")
+            if not is_approval(ask.resolution):
+                # Declined. Stamp it so a later resume does not reconsider,
+                # and tell the model so it can say what it did not do.
+                if await inbox.claim_execution(ask.id):
+                    notes.append(f"The user declined '{tool_name}'. It was not run.")
+                continue
+
+            tool = self._find_tool(tool_name) if tool_name else None
+            if tool is None:
+                logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
+                continue
+            if not await inbox.claim_execution(ask.id):
+                logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
+                continue
+
+            note = await self._run_approved_tool(inbox, ask, tool, data.get("args") or {})
+            notes.append(note)
+        return notes
+
+    async def _run_approved_tool(self, inbox: Any, ask: Any, tool: Any, args: Dict[str, Any]) -> str:
+        """Execute one approved action and describe the outcome."""
+        name = tool.name
+        try:
+            result = await asyncio.wait_for(
+                tool.executor(args, self._build_tool_context()),
+                timeout=self.tool_timeout,
+            )
+        except asyncio.TimeoutError:
+            # Never reached the point of doing anything observable, so the
+            # claim goes back and a later resume may try again.
+            await inbox.release_execution(ask.id)
+            logger.warning(f"Approved action {name} timed out")
+            return f"'{name}' was approved but timed out. It has not been done."
+        except Exception as e:
+            logger.error(f"Approved action {name} failed: {e}", exc_info=True)
+            return f"'{name}' was approved but failed: {e}"
+
+        text = result.text if isinstance(result, ToolOutput) else str(result)
+        if isinstance(result, ToolOutput) and result.media:
+            append_unique_media(self._collected_media, result.media)
+        if len(text) > self.max_tool_result_chars:
+            text = text[: self.max_tool_result_chars] + "\n...[truncated]"
+        self._tool_trace.append({"tool": name, "status": "approved_and_run", "summary": text[:240]})
+        logger.info(f"[{self.__class__.__name__}:{self.name}] carried out approved {name}")
+        return f"The user approved '{name}' and it has now been done. Result: {text}"
+
     async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> str:
         """Consult the Inbox about this action. Returns what to do with it.
 
@@ -1519,7 +1607,7 @@ class StandardAgent(BaseAgent):
                 # would put a second copy of the same question in front of the
                 # user, so wait for the one that is already out there.
                 return APPROVAL_ASKED
-            approved = prior in ("approve", "approved", "yes", "y")
+            approved = is_approval(prior)
             logger.info(
                 f"[{self.__class__.__name__}:{self.name}] {tc.name}: "
                 f"user already {'approved' if approved else 'declined'} this"
@@ -1533,6 +1621,7 @@ class StandardAgent(BaseAgent):
                 run_id=run_id,
                 tool_call_id=tc.id,
                 kind="approval",
+                action_key=action_key(tc.name, args),
                 title=f"Approve {tc.name}?",
                 body=preview,
                 options=["approve", "reject"],
@@ -1543,6 +1632,10 @@ class StandardAgent(BaseAgent):
             return APPROVAL_UNAVAILABLE
         if ask is None:
             return APPROVAL_UNAVAILABLE
+        # A conflict returns the row that already existed, which may carry an
+        # answer given while this run was away.
+        if not ask.is_open:
+            return APPROVAL_APPROVED if is_approval(ask.resolution) else APPROVAL_DECLINED
 
         # Deliver it to wherever the user is. Best-effort: the ask is durable,
         # so a failed notification means they find it in the app instead.

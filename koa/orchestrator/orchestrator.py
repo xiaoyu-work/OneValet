@@ -1438,6 +1438,12 @@ class Orchestrator(
         session_id = context.get("session_id", tenant_id)
         user_message = context.get("message", "")
 
+        # A resumed run replays a message the user sent once, so recording it
+        # again would put the same turn in their history for every resume.
+        # Only what the assistant produced this time around is new.
+        if context.get("resumed"):
+            user_message = ""
+
         self._record_execution_outcome(result, tenant_id, session_id, context)
 
         status_value = (

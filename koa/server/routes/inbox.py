@@ -59,7 +59,10 @@ async def answer(ask_id: str, req: AnswerRequest):
     if orch is None or not orch.inbox.enabled:
         raise KoaError(E.SERVICE_UNAVAILABLE, "Inbox not available", details={"service": "inbox"})
 
-    run_id = await orch.answer_ask(ask_id, req.resolution, resolved_by=req.resolved_by)
+    try:
+        run_id = await orch.answer_ask(ask_id, req.resolution, resolved_by=req.resolved_by)
+    except ValueError as e:
+        raise KoaError(E.VALIDATION_ERROR, str(e), details={"ask_id": ask_id}) from e
     if run_id is None:
         return {"status": "already_resolved", "resumed": False}
 

@@ -241,6 +241,11 @@ class ResumeMixin:
 
         Returns None when the ask was already answered elsewhere -- the caller
         should not resume a run on the strength of a lost race.
+
+        Raises ValueError on an answer that is neither one of the ask's own
+        options nor a recognisable yes or no. Anything we do not understand
+        counts as a refusal further down, so accepting it silently would let a
+        client saying "allow" have the action recorded as declined.
         """
         inbox = getattr(self, "inbox", None)
         if inbox is None or not inbox.enabled:
@@ -248,7 +253,14 @@ class ResumeMixin:
         ask = await inbox.get(ask_id)
         if ask is None:
             return None
-        if not await inbox.resolve(ask_id, resolution, resolved_by=resolved_by):
+
+        decided = parse_reply(resolution, ask.options)
+        if decided is None:
+            raise ValueError(
+                f"{resolution!r} is not an answer to this question. "
+                f"Expected one of: {', '.join(ask.options) or 'approve, reject'}"
+            )
+        if not await inbox.resolve(ask_id, decided, resolved_by=resolved_by):
             return None
         return ask.run_id
 
