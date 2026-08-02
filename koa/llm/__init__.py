@@ -15,13 +15,9 @@ Usage:
     config = LLMConfig(model="gpt-4o", api_key="sk-xxx")
     client = LiteLLMClient(config=config, provider_name="openai")
     response = await client.chat_completion(messages=[...])
-
-    # With streaming
-    async for chunk in client.stream_completion(messages=[...]):
-        print(chunk.content)
 """
 
-from .base import BaseLLMClient, LLMConfig, LLMResponse, StreamChunk
+from .base import BaseLLMClient, LLMConfig, LLMResponse
 from .litellm_client import LiteLLMClient
 from .registry import LLMProviderConfig, LLMRegistry
 from .router import ModelRouter, RoutingDecision, RoutingRule
@@ -30,7 +26,6 @@ __all__ = [
     "BaseLLMClient",
     "LLMConfig",
     "LLMResponse",
-    "StreamChunk",
     "LiteLLMClient",
     "LLMRegistry",
     "LLMProviderConfig",

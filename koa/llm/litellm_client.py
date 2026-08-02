@@ -13,14 +13,13 @@ Supports all providers through a single client:
 import json
 import logging
 import os
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .base import (
     BaseLLMClient,
     LLMConfig,
     LLMResponse,
     StopReason,
-    StreamChunk,
     ToolCall,
     Usage,
 )
@@ -122,7 +121,7 @@ class LiteLLMClient(BaseLLMClient):
                 api_key = os.environ.get(env_var)
         self._api_key = api_key
 
-        # Base kwargs shared by _call_api and _stream_api
+        # Base kwargs shared across API calls
         self._base_kwargs: Dict[str, Any] = {}
         if self.config.base_url:
             self._base_kwargs["api_base"] = self.config.base_url
@@ -258,114 +257,6 @@ class LiteLLMClient(BaseLLMClient):
             thinking=thinking,
             raw_response=response,
         )
-
-    async def _stream_api(  # type: ignore[override]
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        **kwargs,
-    ) -> AsyncIterator[StreamChunk]:
-        """Make a streaming call via litellm.acompletion(stream=True)."""
-        import litellm
-
-        model = kwargs.get("model") or self._litellm_model
-        params: Dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-            **self._model_params(self.config.model, **kwargs),
-            **self._base_kwargs,
-        }
-
-        if tools:
-            params["tools"] = tools
-            params["tool_choice"] = kwargs.get("tool_choice", "auto")
-
-        if "stop" in kwargs:
-            params["stop"] = kwargs["stop"]
-
-        # Extended reasoning support (provider-agnostic via litellm)
-        reasoning_effort = kwargs.get("reasoning_effort")
-        if reasoning_effort:
-            params["reasoning_effort"] = reasoning_effort
-            params.pop("temperature", None)
-            params.pop("top_p", None)
-            params.pop("max_tokens", None)
-
-        # Apply Anthropic prompt caching
-        if self._use_prompt_caching:
-            params["messages"] = apply_anthropic_cache_control(messages)
-
-        response = await litellm.acompletion(**params)
-        tool_call_deltas: Dict[int, Dict[str, Any]] = {}
-
-        async for chunk in response:
-            if not chunk.choices:
-                # Final chunk may carry only usage
-                if chunk.usage:
-                    cache_read = getattr(chunk.usage, "cache_read_input_tokens", 0) or 0
-                    cache_creation = getattr(chunk.usage, "cache_creation_input_tokens", 0) or 0
-                    prompt_tokens = chunk.usage.prompt_tokens
-                    if self._use_prompt_caching and (cache_read or cache_creation):
-                        hit_pct = cache_read / prompt_tokens * 100 if prompt_tokens else 0
-                        logger.info(
-                            f"[LiteLLM] Cache: {cache_read:,}/{prompt_tokens:,} "
-                            f"tokens ({hit_pct:.0f}% hit, {cache_creation:,} written)"
-                        )
-                    yield StreamChunk(
-                        content="",
-                        is_final=True,
-                        usage=Usage(
-                            prompt_tokens=prompt_tokens,
-                            completion_tokens=chunk.usage.completion_tokens,
-                            total_tokens=chunk.usage.total_tokens,
-                            cache_read_tokens=cache_read,
-                            cache_creation_tokens=cache_creation,
-                        ),
-                    )
-                continue
-
-            choice = chunk.choices[0]
-            delta = choice.delta
-
-            content = delta.content or ""
-
-            # Accumulate tool call deltas
-            tool_calls = None
-            if delta.tool_calls:
-                for tc_delta in delta.tool_calls:
-                    idx = tc_delta.index
-                    if idx not in tool_call_deltas:
-                        tool_call_deltas[idx] = {"id": "", "name": "", "arguments": ""}
-                    if tc_delta.id:
-                        tool_call_deltas[idx]["id"] = tc_delta.id
-                    if tc_delta.function:
-                        if tc_delta.function.name:
-                            tool_call_deltas[idx]["name"] = tc_delta.function.name
-                        if tc_delta.function.arguments:
-                            tool_call_deltas[idx]["arguments"] += tc_delta.function.arguments
-
-            is_final = choice.finish_reason is not None
-            stop_reason = None
-            if is_final:
-                stop_reason = self._parse_stop_reason(choice.finish_reason)
-                if tool_call_deltas:
-                    tool_calls = []
-                    for idx in sorted(tool_call_deltas.keys()):
-                        tc = tool_call_deltas[idx]
-                        try:
-                            args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                        except json.JSONDecodeError:
-                            args = {}
-                        tool_calls.append(ToolCall(id=tc["id"], name=tc["name"], arguments=args))
-
-            yield StreamChunk(
-                content=content,
-                tool_calls=tool_calls,
-                is_final=is_final,
-                stop_reason=stop_reason,
-            )
 
     # ------------------------------------------------------------------
     # Helpers

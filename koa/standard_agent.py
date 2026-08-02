@@ -916,8 +916,8 @@ class StandardAgent(BaseAgent):
 
         Example:
             async def on_running(self, msg):
-                async for chunk in self.llm_client.stream_completion(messages):
-                    await self.emit_message_chunk(chunk.content)
+                for part in some_long_answer:
+                    await self.emit_message_chunk(part)
                 return self.make_result(...)
         """
         if self._streaming_enabled:

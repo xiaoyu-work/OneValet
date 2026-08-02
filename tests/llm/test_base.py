@@ -6,7 +6,6 @@ from koa.llm.base import (
     BaseLLMClient,
     LLMResponse,
     StopReason,
-    StreamChunk,
     ToolCall,
     Usage,
 )
@@ -25,9 +24,6 @@ class StubLLMClient(BaseLLMClient):
 
     async def _call_api(self, messages, tools=None, **kwargs):
         return LLMResponse(content="stub")
-
-    async def _stream_api(self, messages, tools=None, **kwargs):
-        yield StreamChunk(content="stub", is_final=True)
 
 
 @pytest.fixture

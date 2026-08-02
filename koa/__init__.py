@@ -60,10 +60,6 @@ Built-in LLM Client (powered by litellm):
     client = LiteLLMClient(model="gpt-4o", provider_name="openai", api_key="sk-xxx")
     response = await client.chat_completion(messages=[...])
 
-    # With streaming
-    async for chunk in client.stream_completion(messages=[...]):
-        print(chunk.content, end="")
-
 Streaming:
     agent = MyAgent(tenant_id="123")
     async for event in agent.stream(msg):

@@ -5,7 +5,6 @@ This module provides:
 - BaseLLMClient: Abstract base class for all LLM clients
 - LLMConfig: Configuration dataclass
 - LLMResponse: Standardized response format
-- StreamChunk: Streaming chunk format
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from ..models import AgentTool
@@ -163,32 +162,6 @@ class LLMResponse:
         return d
 
 
-@dataclass
-class StreamChunk:
-    """
-    A chunk from streaming response.
-
-    Used for real-time token-by-token streaming.
-    """
-
-    content: str = ""
-    tool_calls: Optional[List[ToolCall]] = None
-    is_final: bool = False
-    stop_reason: Optional[StopReason] = None
-    usage: Optional[Usage] = None
-
-    # Accumulated content (all chunks so far)
-    accumulated_content: str = ""
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "content": self.content,
-            "tool_calls": [tc.to_dict() for tc in self.tool_calls] if self.tool_calls else None,
-            "is_final": self.is_final,
-            "stop_reason": self.stop_reason.value if self.stop_reason else None,
-        }
-
-
 class BaseLLMClient(ABC):
     """
     Abstract base class for LLM clients.
@@ -321,23 +294,6 @@ class BaseLLMClient(ABC):
         """
         pass
 
-    @abstractmethod
-    async def _stream_api(
-        self, messages: List[Dict[str, Any]], tools: Optional[List[Dict[str, Any]]] = None, **kwargs
-    ) -> AsyncIterator[StreamChunk]:
-        """
-        Make streaming API call (provider-specific).
-
-        Args:
-            messages: List of message dicts
-            tools: Optional list of tool schemas
-            **kwargs: Additional provider-specific params
-
-        Yields:
-            StreamChunk objects
-        """
-        pass
-
     async def chat_completion(
         self,
         messages: List[Dict[str, Any]],
@@ -391,56 +347,6 @@ class BaseLLMClient(ABC):
             response.usage.cost = self._calculate_cost(response.usage, response.model)
 
         return response
-
-    async def stream_completion(
-        self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Union[Dict[str, Any], AgentTool]]] = None,
-        config: Optional[Dict[str, Any]] = None,
-        **kwargs,
-    ) -> AsyncIterator[StreamChunk]:
-        """
-        Send a streaming chat completion request.
-
-        Yields chunks as they arrive from the API.
-
-        Args:
-            messages: List of message dicts
-            tools: Optional list of tools
-            config: Optional config overrides
-            **kwargs: Additional parameters
-
-        Yields:
-            StreamChunk objects with content deltas
-
-        Example:
-            async for chunk in client.stream_completion(messages):
-                print(chunk.content, end="", flush=True)
-                if chunk.is_final:
-                    print(f"\\nUsed {chunk.usage.total_tokens} tokens")
-        """
-        # Convert tools
-        tool_schemas = None
-        if tools:
-            tool_schemas = []
-            for tool in tools:
-                if isinstance(tool, dict):
-                    tool_schemas.append(tool)
-                else:
-                    # AgentTool or similar object with name/description/parameters
-                    tool_schemas.append(self._format_tool(tool))
-
-        # Apply config overrides
-        merged_kwargs = {**kwargs}
-        if config:
-            merged_kwargs.update(config)
-
-        # Stream the response
-        accumulated = ""
-        async for chunk in self._stream_api(messages, tool_schemas, **merged_kwargs):
-            accumulated += chunk.content
-            chunk.accumulated_content = accumulated
-            yield chunk
 
     def _format_tool(self, tool: AgentTool) -> Dict[str, Any]:
         """
