@@ -8,6 +8,7 @@ from .credentials import router as credentials_router
 from .cron import router as cron_router
 from .events import router as events_router
 from .expenses import router as expenses_router
+from .inbox import router as inbox_router
 from .internal_events import router as internal_events_router
 from .internal_routing_preferences import router as internal_routing_prefs_router
 from .memory import router as memory_router
@@ -35,3 +36,4 @@ def register_routes(app: FastAPI):
     app.include_router(shipments_router)
     app.include_router(expenses_router)
     app.include_router(subscriptions_router)
+    app.include_router(inbox_router)

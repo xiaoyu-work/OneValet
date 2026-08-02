@@ -57,6 +57,7 @@ from ..message import Message
 from ..result import AgentResult, AgentStatus
 from ..streaming.models import AgentEvent, EventType, StreamMode
 from .agent_lifecycle import AgentLifecycleMixin
+from .ask_mirror import AskMirror
 from .audit_logger import AuditLogger
 from .context_manager import ContextManager
 from .dag_loop import DagLoopMixin
@@ -334,6 +335,9 @@ class Orchestrator(
         # The human-attention queue: what the assistant is waiting on a person
         # for, and where their answer comes back in.
         self.inbox = InboxStore(database)
+        # Channels an ask is delivered on. Populated by the app layer; without
+        # any, asks still queue and surface in the app.
+        self.ask_mirror = AskMirror()
 
         # Intent-recognition infrastructure.  See
         # :mod:`koa.orchestrator.intent_feedback` and

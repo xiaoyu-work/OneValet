@@ -1543,7 +1543,18 @@ class StandardAgent(BaseAgent):
         except Exception as e:
             logger.error(f"Could not record approval ask for {tc.name}: {e}")
             return False
-        return ask is not None
+        if ask is None:
+            return False
+
+        # Deliver it to wherever the user is. Best-effort: the ask is durable,
+        # so a failed notification means they find it in the app instead.
+        mirror = hints.get("ask_mirror")
+        if mirror is not None and getattr(mirror, "enabled", False) and ask.is_open:
+            try:
+                await mirror.mirror(ask)
+            except Exception as e:
+                logger.warning(f"Could not mirror ask {ask.id}: {e}")
+        return True
 
     def _is_attended(self) -> bool:
         """Whether a human can answer if this agent pauses for approval.

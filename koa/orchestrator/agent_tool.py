@@ -122,6 +122,9 @@ async def execute_agent_tool(
     inbox = getattr(orchestrator, "inbox", None)
     if inbox is not None:
         enriched_hints["inbox"] = inbox
+    ask_mirror = getattr(orchestrator, "ask_mirror", None)
+    if ask_mirror is not None:
+        enriched_hints["ask_mirror"] = ask_mirror
     run_id = (request_context or {}).get("request_id")
     if run_id:
         enriched_hints["run_id"] = run_id

@@ -324,6 +324,16 @@ class Koa:
         )
         await self._orchestrator.initialize()
 
+        # Asks reach the user on the same channels the trigger engine already
+        # uses, so an approval request lands where their notifications do.
+        for _channel in self._trigger_engine._notifications:
+            self._orchestrator.ask_mirror.add_channel(_channel)
+        if self._orchestrator.ask_mirror.enabled:
+            logger.info(
+                f"Inbox mirroring enabled on "
+                f"{len(self._trigger_engine._notifications)} channel(s)"
+            )
+
         # 8b. MCP Servers (optional)
         mcp_servers_cfg = cfg.get("mcp_servers", {})
         if mcp_servers_cfg:
