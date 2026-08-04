@@ -249,22 +249,29 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         if status == STATUS_COMPLETED and await self._owes_the_user(run_id):
             logger.info(f"[ReAct] Run {run_id} still owes the user; keeping it resumable")
             status = STATUS_SUSPENDED
-            await store.mark(run_id, status)
-            # The answer arrived while this run was working, so its own claim
-            # turned the continuation away. Nothing polls, so the run that
-            # knows it owes something is the one that has to hand it on.
-            self._hand_off_unfinished(run_id)
-            return
+            # Note it rather than act on it. This runs inside the loop's tail,
+            # with the caller still to finish; a continuation started now would
+            # claim the run out from under work that has not unwound yet.
+            if context is not None:
+                context["_owes_continuation"] = run_id
         await store.mark(run_id, status)
 
-    def _hand_off_unfinished(self, run_id: str) -> None:
-        """Schedule the continuation of a run that ended still owing something.
+    def hand_off_unfinished(self, context: Optional[Dict[str, Any]]) -> None:
+        """Continue a run that ended still owing the user, once it has unwound.
+
+        Called by whoever owned the run, after it is completely done. The
+        answer arrived while the run was working, so its own claim turned the
+        continuation away, and nothing polls -- the run that knows it owes
+        something is the one that has to pass it on.
 
         Bounded per process: honouring a decision normally clears it, so a run
         that comes back here repeatedly is one nothing can advance -- a missing
         agent, a tenant at its limit -- and retrying forever would spin. After
         that it stays listed as resumable for a person to pick up.
         """
+        run_id = (context or {}).pop("_owes_continuation", None)
+        if not run_id:
+            return
         registry = getattr(self, "task_registry", None)
         if registry is None or not hasattr(self, "resume_when_free"):
             return

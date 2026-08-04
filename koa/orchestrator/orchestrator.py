@@ -868,6 +868,9 @@ class Orchestrator(
                 token_usage=result.metadata.get("token_usage"),
             )
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+            # The run is completely done, so a continuation can safely claim
+            # it if the user answered something while it was still working.
+            self.hand_off_unfinished(context)
         except Exception as e:
             _cancel_routing(routing_task)
             logger.error(f"[Orchestrator] Unhandled error in _execute_message: {e}", exc_info=True)

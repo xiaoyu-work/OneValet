@@ -207,6 +207,9 @@ class ResumeMixin:
         )
         result.metadata["resumed_run_id"] = run_id
         await self.post_process(result, context)
+        # Everything this invocation held is released; only now is it safe to
+        # let a continuation claim the run.
+        self.hand_off_unfinished(context)
 
     async def answer_from_message(
         self,
