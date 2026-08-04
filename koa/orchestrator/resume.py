@@ -388,10 +388,12 @@ class ResumeMixin:
                 await asyncio.sleep(_RESUME_RETRY_DELAY * attempt)
 
             if not await self._still_owed(run_id):
+                logger.info(f"[Resume] Run {run_id} has nothing outstanding; nothing to continue")
                 return
             if await self._open_ask_count(run_id):
                 # Another question is still unanswered. Waiting cannot change
                 # that, and answering it will bring its own continuation.
+                logger.info(f"[Resume] Run {run_id} is still waiting on the user")
                 return
 
             produced = False

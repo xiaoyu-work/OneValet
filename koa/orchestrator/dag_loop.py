@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Joins a run id to a sub-task id. Unreserved in a URL path (RFC 3986), so
+#: the composite survives a round trip through the resume route intact.
+_SUB_RUN_SEPARATOR = "~"
+
 
 def _sub_run_id(context: Optional[Dict[str, Any]], sub_task_id: str) -> str:
     """A transcript id of a sub-task's own.
@@ -42,8 +46,13 @@ def _sub_run_id(context: Optional[Dict[str, Any]], sub_task_id: str) -> str:
     produced it, which is what a resume needs: an approval raised inside a
     sub-task comes back to that sub-task's messages, not to whichever sibling
     happened to write last.
+
+    The separator is unreserved in a URL path. These ids reach clients -- in
+    the Inbox listing and the resumable listing -- and come back in the path
+    of the resume route, so a character with meaning in a URL would be cut off
+    before the request was even sent, and the run would look like the parent.
     """
-    return f"{(context or {}).get('request_id', 'run')}#{sub_task_id}"
+    return f"{(context or {}).get('request_id', 'run')}{_SUB_RUN_SEPARATOR}{sub_task_id}"
 
 
 class DagLoopMixin:
@@ -218,6 +227,10 @@ class DagLoopMixin:
                         exec_data = event.data
                     yield event
 
+                # This sub-task owns its own transcript, so it is the one that
+                # has to pass on anything the user answered while it ran.
+                self.hand_off_unfinished(task_context)
+
                 # Fix 2: collect pending_approvals from sub-task
                 sub_approvals = exec_data.get("pending_approvals", [])
                 if sub_approvals:
@@ -271,6 +284,11 @@ class DagLoopMixin:
                             exec_d = ev.data
                         else:
                             events.append(ev)
+
+                    # Same here: this sub-task's transcript is its own, so it
+                    # passes on whatever the user answered while it ran.
+                    self.hand_off_unfinished(task_context)
+
                     sub_result = SubTaskResult(
                         sub_task_id=sub_task.id,
                         description=sub_task.description,

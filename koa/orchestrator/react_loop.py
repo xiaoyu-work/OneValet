@@ -252,9 +252,24 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # Note it rather than act on it. This runs inside the loop's tail,
             # with the caller still to finish; a continuation started now would
             # claim the run out from under work that has not unwound yet.
-            if context is not None:
+            #
+            # Only when something is waiting to be *done*. A run whose ask the
+            # user has not answered yet has nothing to continue into, and
+            # arming a handoff for it would spend one of the few attempts a
+            # genuinely stuck run gets.
+            if context is not None and await self._has_unacted_decision(run_id):
                 context["_owes_continuation"] = run_id
         await store.mark(run_id, status)
+
+    async def _has_unacted_decision(self, run_id: str) -> bool:
+        """Whether the user has decided something this run has not carried out."""
+        inbox = getattr(self, "inbox", None)
+        if inbox is None or not inbox.enabled:
+            return False
+        try:
+            return any(ask.awaits_execution for ask in await inbox.for_run(run_id))
+        except Exception:
+            return False
 
     def hand_off_unfinished(self, context: Optional[Dict[str, Any]]) -> None:
         """Continue a run that ended still owing the user, once it has unwound.
