@@ -45,6 +45,11 @@ _INTERRUPTED = object()
 _CONTEXT_HARD_MIN = 16_000
 _CONTEXT_WARN_BELOW = 32_000
 
+#: How many times a run may end still owing the user before we stop handing it
+#: back to itself. Honouring a decision normally clears it, so repeats mean
+#: something nothing can advance.
+_MAX_HANDOFFS = 3
+
 
 class _ReactLoopLLMError(Exception):
     """Raised when the ReAct loop LLM call fails after all retries.
@@ -244,7 +249,42 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         if status == STATUS_COMPLETED and await self._owes_the_user(run_id):
             logger.info(f"[ReAct] Run {run_id} still owes the user; keeping it resumable")
             status = STATUS_SUSPENDED
+            await store.mark(run_id, status)
+            # The answer arrived while this run was working, so its own claim
+            # turned the continuation away. Nothing polls, so the run that
+            # knows it owes something is the one that has to hand it on.
+            self._hand_off_unfinished(run_id)
+            return
         await store.mark(run_id, status)
+
+    def _hand_off_unfinished(self, run_id: str) -> None:
+        """Schedule the continuation of a run that ended still owing something.
+
+        Bounded per process: honouring a decision normally clears it, so a run
+        that comes back here repeatedly is one nothing can advance -- a missing
+        agent, a tenant at its limit -- and retrying forever would spin. After
+        that it stays listed as resumable for a person to pick up.
+        """
+        registry = getattr(self, "task_registry", None)
+        if registry is None or not hasattr(self, "resume_when_free"):
+            return
+        attempts = self._handoff_attempts
+        if attempts.get(run_id, 0) >= _MAX_HANDOFFS:
+            logger.error(
+                f"[ReAct] Run {run_id} still owes the user after {_MAX_HANDOFFS} "
+                "attempts; leaving it for someone to look at"
+            )
+            return
+        attempts[run_id] = attempts.get(run_id, 0) + 1
+        registry.create_task(self.resume_when_free(run_id), name=f"resume:{run_id}")
+
+    @property
+    def _handoff_attempts(self) -> Dict[str, int]:
+        counts = getattr(self, "_handoff_counts", None)
+        if counts is None:
+            counts = {}
+            self._handoff_counts = counts
+        return counts
 
     async def _owes_the_user(self, run_id: str) -> bool:
         """Whether this run has anything outstanding with a person.
@@ -467,6 +507,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 type=EventType.EXECUTION_END,
                 data=state.execution_end_payload(),
             )
+            await self._finish_transcript(context, STATUS_SUSPENDED)
             self._run_controls.finish(tenant_id, control)
             return  # stop the generator -- user needs to respond
 
@@ -533,6 +574,9 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                         "error_type": type(e.original).__name__,
                     },
                 )
+                # Nothing about this run finished, and a caller that claimed it
+                # is owed the run back rather than left holding a lease.
+                await self._finish_transcript(context, STATUS_SUSPENDED)
                 self._run_controls.finish(tenant_id, control)
                 return
 

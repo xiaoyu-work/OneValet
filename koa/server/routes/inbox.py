@@ -105,8 +105,7 @@ async def resume(run_id: str):
 
     async def _resume():
         try:
-            async for _ in orch.resume_run(run_id):
-                pass
+            await orch.resume_when_free(run_id)
         except Exception as e:
             logger.error(f"[Inbox] Resuming run {run_id} failed: {e}", exc_info=True)
 

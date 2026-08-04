@@ -371,32 +371,39 @@ class ResumeMixin:
         """Continue a run, waiting for it to finish if it is still going.
 
         The user is told about an ask while the run that raised it is still
-        working, so a fast reply arrives to a run that already holds its own
-        claim. Refusing that outright would be the end of it: nothing polls,
-        and the run will not come back to the decision by itself, so the
-        answer would be lost with the user having been told it was recorded.
+        working -- raising one does not stop the run -- so a fast reply arrives
+        to a run holding its own claim. Refusing outright would end it there.
 
-        So a lost claim is waited out rather than given up on. The run is
-        finishing, not stuck -- if it were stuck the lease would cover it --
-        and the attempts span comfortably longer than a turn.
+        Waiting is the first attempt, not the guarantee. How long the run has
+        left is not knowable from here, so when the attempts run out the run
+        itself takes over: it ends knowing it owes something and hands the
+        continuation on. This only has to cover the common case of a reply
+        landing moments before the run finishes anyway.
         """
         for attempt in range(_RESUME_ATTEMPTS):
             if attempt:
                 await asyncio.sleep(_RESUME_RETRY_DELAY * attempt)
+
             if not await self._still_owed(run_id):
                 return
+            if await self._open_ask_count(run_id):
+                # Another question is still unanswered. Waiting cannot change
+                # that, and answering it will bring its own continuation.
+                return
+
             produced = False
             try:
                 async for _ in self.resume_run(run_id):
                     produced = True
             except Exception as e:
-                logger.error(f"[Resume] Continuing run {run_id} failed: {e}", exc_info=True)
-                return
+                # Worth another go: a transient failure is exactly what the
+                # remaining attempts are for.
+                logger.warning(f"[Resume] Attempt at run {run_id} failed: {e}")
+                continue
             if produced:
                 return
-        logger.error(
-            f"[Resume] Gave up continuing run {run_id} after {_RESUME_ATTEMPTS} attempts; "
-            "the user's decision is recorded but not acted on"
+        logger.info(
+            f"[Resume] Run {run_id} stayed busy; leaving it to hand itself on when it ends"
         )
 
     async def _still_owed(self, run_id: str) -> bool:

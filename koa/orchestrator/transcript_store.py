@@ -218,7 +218,9 @@ class TranscriptStore:
                 STATUS_RUNNING,
             )
         except Exception as e:
-            logger.debug(f"Could not touch run {run_id}: {e}")
+            # The concurrency guarantee rests on this: a touch that keeps
+            # failing lets a live run look abandoned and be taken over.
+            logger.warning(f"Could not touch run {run_id}: {e}")
 
     async def mark(self, run_id: str, status: str) -> None:
         """Move a run to a terminal or suspended state."""
