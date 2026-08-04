@@ -669,6 +669,9 @@ class Orchestrator(
         from .graceful_response import generate_graceful_error
 
         routing_task: Optional[asyncio.Task] = None
+        # Bound before the try so the handoff in the finally has something to
+        # read even when the failure came before the context was built.
+        context: Dict[str, Any] = {}
         try:
             if not self._initialized:
                 await self.initialize()
@@ -868,9 +871,6 @@ class Orchestrator(
                 token_usage=result.metadata.get("token_usage"),
             )
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
-            # The run is completely done, so a continuation can safely claim
-            # it if the user answered something while it was still working.
-            self.hand_off_unfinished(context)
         except Exception as e:
             _cancel_routing(routing_task)
             logger.error(f"[Orchestrator] Unhandled error in _execute_message: {e}", exc_info=True)
@@ -899,6 +899,11 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+        finally:
+            # The run is done either way, so a continuation can safely claim
+            # it if the user answered something while it was still working.
+            # A request that failed does not cancel a decision they made.
+            self.hand_off_unfinished(context)
 
     def _start_routing(
         self,

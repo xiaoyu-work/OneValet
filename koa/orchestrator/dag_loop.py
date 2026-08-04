@@ -216,20 +216,23 @@ class DagLoopMixin:
                 messages = await self._build_llm_messages(task_context, augmented_message)
 
                 exec_data: Dict[str, Any] = {}
-                async for event in self._react_loop_events(
-                    messages,
-                    tool_schemas,
-                    tenant_id,
-                    context=task_context,
-                    user_message=augmented_message,
-                ):
-                    if event.type == EventType.EXECUTION_END:
-                        exec_data = event.data
-                    yield event
-
-                # This sub-task owns its own transcript, so it is the one that
-                # has to pass on anything the user answered while it ran.
-                self.hand_off_unfinished(task_context)
+                try:
+                    async for event in self._react_loop_events(
+                        messages,
+                        tool_schemas,
+                        tenant_id,
+                        context=task_context,
+                        user_message=augmented_message,
+                    ):
+                        if event.type == EventType.EXECUTION_END:
+                            exec_data = event.data
+                        yield event
+                finally:
+                    # This sub-task owns its own transcript, so it is the one
+                    # that has to pass on anything the user answered while it
+                    # ran -- including when it is failing or being abandoned,
+                    # since the decision is no less real for that.
+                    self.hand_off_unfinished(task_context)
 
                 # Fix 2: collect pending_approvals from sub-task
                 sub_approvals = exec_data.get("pending_approvals", [])
@@ -273,21 +276,24 @@ class DagLoopMixin:
                     msgs = await self._build_llm_messages(task_context, aug_msg)
                     exec_d: Dict[str, Any] = {}
                     events: list = []
-                    async for ev in self._react_loop_events(
-                        msgs,
-                        t_schemas,
-                        tenant_id,
-                        context=task_context,
-                        user_message=aug_msg,
-                    ):
-                        if ev.type == EventType.EXECUTION_END:
-                            exec_d = ev.data
-                        else:
-                            events.append(ev)
-
-                    # Same here: this sub-task's transcript is its own, so it
-                    # passes on whatever the user answered while it ran.
-                    self.hand_off_unfinished(task_context)
+                    try:
+                        async for ev in self._react_loop_events(
+                            msgs,
+                            t_schemas,
+                            tenant_id,
+                            context=task_context,
+                            user_message=aug_msg,
+                        ):
+                            if ev.type == EventType.EXECUTION_END:
+                                exec_d = ev.data
+                            else:
+                                events.append(ev)
+                    finally:
+                        # Gathered with return_exceptions=True, so a sub-task
+                        # that fails here is swallowed by its siblings. The
+                        # handoff has to survive that or the decision is lost
+                        # with nothing said about it.
+                        self.hand_off_unfinished(task_context)
 
                     sub_result = SubTaskResult(
                         sub_task_id=sub_task.id,

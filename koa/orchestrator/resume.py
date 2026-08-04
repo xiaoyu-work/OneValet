@@ -206,10 +206,13 @@ class ResumeMixin:
             total_tool_count=len(tool_schemas),
         )
         result.metadata["resumed_run_id"] = run_id
-        await self.post_process(result, context)
-        # Everything this invocation held is released; only now is it safe to
-        # let a continuation claim the run.
-        self.hand_off_unfinished(context)
+        try:
+            await self.post_process(result, context)
+        finally:
+            # Everything this invocation held is released; only now is it safe
+            # to let a continuation claim the run. In a finally because a
+            # failure here does not make the user's decision any less pending.
+            self.hand_off_unfinished(context)
 
     async def answer_from_message(
         self,
