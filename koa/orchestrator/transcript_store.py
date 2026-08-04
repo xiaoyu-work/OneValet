@@ -311,7 +311,7 @@ class TranscriptStore:
             logger.warning(f"Could not mark run {run_id} as {status}: {e}")
             return False
 
-    async def prune(self, older_than_hours: int = 48) -> int:
+    async def prune(self, older_than_hours: int = 48, batch_size: int = 1000) -> int:
         """Drop finished transcripts. Suspended runs are never pruned here --
         they are still waiting on someone."""
         if not self._db:
@@ -319,13 +319,21 @@ class TranscriptStore:
         try:
             result = await self._db.execute(
                 """
-                DELETE FROM run_transcripts
-                WHERE status IN ($1, $2)
-                  AND updated_at < NOW() - ($3 || ' hours')::interval
+                WITH doomed AS (
+                    SELECT run_id FROM run_transcripts
+                    WHERE status IN ($1, $2)
+                      AND updated_at < NOW() - ($3 || ' hours')::interval
+                    ORDER BY updated_at
+                    LIMIT $4
+                )
+                DELETE FROM run_transcripts AS rt
+                USING doomed
+                WHERE rt.run_id = doomed.run_id
                 """,
                 STATUS_COMPLETED,
                 STATUS_FAILED,
-                str(older_than_hours),
+                str(int(older_than_hours)),
+                batch_size,
             )
             return int(str(result).rsplit(" ", 1)[-1]) if result else 0
         except Exception as e:

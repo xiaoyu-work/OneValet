@@ -25,8 +25,6 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 KIND_APPROVAL = "approval"
-KIND_QUESTION = "question"
-KIND_PLAN = "plan"
 
 STATE_PENDING = "pending"
 STATE_RESOLVED = "resolved"
@@ -61,7 +59,11 @@ class Ask:
     @property
     def awaits_execution(self) -> bool:
         """Approved by the user, but the action has not happened yet."""
-        return self.state == STATE_RESOLVED and self.executed_at is None
+        return (
+            self.kind == KIND_APPROVAL
+            and self.state == STATE_RESOLVED
+            and self.executed_at is None
+        )
 
 
 def _loads(value: Any, default: Any) -> Any:
@@ -242,11 +244,15 @@ class InboxStore:
             rows = await self._db.fetch(
                 """
                 SELECT DISTINCT run_id FROM pending_asks
-                WHERE tenant_id = $1 AND state = $2 AND executed_at IS NULL
+                WHERE tenant_id = $1
+                  AND kind = $2
+                  AND state = $3
+                  AND executed_at IS NULL
                 ORDER BY run_id
-                LIMIT $3
+                LIMIT $4
                 """,
                 tenant_id,
+                KIND_APPROVAL,
                 STATE_RESOLVED,
                 limit,
             )
@@ -254,6 +260,93 @@ class InboxStore:
             logger.warning(f"Could not list runs awaiting execution for {tenant_id}: {e}")
             return []
         return [r["run_id"] for r in rows]
+
+    async def recoverable_runs(
+        self,
+        stale_after_seconds: int,
+        limit: int = 100,
+    ) -> List[str]:
+        """Suspended runs whose answered decisions are ready to carry out.
+
+        Internal maintenance query, intentionally across tenants. The run
+        itself carries its tenant and every continuation is fenced by the
+        transcript claim, so several app instances may discover the same row
+        without executing it twice.
+        """
+        if not self._db:
+            return []
+        try:
+            rows = await self._db.fetch(
+                """
+                SELECT pa.run_id
+                FROM pending_asks AS pa
+                JOIN run_transcripts AS rt ON rt.run_id = pa.run_id
+                WHERE pa.state = $1
+                  AND pa.kind = $2
+                  AND pa.executed_at IS NULL
+                  AND (
+                      rt.status = $3
+                      OR (
+                          rt.status = $4
+                          AND rt.updated_at
+                              < NOW() - ($5 || ' seconds')::interval
+                      )
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM pending_asks AS open_ask
+                      WHERE open_ask.run_id = pa.run_id
+                        AND open_ask.state = $6
+                  )
+                GROUP BY pa.run_id, rt.updated_at
+                ORDER BY rt.updated_at
+                LIMIT $7
+                """,
+                STATE_RESOLVED,
+                KIND_APPROVAL,
+                "suspended",
+                "running",
+                str(int(stale_after_seconds)),
+                STATE_PENDING,
+                limit,
+            )
+        except Exception as e:
+            logger.warning(f"Could not list recoverable Inbox runs: {e}")
+            return []
+        return [r["run_id"] for r in rows]
+
+    async def prune(self, older_than_days: int = 30, batch_size: int = 1000) -> int:
+        """Delete terminal asks in bounded batches.
+
+        Open asks and answered-but-unexecuted decisions are never deleted:
+        either still represents work owed to a person. Rows whose decisions
+        were carried out are audit history, retained for a month and then
+        removed so one approval-gated call does not mean one permanent row.
+        """
+        if not self._db:
+            return 0
+        try:
+            result = await self._db.execute(
+                """
+                WITH doomed AS (
+                    SELECT id FROM pending_asks
+                    WHERE state = $1
+                      AND executed_at IS NOT NULL
+                      AND resolved_at < NOW() - ($2 || ' days')::interval
+                    ORDER BY resolved_at
+                    LIMIT $3
+                )
+                DELETE FROM pending_asks AS pa
+                USING doomed
+                WHERE pa.id = doomed.id
+                """,
+                STATE_RESOLVED,
+                str(int(older_than_days)),
+                batch_size,
+            )
+            return int(str(result).rsplit(" ", 1)[-1]) if result else 0
+        except Exception as e:
+            logger.warning(f"Could not prune Inbox asks: {e}")
+            return 0
 
     async def resolve(
         self,

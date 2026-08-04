@@ -66,15 +66,8 @@ class ResumeMixin:
     async def resume_run(
         self,
         run_id: str,
-        *,
-        answers: Optional[Dict[str, str]] = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Continue a suspended run, optionally answering what it was waiting on.
-
-        ``answers`` maps a tool_call id to the result to record for it -- the
-        user's decision, arriving long after the run that asked for it ended.
-        Calls left unanswered are simply dropped with an explanatory result, so
-        the model can see they did not happen and adapt.
+        """Continue a suspended run from its durable transcript.
 
         Yields the same event stream as a fresh request, so callers handle a
         resumed run exactly like a new one.
@@ -122,7 +115,7 @@ class ResumeMixin:
         # belongs to an inner loop this transcript has never seen.
         try:
             async for event in self._continue_claimed_run(
-                run_id, transcript, messages, pending, answers, claim_token
+                run_id, transcript, messages, pending, claim_token
             ):
                 yield event
         except BaseException:
@@ -142,14 +135,13 @@ class ResumeMixin:
         transcript: Any,
         messages: List[Dict[str, Any]],
         pending: List[Dict[str, Any]],
-        answers: Optional[Dict[str, str]],
         claim_token: str,
     ) -> AsyncIterator[AgentEvent]:
         """Do the work of a resume, once this caller owns the run."""
         store = self._transcript_store
 
         if pending:
-            self._answer_pending_calls(messages, pending, answers or {})
+            self._answer_pending_calls(messages, pending)
         else:
             logger.info(f"[Resume] Run {run_id} has no pending tool calls; continuing loop")
 
@@ -334,17 +326,9 @@ class ResumeMixin:
             logger.warning(f"[Resume] Could not read decisions for run {run_id}: {e}")
             return []
 
-        notes_direct: List[str] = []
         owners: List[str] = []
         for ask in asks:
             if not ask.awaits_execution:
-                continue
-            if ask.kind != "approval":
-                # Nothing to carry out, but the answer is still owed a place in
-                # the run. Left unstamped it would keep the run listed as owing
-                # something with nothing able to clear it.
-                if await inbox.claim_execution(ask.id):
-                    notes_direct.append(f"The user answered: {ask.resolution}")
                 continue
             data = ask.data or {}
             owner = data.get("agent_type") or self._agent_type_for_class(data.get("agent", ""))
@@ -356,9 +340,9 @@ class ResumeMixin:
                     "the user's decision cannot be honoured"
                 )
         if not owners:
-            return notes_direct
+            return []
 
-        notes: List[str] = list(notes_direct)
+        notes: List[str] = []
         for agent_type in owners:
             hints = build_agent_hints(
                 self,
@@ -400,6 +384,7 @@ class ResumeMixin:
 
             if not await self._still_owed(run_id):
                 logger.info(f"[Resume] Run {run_id} has nothing outstanding; nothing to continue")
+                self._handoff_attempts.pop(run_id, None)
                 return
             if await self._open_ask_count(run_id):
                 # Another question is still unanswered. Waiting cannot change
@@ -417,6 +402,8 @@ class ResumeMixin:
                 logger.warning(f"[Resume] Attempt at run {run_id} failed: {e}")
                 continue
             if produced:
+                if not await self._still_owed(run_id):
+                    self._handoff_attempts.pop(run_id, None)
                 return
         logger.info(
             f"[Resume] Run {run_id} stayed busy; leaving it to hand itself on when it ends"
@@ -491,9 +478,8 @@ class ResumeMixin:
     def _answer_pending_calls(
         messages: List[Dict[str, Any]],
         pending: List[Dict[str, Any]],
-        answers: Dict[str, str],
     ) -> None:
-        """Record a result for every tool call still waiting on one.
+        """Close tool calls that the process died before completing.
 
         Each call must end up with a result, answered or not: an assistant
         message whose tool_calls have no replies is rejected outright by
@@ -504,13 +490,10 @@ class ResumeMixin:
             if not call_id:
                 continue
             name = (call.get("function") or {}).get("name", "tool")
-            if call_id in answers:
-                content = answers[call_id]
-            else:
-                content = (
-                    f"'{name}' was not completed -- the run was interrupted before it ran. "
-                    "Continue without it, or try again if it is still needed."
-                )
+            content = (
+                f"'{name}' was not completed -- the run was interrupted before it ran. "
+                "Continue without it, or try again if it is still needed."
+            )
             messages.append(
                 {"role": "tool", "tool_call_id": call_id, "content": content}
             )

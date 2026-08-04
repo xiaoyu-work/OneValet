@@ -90,6 +90,13 @@ from ..config import AgentRegistry
 
 logger = logging.getLogger(__name__)
 
+#: Database maintenance is deliberately coarse. Recovery is also triggered by
+#: every answer and by a run handing itself on; this loop exists for process
+#: death, not as the normal scheduler.
+_INBOX_MAINTENANCE_INTERVAL = 300
+_TRANSCRIPT_RETENTION_HOURS = 48
+_ASK_RETENTION_DAYS = 30
+
 
 from .state_persistence import PlanStore  # noqa: E402
 from .tool_pipeline import ToolPipeline, credential_check_hook, result_audit_hook  # noqa: E402
@@ -420,7 +427,68 @@ class Orchestrator(
         self.builtin_tools = self._build_builtin_tools()
 
         self._initialized = True
+        if self._transcript_store.enabled and self.inbox.enabled:
+            self.task_registry.create_task(
+                self._inbox_maintenance_loop(),
+                name="inbox_maintenance",
+            )
         logger.info("Orchestrator initialized")
+
+    async def _inbox_maintenance_loop(self) -> None:
+        """Recover work left by dead processes and bound durable history.
+
+        Runs immediately at startup, then every few minutes. Claims and
+        execution claims remain the arbiters, so every app instance may run
+        the same maintenance loop without doing an action twice.
+        """
+        while True:
+            try:
+                await self._maintain_inbox()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Inbox maintenance failed: {e}", exc_info=True)
+            await asyncio.sleep(_INBOX_MAINTENANCE_INTERVAL)
+
+    async def _maintain_inbox(self) -> None:
+        transcript_count = await self._transcript_store.prune(
+            _TRANSCRIPT_RETENTION_HOURS
+        )
+        ask_count = await self.inbox.prune(_ASK_RETENTION_DAYS)
+        if transcript_count or ask_count:
+            logger.info(
+                f"[Inbox] Pruned {transcript_count} transcript(s) and "
+                f"{ask_count} ask(s)"
+            )
+
+        run_ids = await self.inbox.recoverable_runs(
+            self._resume_lease_seconds(),
+        )
+        for run_id in run_ids:
+            self._schedule_maintenance_resume(run_id)
+
+    def _schedule_maintenance_resume(self, run_id: str) -> None:
+        active = getattr(self, "_maintenance_resumes", None)
+        if active is None:
+            active = set()
+            self._maintenance_resumes = active
+        if run_id in active:
+            return
+
+        async def _recover() -> None:
+            try:
+                await self.resume_when_free(run_id)
+            finally:
+                active.discard(run_id)
+
+        recovery = _recover()
+        active.add(run_id)
+        try:
+            self.task_registry.create_task(recovery, name=f"recover:{run_id}")
+        except RuntimeError as e:
+            active.discard(run_id)
+            recovery.close()
+            logger.warning(f"Could not schedule recovery of run {run_id}: {e}")
 
     async def shutdown(self) -> None:
         """Shutdown the orchestrator gracefully.
