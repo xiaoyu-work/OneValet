@@ -29,6 +29,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _sub_run_id(context: Optional[Dict[str, Any]], sub_task_id: str) -> str:
+    """A transcript id of a sub-task's own.
+
+    Sub-tasks each build their own message list and run their own loop, but
+    they used to persist under the request's id -- one row, several writers,
+    last one wins. What survived was one sub-task's context standing in for
+    the whole run, and a status that flapped between running and finished
+    while siblings were still going.
+
+    Giving each its own id makes the transcript describe the work that
+    produced it, which is what a resume needs: an approval raised inside a
+    sub-task comes back to that sub-task's messages, not to whichever sibling
+    happened to write last.
+    """
+    return f"{(context or {}).get('request_id', 'run')}#{sub_task_id}"
+
+
 class DagLoopMixin:
     """Mixin providing multi-intent DAG execution.
 
@@ -186,6 +203,7 @@ class DagLoopMixin:
                     domains=[st.domain],
                 )
                 task_context = copy.deepcopy(context)
+                task_context["request_id"] = _sub_run_id(context, st.id)
                 messages = await self._build_llm_messages(task_context, augmented_message)
 
                 exec_data: Dict[str, Any] = {}
@@ -238,6 +256,7 @@ class DagLoopMixin:
                     )
                     # Fully isolated context per sub-task
                     task_context = copy.deepcopy(context)
+                    task_context["request_id"] = _sub_run_id(context, sub_task.id)
                     msgs = await self._build_llm_messages(task_context, aug_msg)
                     exec_d: Dict[str, Any] = {}
                     events: list = []

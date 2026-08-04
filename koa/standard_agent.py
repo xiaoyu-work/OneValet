@@ -1273,8 +1273,9 @@ class StandardAgent(BaseAgent):
                         status = "asked"
                     elif decision == APPROVAL_ALREADY_DONE:
                         error_text = (
-                            f"'{tc.name}' was already carried out after the user approved "
-                            "it. Do not run it again; use the result you already have."
+                            f"'{tc.name}' was already run once on the user's approval, "
+                            "and that approval is spent. Do not run it again with these "
+                            "arguments. If it needs doing again, say so and ask them."
                         )
                         status = "already_done"
                     elif decision == APPROVAL_DECLINED:
@@ -1612,6 +1613,12 @@ class StandardAgent(BaseAgent):
         risks doing it twice for something the user authorised once. The
         failure is reported instead, and whether to try again is left to the
         model, which can ask.
+
+        The note says what was run and what came back, and stops there. Tools
+        report their own failures as ordinary text rather than by raising, so
+        there is nothing here that can tell a refusal from a receipt --
+        claiming the action succeeded would be asserting something we cannot
+        see. The model reads the result and tells the user what it says.
         """
         name = tool.name
         try:
@@ -1635,8 +1642,12 @@ class StandardAgent(BaseAgent):
         if len(text) > self.max_tool_result_chars:
             text = text[: self.max_tool_result_chars] + "\n...[truncated]"
         self._tool_trace.append({"tool": name, "status": "approved_and_run", "summary": text[:240]})
-        logger.info(f"[{self.__class__.__name__}:{self.name}] carried out approved {name}")
-        return f"The user approved '{name}' and it has now been done. Result: {text}"
+        logger.info(f"[{self.__class__.__name__}:{self.name}] ran approved {name}")
+        return (
+            f"The user approved '{name}', so I ran it just now with the arguments "
+            f"they saw. It returned: {text}\n"
+            "Read that before telling them it worked; if it reports a problem, say so."
+        )
 
     async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> str:
         """Consult the Inbox about this action. Returns what to do with it.
