@@ -297,8 +297,21 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 "attempts; leaving it for someone to look at"
             )
             return
+        continuation = self.resume_when_free(run_id)
+        try:
+            registry.create_task(continuation, name=f"resume:{run_id}")
+        except RuntimeError as e:
+            # TaskRegistry closes before it cancels in-flight work. These
+            # handoffs run from finally blocks during that cancellation, so
+            # shutdown reaches here deterministically. Do not let scheduling
+            # failure replace the cancellation (or turn a successful DAG
+            # sub-task into an error), and do not orphan the coroutine that
+            # was constructed before create_task rejected it. The run remains
+            # suspended and visible for recovery after restart.
+            continuation.close()
+            logger.warning(f"[ReAct] Could not hand off run {run_id}: {e}")
+            return
         attempts[run_id] = attempts.get(run_id, 0) + 1
-        registry.create_task(self.resume_when_free(run_id), name=f"resume:{run_id}")
 
     @property
     def _handoff_attempts(self) -> Dict[str, int]:
@@ -976,4 +989,3 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 for tc in tool_calls
             ]
         return msg
-
