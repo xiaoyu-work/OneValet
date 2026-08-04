@@ -733,6 +733,11 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # Token attribution for this turn
             turn_tokens = state.turn_tokens(usage)
 
+            # The event consumer may have paused for arbitrarily long after
+            # ACKNOWLEDGMENT or TOOL_CALL_START. Re-check the fencing token at
+            # the last possible point before side effects begin.
+            await self._touch_transcript(context)
+
             outcome = TurnOutcome()
             async for event in self._run_tool_calls(
                 tool_calls,
@@ -746,6 +751,20 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 turn_tokens=turn_tokens,
                 interrupted_sentinel=_INTERRUPTED,
             ):
+                if event.type == EventType.TOOL_RESULT:
+                    # The handler has already appended this result to messages.
+                    # Make that fact durable before exposing the event to a
+                    # consumer that can pause or disconnect here; otherwise a
+                    # takeover would replay an older transcript and run the
+                    # side effect again.
+                    await self._persist_transcript(
+                        context,
+                        tenant_id,
+                        messages,
+                        user_message,
+                        metadata,
+                        turn,
+                    )
                 yield event
             timed_results = outcome.timed_results
 
