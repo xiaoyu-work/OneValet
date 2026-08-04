@@ -31,7 +31,7 @@ from .planning import PlanningMixin, PlanOutcome
 from .run_state import RunState
 from .tool_execution import ToolExecutionMixin, TurnOutcome
 from .transcript_repair import repair_transcript
-from .transcript_store import STATUS_COMPLETED, STATUS_SUSPENDED
+from .transcript_store import RunLeaseLost, STATUS_COMPLETED, STATUS_SUSPENDED
 from .turn_gate import TurnGateMixin
 
 logger = logging.getLogger(__name__)
@@ -207,7 +207,8 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         run_id = (context or {}).get("request_id")
         if not run_id:
             return
-        await store.save(
+        claim_token = (context or {}).get("_claim_token")
+        saved = await store.save(
             run_id,
             tenant_id,
             messages,
@@ -215,7 +216,14 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             metadata=metadata or {},
             turn=turn,
             status=status,
+            claim_token=claim_token,
         )
+        if saved:
+            if context is not None:
+                context["_transcript_owned"] = True
+            return
+        if claim_token or (context or {}).get("_transcript_owned"):
+            raise RunLeaseLost(f"Run {run_id} was taken over by another process")
 
     async def _touch_transcript(self, context: Optional[Dict[str, Any]]) -> None:
         """Refresh this run's lease without rewriting what it has done."""
@@ -224,7 +232,12 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             return
         run_id = (context or {}).get("request_id")
         if run_id:
-            await store.touch(run_id)
+            claim_token = (context or {}).get("_claim_token")
+            touched = await store.touch(run_id, claim_token=claim_token)
+            if not touched and (
+                claim_token or (context or {}).get("_transcript_owned")
+            ):
+                raise RunLeaseLost(f"Run {run_id} was taken over by another process")
 
     async def _finish_transcript(
         self,
@@ -246,6 +259,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         run_id = (context or {}).get("request_id")
         if not run_id:
             return
+        arm_handoff = False
         if status == STATUS_COMPLETED and await self._owes_the_user(run_id):
             logger.info(f"[ReAct] Run {run_id} still owes the user; keeping it resumable")
             status = STATUS_SUSPENDED
@@ -257,9 +271,24 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # user has not answered yet has nothing to continue into, and
             # arming a handoff for it would spend one of the few attempts a
             # genuinely stuck run gets.
-            if context is not None and await self._has_unacted_decision(run_id):
+            arm_handoff = await self._has_unacted_decision(run_id)
+
+        claim_token = (context or {}).get("_claim_token")
+        marked = await store.mark(run_id, status, claim_token=claim_token)
+        if not marked:
+            # A plan/auth exit before the first persisted turn has no row yet;
+            # that is harmless. A run that had owned a row has lost its lease
+            # and must not arm work for the process that replaced it.
+            if claim_token or (context or {}).get("_transcript_owned"):
+                logger.warning(
+                    f"[ReAct] Did not finish run {run_id}: this process no longer owns it"
+                )
+            return
+        if context is not None:
+            context.pop("_claim_token", None)
+            context["_transcript_owned"] = False
+            if arm_handoff:
                 context["_owes_continuation"] = run_id
-        await store.mark(run_id, status)
 
     async def _has_unacted_decision(self, run_id: str) -> bool:
         """Whether the user has decided something this run has not carried out."""

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +32,10 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 
 
+class RunLeaseLost(RuntimeError):
+    """The transcript's fencing token no longer belongs to this process."""
+
+
 @dataclass
 class RunTranscript:
     run_id: str
@@ -40,6 +45,7 @@ class RunTranscript:
     user_message: str
     metadata: Dict[str, Any]
     turn: int
+    claim_token: Optional[str] = None
 
 
 def _loads(value: Any, default: Any) -> Any:
@@ -52,6 +58,16 @@ def _loads(value: Any, default: Any) -> Any:
         except (json.JSONDecodeError, TypeError):
             return default
     return value
+
+
+def _changed(result: Any) -> bool:
+    """Whether an asyncpg execute result changed at least one row."""
+    if not result:
+        return False
+    try:
+        return int(str(result).rsplit(" ", 1)[-1]) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 class TranscriptStore:
@@ -74,7 +90,8 @@ class TranscriptStore:
         metadata: Optional[Dict[str, Any]] = None,
         turn: int = 0,
         status: str = STATUS_RUNNING,
-    ) -> None:
+        claim_token: Optional[str] = None,
+    ) -> bool:
         """Write the run's current transcript, replacing any previous version.
 
         Called after each tool round, so the stored copy always reflects work
@@ -82,31 +99,57 @@ class TranscriptStore:
         the run is still valid in memory, it just will not survive a restart.
         """
         if not self._db:
-            return
+            return False
         try:
-            await self._db.execute(
-                """
-                INSERT INTO run_transcripts
-                    (run_id, tenant_id, status, messages, user_message, metadata, turn)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
-                ON CONFLICT (run_id) DO UPDATE SET
-                    status       = EXCLUDED.status,
-                    messages     = EXCLUDED.messages,
-                    user_message = EXCLUDED.user_message,
-                    metadata     = EXCLUDED.metadata,
-                    turn         = EXCLUDED.turn,
-                    updated_at   = NOW()
-                """,
-                run_id,
-                tenant_id,
-                status,
-                json.dumps(messages, default=str),
-                user_message,
-                json.dumps(metadata or {}, default=str),
-                turn,
-            )
+            if claim_token:
+                result = await self._db.execute(
+                    """
+                    UPDATE run_transcripts SET
+                        status       = $3,
+                        messages     = $4::jsonb,
+                        user_message = $5,
+                        metadata     = $6::jsonb,
+                        turn         = $7,
+                        updated_at   = NOW()
+                    WHERE run_id = $1 AND tenant_id = $2 AND claim_token = $8
+                    """,
+                    run_id,
+                    tenant_id,
+                    status,
+                    json.dumps(messages, default=str),
+                    user_message,
+                    json.dumps(metadata or {}, default=str),
+                    turn,
+                    claim_token,
+                )
+            else:
+                result = await self._db.execute(
+                    """
+                    INSERT INTO run_transcripts
+                        (run_id, tenant_id, status, messages, user_message, metadata,
+                         turn, claim_token)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, NULL)
+                    ON CONFLICT (run_id) DO UPDATE SET
+                        status       = EXCLUDED.status,
+                        messages     = EXCLUDED.messages,
+                        user_message = EXCLUDED.user_message,
+                        metadata     = EXCLUDED.metadata,
+                        turn         = EXCLUDED.turn,
+                        updated_at   = NOW()
+                    WHERE run_transcripts.claim_token IS NULL
+                    """,
+                    run_id,
+                    tenant_id,
+                    status,
+                    json.dumps(messages, default=str),
+                    user_message,
+                    json.dumps(metadata or {}, default=str),
+                    turn,
+                )
+            return _changed(result)
         except Exception as e:
             logger.warning(f"Could not persist transcript for run {run_id}: {e}")
+            return False
 
     async def get(self, run_id: str) -> Optional[RunTranscript]:
         if not self._db:
@@ -114,7 +157,8 @@ class TranscriptStore:
         try:
             row = await self._db.fetchrow(
                 """
-                SELECT run_id, tenant_id, status, messages, user_message, metadata, turn
+                SELECT run_id, tenant_id, status, messages, user_message, metadata,
+                       turn, claim_token
                 FROM run_transcripts WHERE run_id = $1
                 """,
                 run_id,
@@ -132,9 +176,10 @@ class TranscriptStore:
             user_message=row["user_message"] or "",
             metadata=_loads(row["metadata"], {}),
             turn=row["turn"] or 0,
+            claim_token=row["claim_token"],
         )
 
-    async def claim(self, run_id: str, stale_after_seconds: int) -> bool:
+    async def claim(self, run_id: str, stale_after_seconds: int) -> Optional[str]:
         """Take exclusive ownership of continuing a run.
 
         Two answers to the same run can arrive within a second of each other,
@@ -155,12 +200,13 @@ class TranscriptStore:
         its tools a second time.
         """
         if not self._db:
-            return False
+            return None
+        token = uuid.uuid4().hex
         try:
             row = await self._db.fetchrow(
                 """
                 UPDATE run_transcripts
-                   SET status = $2, updated_at = NOW()
+                   SET status = $2, claim_token = $5, updated_at = NOW()
                  WHERE run_id = $1
                    AND (status = $3
                         OR (status = $2 AND updated_at < NOW() - ($4 || ' seconds')::interval))
@@ -170,13 +216,14 @@ class TranscriptStore:
                 STATUS_RUNNING,
                 STATUS_SUSPENDED,
                 str(int(stale_after_seconds)),
+                token,
             )
         except Exception as e:
             logger.warning(f"Could not claim run {run_id}: {e}")
-            return False
-        return row is not None
+            return None
+        return token if row is not None else None
 
-    async def release(self, run_id: str) -> None:
+    async def release(self, run_id: str, claim_token: str) -> None:
         """Hand a claimed run back, but only if it is still ours to hand back.
 
         The loop sets the run's final status before the caller has finished
@@ -191,16 +238,17 @@ class TranscriptStore:
                 """
                 UPDATE run_transcripts
                    SET status = $2, updated_at = NOW()
-                 WHERE run_id = $1 AND status = $3
+                 WHERE run_id = $1 AND status = $3 AND claim_token = $4
                 """,
                 run_id,
                 STATUS_SUSPENDED,
                 STATUS_RUNNING,
+                claim_token,
             )
         except Exception as e:
             logger.warning(f"Could not release run {run_id}: {e}")
 
-    async def touch(self, run_id: str) -> None:
+    async def touch(self, run_id: str, claim_token: Optional[str] = None) -> bool:
         """Say the run is still alive, without rewriting its transcript.
 
         The lease is what stops a second caller taking over a run that is
@@ -209,31 +257,59 @@ class TranscriptStore:
         call rejected, say -- still needs to count as a sign of life.
         """
         if not self._db:
-            return
+            return False
         try:
-            await self._db.execute(
-                "UPDATE run_transcripts SET updated_at = NOW() "
-                "WHERE run_id = $1 AND status = $2",
-                run_id,
-                STATUS_RUNNING,
-            )
+            if claim_token:
+                result = await self._db.execute(
+                    "UPDATE run_transcripts SET updated_at = NOW() "
+                    "WHERE run_id = $1 AND status = $2 AND claim_token = $3",
+                    run_id,
+                    STATUS_RUNNING,
+                    claim_token,
+                )
+            else:
+                result = await self._db.execute(
+                    "UPDATE run_transcripts SET updated_at = NOW() "
+                    "WHERE run_id = $1 AND status = $2 AND claim_token IS NULL",
+                    run_id,
+                    STATUS_RUNNING,
+                )
+            return _changed(result)
         except Exception as e:
             # The concurrency guarantee rests on this: a touch that keeps
             # failing lets a live run look abandoned and be taken over.
             logger.warning(f"Could not touch run {run_id}: {e}")
+            return False
 
-    async def mark(self, run_id: str, status: str) -> None:
+    async def mark(
+        self,
+        run_id: str,
+        status: str,
+        claim_token: Optional[str] = None,
+    ) -> bool:
         """Move a run to a terminal or suspended state."""
         if not self._db:
-            return
+            return False
         try:
-            await self._db.execute(
-                "UPDATE run_transcripts SET status = $2, updated_at = NOW() WHERE run_id = $1",
-                run_id,
-                status,
-            )
+            if claim_token:
+                result = await self._db.execute(
+                    "UPDATE run_transcripts SET status = $2, "
+                    "updated_at = NOW() WHERE run_id = $1 AND claim_token = $3",
+                    run_id,
+                    status,
+                    claim_token,
+                )
+            else:
+                result = await self._db.execute(
+                    "UPDATE run_transcripts SET status = $2, updated_at = NOW() "
+                    "WHERE run_id = $1 AND claim_token IS NULL",
+                    run_id,
+                    status,
+                )
+            return _changed(result)
         except Exception as e:
             logger.warning(f"Could not mark run {run_id} as {status}: {e}")
+            return False
 
     async def prune(self, older_than_hours: int = 48) -> int:
         """Drop finished transcripts. Suspended runs are never pruned here --

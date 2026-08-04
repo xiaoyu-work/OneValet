@@ -21,6 +21,7 @@ from ..streaming.models import AgentEvent, EventType
 from .agent_tool import build_agent_hints
 from .ask_mirror import parse_reply
 from .transcript_store import (
+    RunLeaseLost,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_RUNNING,
@@ -109,7 +110,8 @@ class ResumeMixin:
         # And only one continuation at a time. Answers can land together and a
         # resume can be asked for by hand, and two loops replaying the same
         # transcript would repeat each other's work and overwrite the record.
-        if not await store.claim(run_id, self._resume_lease_seconds()):
+        claim_token = await store.claim(run_id, self._resume_lease_seconds())
+        if not claim_token:
             logger.info(f"[Resume] Run {run_id} is already being continued; leaving it alone")
             return
 
@@ -120,7 +122,7 @@ class ResumeMixin:
         # belongs to an inner loop this transcript has never seen.
         try:
             async for event in self._continue_claimed_run(
-                run_id, transcript, messages, pending, answers
+                run_id, transcript, messages, pending, answers, claim_token
             ):
                 yield event
         except BaseException:
@@ -131,7 +133,7 @@ class ResumeMixin:
             # this returns: a failure in the tail must not reopen a run that
             # actually completed.
             logger.warning(f"[Resume] Run {run_id} did not finish; releasing it")
-            await store.release(run_id)
+            await store.release(run_id, claim_token)
             raise
 
     async def _continue_claimed_run(
@@ -141,6 +143,7 @@ class ResumeMixin:
         messages: List[Dict[str, Any]],
         pending: List[Dict[str, Any]],
         answers: Optional[Dict[str, str]],
+        claim_token: str,
     ) -> AsyncIterator[AgentEvent]:
         """Do the work of a resume, once this caller owns the run."""
         store = self._transcript_store
@@ -157,6 +160,7 @@ class ResumeMixin:
         )
         context["request_id"] = run_id
         context["resumed"] = True
+        context["_claim_token"] = claim_token
 
         # Before the model gets a turn: the approved actions happen, from the
         # arguments the user saw, and their outcomes go in as turns it reads.
@@ -164,7 +168,7 @@ class ResumeMixin:
         for note in decisions:
             messages.append({"role": "user", "content": note})
 
-        await store.save(
+        saved = await store.save(
             run_id,
             transcript.tenant_id,
             messages,
@@ -172,7 +176,11 @@ class ResumeMixin:
             metadata=transcript.metadata,
             turn=transcript.turn,
             status=STATUS_RUNNING,
+            claim_token=claim_token,
         )
+        if not saved:
+            raise RunLeaseLost(f"Run {run_id} was taken over before it could continue")
+        context["_transcript_owned"] = True
 
         intent = context.get("intent_analysis")
         domains = getattr(intent, "domains", None) or ["all"]
