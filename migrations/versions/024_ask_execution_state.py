@@ -139,6 +139,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Old workers use executed_at as the entire execution CAS. Preserve
+    # at-most-once semantics for anything that may have entered the executor;
+    # only a never-started pending state is safe to expose as unclaimed.
+    op.execute(
+        """
+        UPDATE pending_asks
+           SET executed_at = CASE
+                   WHEN execution_state = 'pending' THEN NULL
+                   ELSE COALESCE(
+                       executed_at,
+                       execution_started_at,
+                       execution_claimed_at,
+                       NOW()
+                   )
+               END
+         WHERE state = 'resolved';
+        """
+    )
     with op.get_context().autocommit_block():
         op.execute(
             "DROP INDEX CONCURRENTLY IF EXISTS idx_pending_asks_recent_outcomes;"

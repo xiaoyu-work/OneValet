@@ -245,6 +245,18 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             ):
                 raise RunLeaseLost(f"Run {run_id} was taken over by another process")
 
+        parent_run_id = (context or {}).get("_dag_parent_run_id")
+        dag_store = getattr(self, "_dag_store", None)
+        if parent_run_id and dag_store is not None and dag_store.enabled:
+            dag_touched = await dag_store.touch(
+                parent_run_id,
+                (context or {}).get("_dag_claim_token"),
+            )
+            if not dag_touched:
+                raise RunLeaseLost(
+                    f"Parent DAG {parent_run_id} was taken over by another process"
+                )
+
     async def _finish_transcript(
         self,
         context: Optional[Dict[str, Any]],
@@ -690,9 +702,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                     final_answer=True,
                     tenant_id=tenant_id,
                 )
-                if state.final_response:
-                    async for event in self._yield_chunked_response(state.final_response, turn):
-                        yield event
                 break
 
             # Append assistant message with tool_calls
@@ -706,8 +715,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
 
             if intercept.ends_turn_alone:
                 self._settle_complete_task(intercept, messages, state)
-                async for event in self._yield_chunked_response(state.final_response, turn):
-                    yield event
                 break
 
             tool_calls = intercept.remaining or tool_calls
@@ -808,8 +815,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # AFTER all other tools' results have been appended to messages
             if intercept.result:
                 self._settle_complete_task(intercept, messages, state, tool_names)
-                async for event in self._yield_chunked_response(state.final_response, turn):
-                    yield event
                 break
 
             # Watchdog: a run that keeps making the same call is not going to
@@ -818,8 +823,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             if loop_desc:
                 logger.warning(f"[ReAct] {loop_desc}")
                 state.final_response = watchdog.STUCK_MESSAGE
-                async for event in self._yield_chunked_response(state.final_response, turn):
-                    yield event
                 break
 
             # Audit: log turn summary
@@ -854,9 +857,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 )
                 if state.pending_approvals:
                     state.pending_approvals = collect_batch_approvals(state.pending_approvals)
-                if outcome.waiting_text:
-                    async for event in self._yield_chunked_response(outcome.waiting_text, turn):
-                        yield event
                 break
 
             # One agent, finished, nothing else called: its answer is already
@@ -869,8 +869,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                     f"({len(passthrough)} chars from {tool_calls[0].name})"
                 )
                 state.final_response = passthrough
-                async for event in self._yield_chunked_response(passthrough, turn):
-                    yield event
                 break
 
         else:
@@ -878,8 +876,6 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # once more with no tools, so it has to answer from what it has
             # rather than reaching for another call it cannot make.
             state.final_response = await self._summarize_after_max_turns(messages, state)
-            async for event in self._yield_chunked_response(state.final_response, turn):
-                yield event
 
         # Cancel any speculative tasks that were not consumed
         speculative = (context or {}).get("_speculative_tasks", {})
@@ -896,6 +892,16 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
         await self._finish_transcript(
             context, STATUS_SUSPENDED if state.interrupted else STATUS_COMPLETED
         )
+
+        # Final content is visible only after the owner-fenced terminal write.
+        # If the lease was lost or the database could not record the terminal
+        # state, `_finish_transcript` raises and stale success is never emitted.
+        if state.final_response and not state.interrupted:
+            async for event in self._yield_chunked_response(
+                state.final_response,
+                state.turn,
+            ):
+                yield event
 
         if state.interrupted:
             # A run the user stopped still owes them a reply, and "Stopped."

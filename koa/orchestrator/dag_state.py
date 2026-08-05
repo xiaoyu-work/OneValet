@@ -106,6 +106,86 @@ class DagContinuationStore:
         result_status = await self._db.execute(query, *args)
         return str(result_status).endswith(" 1")
 
+    async def record_result_and_wait(
+        self,
+        parent_run_id: str,
+        sub_run_id: str,
+        sub_task_id: int,
+        result: Dict[str, Any],
+        claim_token: Optional[str] = None,
+    ) -> bool:
+        """Persist the waiting result and barrier as one fenced transaction."""
+        if not self._db:
+            return False
+        row = await self._db.fetchrow(
+            """
+            WITH owner AS MATERIALIZED (
+                SELECT parent_run_id FROM dag_continuations
+                 WHERE parent_run_id = $1
+                   AND (
+                       ($5::text IS NULL AND claim_token IS NULL)
+                       OR claim_token = $5
+                   )
+                FOR UPDATE
+            ),
+            updated AS (
+                UPDATE dag_continuations AS dag
+                   SET results = dag.results
+                                 || jsonb_build_object($3::text, $4::jsonb),
+                       updated_at = NOW()
+                  FROM owner
+                 WHERE dag.parent_run_id = owner.parent_run_id
+                RETURNING dag.parent_run_id
+            ),
+            waiting AS (
+                INSERT INTO dag_waiting_subruns
+                    (sub_run_id, parent_run_id, sub_task_id)
+                SELECT $2, updated.parent_run_id, $3 FROM updated
+                ON CONFLICT (sub_run_id) DO UPDATE
+                    SET parent_run_id = EXCLUDED.parent_run_id,
+                        sub_task_id = EXCLUDED.sub_task_id
+                RETURNING parent_run_id
+            )
+            UPDATE dag_continuations AS dag
+               SET status = 'waiting', updated_at = NOW()
+              FROM waiting
+             WHERE dag.parent_run_id = waiting.parent_run_id
+            RETURNING dag.parent_run_id
+            """,
+            parent_run_id,
+            sub_run_id,
+            sub_task_id,
+            json.dumps(result, default=str),
+            claim_token,
+        )
+        return row is not None
+
+    async def touch(
+        self,
+        parent_run_id: str,
+        claim_token: Optional[str] = None,
+    ) -> bool:
+        if not self._db:
+            return False
+        if claim_token:
+            result = await self._db.execute(
+                """
+                UPDATE dag_continuations SET updated_at = NOW()
+                 WHERE parent_run_id = $1 AND claim_token = $2
+                """,
+                parent_run_id,
+                claim_token,
+            )
+        else:
+            result = await self._db.execute(
+                """
+                UPDATE dag_continuations SET updated_at = NOW()
+                 WHERE parent_run_id = $1 AND claim_token IS NULL
+                """,
+                parent_run_id,
+            )
+        return str(result).endswith(" 1")
+
     async def wait_for(
         self,
         parent_run_id: str,

@@ -289,10 +289,12 @@ class InboxStore:
                 UPDATE pending_asks
                    SET execution_state = $6,
                        execution_claim_token = $7,
-                       execution_claimed_at = NOW()
+                       execution_claimed_at = NOW(),
+                       executed_at = NOW()
                  WHERE id = $1
                    AND state = $2
                    AND execution_state = $8
+                   AND executed_at IS NULL
                    AND pending_asks.run_id = $3
                    AND EXISTS (
                        SELECT 1 FROM owner
@@ -388,7 +390,8 @@ class InboxStore:
                 UPDATE pending_asks
                    SET execution_state = $1,
                        execution_claim_token = NULL,
-                       execution_claimed_at = NULL
+                       execution_claimed_at = NULL,
+                       executed_at = NULL
                  WHERE state = $2
                    AND execution_state = $3
                    AND execution_claimed_at
@@ -417,11 +420,22 @@ class InboxStore:
                        expires_at = NOW() + INTERVAL '1 day',
                        execution_state = $2,
                        execution_claim_token = NULL,
+                       executed_at = NULL,
                        execution_outcome = 'Previous attempt started; outcome is uncertain.'
                  WHERE state = $3
-                   AND execution_state = $4
-                   AND execution_started_at
-                       < NOW() - ($5 || ' seconds')::interval
+                   AND (
+                       (
+                           execution_state = $4
+                           AND execution_started_at
+                               < NOW() - ($5 || ' seconds')::interval
+                       )
+                       OR (
+                           execution_state = $2
+                           AND executed_at IS NOT NULL
+                           AND executed_at
+                               < NOW() - ($5 || ' seconds')::interval
+                       )
+                   )
                 RETURNING {_COLUMNS}
                 """,
                 STATE_PENDING,
@@ -494,6 +508,7 @@ class InboxStore:
                 WHERE pa.state = $1
                   AND pa.kind = $2
                   AND pa.execution_state = $9
+                  AND pa.executed_at IS NULL
                   AND (
                       rt.status = $3
                       OR (
