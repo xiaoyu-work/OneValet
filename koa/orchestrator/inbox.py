@@ -352,19 +352,27 @@ class InboxStore:
             return []
         return [r["run_id"] for r in rows]
 
-    async def expire(self) -> int:
+    async def expire(self, batch_size: int = 5000) -> int:
         """Expire unanswered asks and close runs that have nothing else owed."""
         if not self._db:
             return 0
         try:
             row = await self._db.fetchrow(
                 """
-                WITH expired AS (
+                WITH candidates AS (
+                    SELECT id FROM pending_asks
+                    WHERE state = $2 AND expires_at <= NOW()
+                    ORDER BY expires_at
+                    LIMIT $6
+                    FOR UPDATE SKIP LOCKED
+                ),
+                expired AS (
                     UPDATE pending_asks
                        SET state = $1,
                            resolution = $1,
                            resolved_at = NOW()
-                     WHERE state = $2 AND expires_at <= NOW()
+                      FROM candidates
+                     WHERE pending_asks.id = candidates.id
                     RETURNING run_id
                 ),
                 closed_runs AS (
@@ -393,6 +401,7 @@ class InboxStore:
                 "failed",
                 "suspended",
                 STATE_RESOLVED,
+                batch_size,
             )
             return int(row["expired_count"]) if row else 0
         except Exception as e:
@@ -421,6 +430,7 @@ class InboxStore:
                       AND resolved_at < NOW() - ($3 || ' days')::interval
                     ORDER BY resolved_at
                     LIMIT $4
+                          FOR UPDATE SKIP LOCKED
                 )
                 DELETE FROM pending_asks AS pa
                 USING doomed

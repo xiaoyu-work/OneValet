@@ -48,6 +48,7 @@ Example (hooks, no subclass):
 import asyncio
 import copy
 import logging
+import random
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List, Optional
 
@@ -95,6 +96,9 @@ logger = logging.getLogger(__name__)
 #: every answer and by a run handing itself on; this loop exists for process
 #: death, not as the normal scheduler.
 _INBOX_MAINTENANCE_INTERVAL = 300
+_INBOX_MAINTENANCE_JITTER = 60
+_MAINTENANCE_BATCH_SIZE = 5000
+_MAINTENANCE_MAX_BATCHES = 10
 _TRANSCRIPT_RETENTION_HOURS = 48
 _ASK_RETENTION_DAYS = 30
 _MAX_AUTOMATIC_RECOVERIES = 5
@@ -460,14 +464,30 @@ class Orchestrator(
                 raise
             except Exception as e:
                 logger.error(f"Inbox maintenance failed: {e}", exc_info=True)
-            await asyncio.sleep(_INBOX_MAINTENANCE_INTERVAL)
+            await asyncio.sleep(
+                _INBOX_MAINTENANCE_INTERVAL
+                + random.uniform(0, _INBOX_MAINTENANCE_JITTER)
+            )
 
     async def _maintain_inbox(self) -> None:
-        expired_count = await self.inbox.expire()
-        transcript_count = await self._transcript_store.prune(
-            _TRANSCRIPT_RETENTION_HOURS
-        )
-        ask_count = await self.inbox.prune(_ASK_RETENTION_DAYS)
+        expired_count = 0
+        transcript_count = 0
+        ask_count = 0
+        for _ in range(_MAINTENANCE_MAX_BATCHES):
+            expired = await self.inbox.expire(_MAINTENANCE_BATCH_SIZE)
+            transcripts = await self._transcript_store.prune(
+                _TRANSCRIPT_RETENTION_HOURS,
+                _MAINTENANCE_BATCH_SIZE,
+            )
+            asks = await self.inbox.prune(
+                _ASK_RETENTION_DAYS,
+                _MAINTENANCE_BATCH_SIZE,
+            )
+            expired_count += expired
+            transcript_count += transcripts
+            ask_count += asks
+            if max(expired, transcripts, asks) < _MAINTENANCE_BATCH_SIZE:
+                break
         if expired_count or transcript_count or ask_count:
             logger.info(
                 f"[Inbox] Expired {expired_count} ask(s); pruned "
@@ -1056,13 +1076,19 @@ class Orchestrator(
         # Hand off to a background waiter rather than dropping the answer, and
         # tell the user it is recorded -- which it is.
         logger.info(f"[Orchestrator] Run {run_id} is busy; continuing it in the background")
-        self.task_registry.create_task(
-            self.resume_when_free(run_id), name=f"resume:{run_id}"
+        scheduled = self.schedule_resume(run_id)
+        message = (
+            "Got it — I've recorded your answer and I'm on it."
+            if scheduled
+            else (
+                "Got it — I've recorded your answer. The service is shutting down, "
+                "so it will continue automatically after restart."
+            )
         )
         result = AgentResult(
             agent_type="Orchestrator",
             status=AgentStatus.COMPLETED,
-            raw_message="Got it — I've recorded your answer and I'm on it.",
+            raw_message=message,
         )
         async for event in self._emit_direct_result(await self.post_process(result, context)):
             yield event

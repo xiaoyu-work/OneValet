@@ -1,14 +1,10 @@
 """Inbox routes — what the assistant is waiting on, and answering it."""
 
-import logging
-
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ...errors import E, KoaError
 from ..app import require_app, verify_api_key
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -70,8 +66,12 @@ async def answer(ask_id: str, req: AnswerRequest):
     # Continue in the background: the caller should not wait out a full agent
     # run to have their tap acknowledged. The run may still be finishing, so
     # this waits for it rather than giving up on the first refusal.
-    orch.task_registry.create_task(orch.resume_when_free(run_id), name=f"resume:{run_id}")
-    return {"status": "resolved", "run_id": run_id}
+    scheduled = orch.schedule_resume(run_id)
+    return {
+        "status": "resolved",
+        "continuation": "scheduled" if scheduled else "deferred",
+        "run_id": run_id,
+    }
 
 
 @router.get("/api/runs/{tenant_id}/resumable", dependencies=[Depends(verify_api_key)])
@@ -104,11 +104,8 @@ async def resume(run_id: str):
             E.SERVICE_UNAVAILABLE, "Orchestrator not available", details={"run_id": run_id}
         )
 
-    async def _resume():
-        try:
-            await orch.resume_when_free(run_id)
-        except Exception as e:
-            logger.error(f"[Inbox] Resuming run {run_id} failed: {e}", exc_info=True)
-
-    orch.task_registry.create_task(_resume(), name=f"resume:{run_id}")
-    return {"status": "resuming", "run_id": run_id}
+    scheduled = orch.schedule_resume(run_id)
+    return {
+        "status": "resuming" if scheduled else "deferred",
+        "run_id": run_id,
+    }

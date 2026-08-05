@@ -453,6 +453,7 @@ class TranscriptStore:
                       )
                     ORDER BY rt.updated_at
                     LIMIT $7
+                      FOR UPDATE OF rt SKIP LOCKED
                 )
                 DELETE FROM run_transcripts AS rt
                 USING doomed

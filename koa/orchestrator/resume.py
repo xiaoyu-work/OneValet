@@ -424,6 +424,23 @@ class ResumeMixin:
             f"[Resume] Run {run_id} stayed busy; leaving it to hand itself on when it ends"
         )
 
+    def schedule_resume(self, run_id: str) -> bool:
+        """Schedule durable continuation without leaking on shutdown.
+
+        The answer is already committed before callers reach this method. A
+        closed registry therefore means "deferred until startup recovery",
+        not "the answer failed". Close the rejected coroutine and let callers
+        report that distinction honestly.
+        """
+        continuation = self.resume_when_free(run_id)
+        try:
+            self.task_registry.create_task(continuation, name=f"resume:{run_id}")
+        except RuntimeError as e:
+            continuation.close()
+            logger.warning(f"[Resume] Could not schedule run {run_id}: {e}")
+            return False
+        return True
+
     async def _still_owed(self, run_id: str) -> bool:
         """Whether this run has anything left to do for the user."""
         inbox = getattr(self, "inbox", None)
