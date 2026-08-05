@@ -223,6 +223,7 @@ class DagLoopMixin:
                         tenant_id,
                         context=task_context,
                         user_message=augmented_message,
+                        metadata=metadata,
                     ):
                         if event.type == EventType.EXECUTION_END:
                             exec_data = event.data
@@ -286,6 +287,7 @@ class DagLoopMixin:
                             tenant_id,
                             context=task_context,
                             user_message=aug_msg,
+                            metadata=metadata,
                         ):
                             if ev.type == EventType.EXECUTION_END:
                                 exec_d = ev.data

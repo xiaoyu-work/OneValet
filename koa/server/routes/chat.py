@@ -131,14 +131,16 @@ async def stream(req: ChatRequest):
             await queue.put(_SENTINEL)
             # Fire callback after orchestrator completes
             if execution_end_data_holder and _KOIAI_CALLBACK_URL:
-                ed = execution_end_data_holder[0]
-                # ed is an AgentResult dataclass, not a dict
-                final_resp = getattr(ed, "raw_message", "") or ""
-                tool_calls = (
-                    getattr(ed, "metadata", {}).get("tool_calls", [])
-                    if hasattr(ed, "metadata")
-                    else []
-                )
+                # The loop emits a raw execution payload first; the outer
+                # pipeline emits the post-processed AgentResult last. Callback
+                # delivery must use the canonical terminal value.
+                ed = execution_end_data_holder[-1]
+                if isinstance(ed, dict):
+                    final_resp = ed.get("final_response", "") or ""
+                    tool_calls = ed.get("tool_calls", []) or []
+                else:
+                    final_resp = getattr(ed, "raw_message", "") or ""
+                    tool_calls = getattr(ed, "metadata", {}).get("tool_calls", [])
                 await _post_stream_result(
                     tenant_id=req.tenant_id,
                     final_response=final_resp,

@@ -22,9 +22,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     with op.get_context().autocommit_block():
+        # CREATE INDEX CONCURRENTLY may leave an INVALID same-name object on
+        # failure. IF NOT EXISTS would silently accept it on retry.
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_suspended_age;"
+        )
         op.execute(
             """
-            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_transcripts_suspended_age
+            CREATE INDEX CONCURRENTLY idx_run_transcripts_suspended_age
                 ON run_transcripts (updated_at)
                 WHERE status = 'suspended';
             """

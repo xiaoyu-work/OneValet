@@ -111,7 +111,11 @@ class ResumeMixin:
         # back between that read and our claim; continuing its older message
         # list would replay work the row now says is done. Read under the
         # fencing token and use only that copy.
-        claimed = await store.get(run_id)
+        try:
+            claimed = await store.get(run_id)
+        except BaseException:
+            await store.release(run_id, claim_token)
+            raise
         if claimed is None or claimed.claim_token != claim_token:
             logger.warning(f"[Resume] Could not read the transcript claimed for run {run_id}")
             await store.release(run_id, claim_token)
