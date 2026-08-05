@@ -421,9 +421,10 @@ class TranscriptStore:
     async def prune(self, older_than_hours: int = 48, batch_size: int = 1000) -> int:
         """Drop terminal and abandoned transcripts in bounded batches.
 
-        Suspended rows are never pruned: they are explicitly waiting on
-        recovery. A very old running row is safe to remove only when no open
-        or unexecuted ask says the user is still owed something.
+        A very old running or suspended row is safe to remove only when no
+        open or unexecuted ask says the user is still owed something.
+        Suspended is also used for user interruption and abandoned resumes,
+        neither of which necessarily has anything durable left to recover.
         """
         if not self._db:
             return 0
@@ -437,14 +438,14 @@ class TranscriptStore:
                       AND (
                           rt.status IN ($1, $2)
                           OR (
-                              rt.status = $3
+                              rt.status IN ($3, $4)
                               AND NOT EXISTS (
                                   SELECT 1 FROM pending_asks AS pa
                                   WHERE pa.run_id = rt.run_id
                                     AND (
-                                        pa.state = $4
-                                        OR (
                                             pa.state = $5
+                                        OR (
+                                                pa.state = $6
                                             AND pa.executed_at IS NULL
                                         )
                                     )
@@ -452,7 +453,7 @@ class TranscriptStore:
                           )
                       )
                     ORDER BY rt.updated_at
-                    LIMIT $7
+                      LIMIT $8
                       FOR UPDATE OF rt SKIP LOCKED
                 )
                 DELETE FROM run_transcripts AS rt
@@ -462,6 +463,7 @@ class TranscriptStore:
                 STATUS_COMPLETED,
                 STATUS_FAILED,
                 STATUS_RUNNING,
+                STATUS_SUSPENDED,
                 "pending",
                 "resolved",
                 str(int(older_than_hours)),

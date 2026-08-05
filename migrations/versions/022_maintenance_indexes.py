@@ -34,6 +34,9 @@ def upgrade() -> None:
             "DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_running_age;"
         )
         op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_suspended_age;"
+        )
+        op.execute(
             "DROP INDEX CONCURRENTLY IF EXISTS idx_pending_asks_terminal_prune;"
         )
         op.execute(
@@ -52,6 +55,13 @@ def upgrade() -> None:
         )
         op.execute(
             """
+            CREATE INDEX CONCURRENTLY idx_run_transcripts_suspended_age
+                ON run_transcripts (updated_at)
+                WHERE status = 'suspended';
+            """
+        )
+        op.execute(
+            """
             CREATE INDEX CONCURRENTLY idx_pending_asks_terminal_prune
                 ON pending_asks (resolved_at)
                 WHERE (state = 'resolved' AND executed_at IS NOT NULL)
@@ -63,5 +73,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.get_context().autocommit_block():
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_pending_asks_terminal_prune;")
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_suspended_age;")
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_running_age;")
         op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_terminal_prune;")
