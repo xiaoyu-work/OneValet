@@ -87,6 +87,18 @@ class ResumeMixin:
             logger.info(f"[Resume] Run {run_id} already {transcript.status}; nothing to do")
             return
 
+        dag_store = getattr(self, "_dag_store", None)
+        if (
+            dag_store is not None
+            and dag_store.enabled
+            and await dag_store.child_is_active(run_id)
+        ):
+            # The child reached a durable ask, but its parent has not yet
+            # atomically published the waiting result/barrier. Retrying now
+            # could finish the child before the parent knows where it belongs.
+            logger.info(f"[Resume] DAG child {run_id} is not yet ready to resume")
+            return
+
         # A run wakes once, when nothing is left for the user to answer.
         open_asks = await self._open_ask_count(run_id)
         if open_asks:

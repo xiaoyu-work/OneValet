@@ -43,6 +43,7 @@ def upgrade() -> None:
             parent_run_id TEXT NOT NULL REFERENCES dag_continuations(parent_run_id)
                 ON DELETE CASCADE,
             sub_task_id   INTEGER NOT NULL,
+            status        TEXT NOT NULL DEFAULT 'waiting',
             created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """

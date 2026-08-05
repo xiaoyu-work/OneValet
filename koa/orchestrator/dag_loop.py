@@ -23,6 +23,7 @@ from .dag_executor import (
     get_runnable_tasks,
     topological_sort,
 )
+from .dag_state import DagStateError
 from .transcript_store import RunLeaseLost, TranscriptUnavailable
 
 if TYPE_CHECKING:
@@ -283,6 +284,16 @@ class DagLoopMixin:
                 if self._dag_store.enabled and parent_run_id:
                     task_context["_dag_parent_run_id"] = parent_run_id
                     task_context["_dag_claim_token"] = dag_claim_token
+                    registered = await self._dag_store.register_subrun(
+                        parent_run_id,
+                        task_context["request_id"],
+                        st.id,
+                        dag_claim_token,
+                    )
+                    if not registered:
+                        raise RunLeaseLost(
+                            f"DAG {parent_run_id} was taken over before child registration"
+                        )
                 messages = await self._build_llm_messages(task_context, augmented_message)
 
                 exec_data: Dict[str, Any] = {}
@@ -316,6 +327,22 @@ class DagLoopMixin:
                     caught_error = e
                     had_error = True
                     exec_data = {
+                        "final_response": f"Error: {e}",
+                        "result_status": "FAILED",
+                    }
+                    loop_finished = True
+                except (
+                    RunLeaseLost,
+                    TranscriptUnavailable,
+                    DagStateError,
+                    asyncio.CancelledError,
+                ):
+                    await self._fail_transcript(task_context)
+                    raise
+                except Exception as e:
+                    await self._fail_transcript(task_context)
+                    had_error = True
+                    exec_d = {
                         "final_response": f"Error: {e}",
                         "result_status": "FAILED",
                     }
@@ -365,8 +392,9 @@ class DagLoopMixin:
                                 dag_claim_token,
                             )
                         else:
-                            recorded = await self._dag_store.record_result(
+                            recorded = await self._dag_store.record_result_and_finish(
                                 parent_run_id,
+                                task_context["request_id"],
                                 st.id,
                                 _result_data(sub_result),
                                 dag_claim_token,
@@ -408,6 +436,16 @@ class DagLoopMixin:
                     if self._dag_store.enabled and parent_run_id:
                         task_context["_dag_parent_run_id"] = parent_run_id
                         task_context["_dag_claim_token"] = dag_claim_token
+                        registered = await self._dag_store.register_subrun(
+                            parent_run_id,
+                            task_context["request_id"],
+                            sub_task.id,
+                            dag_claim_token,
+                        )
+                        if not registered:
+                            raise RunLeaseLost(
+                                f"DAG {parent_run_id} was taken over before child registration"
+                            )
                     msgs = await self._build_llm_messages(task_context, aug_msg)
                     exec_d: Dict[str, Any] = {}
                     events: list = []
@@ -463,8 +501,9 @@ class DagLoopMixin:
                                     dag_claim_token,
                                 )
                             else:
-                                recorded = await self._dag_store.record_result(
+                                recorded = await self._dag_store.record_result_and_finish(
                                     parent_run_id,
+                                    task_context["request_id"],
                                     sub_task.id,
                                     _result_data(sub_result),
                                     dag_claim_token,
@@ -488,7 +527,12 @@ class DagLoopMixin:
                     if isinstance(result, BaseException):
                         if isinstance(
                             result,
-                            (RunLeaseLost, TranscriptUnavailable, asyncio.CancelledError),
+                            (
+                                RunLeaseLost,
+                                TranscriptUnavailable,
+                                DagStateError,
+                                asyncio.CancelledError,
+                            ),
                         ):
                             raise result
                         logger.warning(f"[DAG] Sub-task {st.id} failed: {result}")
@@ -500,8 +544,9 @@ class DagLoopMixin:
                         )
                         all_results[st.id] = sub_result
                         if self._dag_store.enabled and parent_run_id:
-                            recorded = await self._dag_store.record_result(
+                            recorded = await self._dag_store.record_result_and_finish(
                                 parent_run_id,
+                                _sub_run_id(context, st.id),
                                 st.id,
                                 _result_data(sub_result),
                                 dag_claim_token,
