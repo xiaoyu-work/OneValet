@@ -434,7 +434,7 @@ class TranscriptStore:
                 WITH doomed AS (
                     SELECT rt.run_id FROM run_transcripts AS rt
                     WHERE rt.updated_at
-                              < NOW() - ($6 || ' hours')::interval
+                              < NOW() - ($7 || ' hours')::interval
                       AND (
                           rt.status IN ($1, $2)
                           OR (
