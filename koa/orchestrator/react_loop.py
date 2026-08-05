@@ -286,8 +286,8 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             # that is harmless. A run that had owned a row has lost its lease
             # and must not arm work for the process that replaced it.
             if claim_token or (context or {}).get("_transcript_owned"):
-                logger.warning(
-                    f"[ReAct] Did not finish run {run_id}: this process no longer owns it"
+                raise RunLeaseLost(
+                    f"Run {run_id} was taken over before its final status was recorded"
                 )
             return
         if context is not None:

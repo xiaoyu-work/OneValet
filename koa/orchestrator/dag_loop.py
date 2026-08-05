@@ -10,6 +10,7 @@ sub-tasks in the same level cannot observe each other's state.
 
 import asyncio
 import copy
+import dataclasses
 import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
@@ -22,6 +23,7 @@ from .dag_executor import (
     get_runnable_tasks,
     topological_sort,
 )
+from .transcript_store import RunLeaseLost
 
 if TYPE_CHECKING:
     from .intent_analyzer import IntentAnalysis, SubTask
@@ -53,6 +55,30 @@ def _sub_run_id(context: Optional[Dict[str, Any]], sub_task_id: str) -> str:
     before the request was even sent, and the run would look like the parent.
     """
     return f"{(context or {}).get('request_id', 'run')}{_SUB_RUN_SEPARATOR}{sub_task_id}"
+
+
+def _result_data(result: SubTaskResult) -> Dict[str, Any]:
+    return dataclasses.asdict(result)
+
+
+def _results_from_data(data: Dict[str, Any]) -> Dict[int, SubTaskResult]:
+    results: Dict[int, SubTaskResult] = {}
+    for sub_task_id, value in (data or {}).items():
+        numeric_id = int(sub_task_id)
+        payload = dict(value)
+        payload["sub_task_id"] = numeric_id
+        results[numeric_id] = SubTaskResult(**payload)
+    return results
+
+
+def _intent_from_data(data: Dict[str, Any]):
+    from .intent_analyzer import IntentAnalysis, SubTask
+
+    payload = dict(data)
+    payload["sub_tasks"] = [
+        SubTask(**sub_task) for sub_task in payload.get("sub_tasks", [])
+    ]
+    return IntentAnalysis(**payload)
 
 
 class DagLoopMixin:
@@ -111,6 +137,9 @@ class DagLoopMixin:
         tenant_id: str,
         context: Dict[str, Any],
         metadata: Optional[Dict[str, Any]] = None,
+        initial_results: Optional[Dict[int, SubTaskResult]] = None,
+        parent_run_id: Optional[str] = None,
+        dag_claim_token: Optional[str] = None,
     ) -> AsyncIterator[AgentEvent]:
         """Stream events during DAG execution.
 
@@ -126,7 +155,8 @@ class DagLoopMixin:
         """
         start_time = time.monotonic()
         levels = topological_sort(intent.sub_tasks)
-        all_results: Dict[int, SubTaskResult] = {}
+        parent_run_id = parent_run_id or context.get("request_id")
+        all_results: Dict[int, SubTaskResult] = dict(initial_results or {})
         all_pending_approvals: list = []
         total_turns = 0
         total_tool_calls = 0
@@ -135,12 +165,23 @@ class DagLoopMixin:
         # count, not a time unit).
         deadline = start_time + self._react_config.dag_timeout
 
+        if self._dag_store.enabled and parent_run_id and initial_results is None:
+            await self._dag_store.start(
+                parent_run_id,
+                tenant_id,
+                dataclasses.asdict(intent),
+                metadata or {},
+            )
+
         yield AgentEvent(
             type=EventType.WORKFLOW_START,
             data={"sub_tasks": len(intent.sub_tasks), "levels": len(levels)},
         )
 
         for level_idx, level in enumerate(levels):
+            level = [task for task in level if task.id not in all_results]
+            if not level:
+                continue
             # Fix 5: check DAG-level timeout before each level
             if time.monotonic() > deadline:
                 logger.warning(
@@ -148,7 +189,7 @@ class DagLoopMixin:
                     f"at level {level_idx}"
                 )
                 for st in level:
-                    all_results[st.id] = SubTaskResult(
+                    sub_result = SubTaskResult(
                         sub_task_id=st.id,
                         description=st.description,
                         response="Skipped: DAG timeout exceeded",
@@ -232,6 +273,17 @@ class DagLoopMixin:
                     await self._fail_transcript(task_context)
                     raise
                 finally:
+                    if (
+                        self._dag_store.enabled
+                        and parent_run_id
+                        and await self._owes_the_user(task_context["request_id"])
+                    ):
+                        await self._dag_store.wait_for(
+                            parent_run_id,
+                            task_context["request_id"],
+                            st.id,
+                            dag_claim_token,
+                        )
                     # This sub-task owns its own transcript, so it is the one
                     # that has to pass on anything the user answered while it
                     # ran -- including when it is failing or being abandoned,
@@ -256,6 +308,29 @@ class DagLoopMixin:
                     duration_ms=exec_data.get("duration_ms", 0),
                     token_usage=exec_data.get("token_usage", {}),
                 )
+                all_results[st.id] = sub_result
+                if self._dag_store.enabled and parent_run_id:
+                    recorded = await self._dag_store.record_result(
+                        parent_run_id,
+                        st.id,
+                        _result_data(sub_result),
+                        dag_claim_token,
+                    )
+                    if not recorded:
+                        raise RunLeaseLost(
+                            f"DAG {parent_run_id} was taken over before result persistence"
+                        )
+                    if waiting:
+                        waiting_recorded = await self._dag_store.wait_for(
+                            parent_run_id,
+                            task_context["request_id"],
+                            st.id,
+                            dag_claim_token,
+                        )
+                        if not waiting_recorded:
+                            raise RunLeaseLost(
+                                f"DAG {parent_run_id} lost ownership before waiting"
+                            )
                 yield AgentEvent(
                     type=EventType.STAGE_END,
                     data={"sub_task_id": st.id},
@@ -298,6 +373,17 @@ class DagLoopMixin:
                         await self._fail_transcript(task_context)
                         raise
                     finally:
+                        if (
+                            self._dag_store.enabled
+                            and parent_run_id
+                            and await self._owes_the_user(task_context["request_id"])
+                        ):
+                            await self._dag_store.wait_for(
+                                parent_run_id,
+                                task_context["request_id"],
+                                sub_task.id,
+                                dag_claim_token,
+                            )
                         # Gathered with return_exceptions=True, so a sub-task
                         # that fails here is swallowed by its siblings. The
                         # handoff has to survive that or the decision is lost
@@ -342,6 +428,28 @@ class DagLoopMixin:
                         total_turns += exec_d.get("turns", 0)
                         total_tool_calls += exec_d.get("tool_calls_count", 0)
                         all_results[st.id] = sub_result
+                        if self._dag_store.enabled and parent_run_id:
+                            recorded = await self._dag_store.record_result(
+                                parent_run_id,
+                                st.id,
+                                _result_data(sub_result),
+                                dag_claim_token,
+                            )
+                            if not recorded:
+                                raise RunLeaseLost(
+                                    f"DAG {parent_run_id} was taken over before result persistence"
+                                )
+                            if sub_result.status == "waiting":
+                                waiting_recorded = await self._dag_store.wait_for(
+                                    parent_run_id,
+                                    _sub_run_id(context, st.id),
+                                    st.id,
+                                    dag_claim_token,
+                                )
+                                if not waiting_recorded:
+                                    raise RunLeaseLost(
+                                        f"DAG {parent_run_id} lost ownership before waiting"
+                                    )
                     yield AgentEvent(
                         type=EventType.STAGE_END,
                         data={"sub_task_id": st.id},
@@ -372,6 +480,17 @@ class DagLoopMixin:
 
         # Fix 3: aggregate token usage across all sub-tasks
         aggregated_usage = aggregate_token_usage(all_results)
+        has_waiting = any(
+            result.status == "waiting" for result in all_results.values()
+        )
+
+        if self._dag_store.enabled and parent_run_id and not has_waiting:
+            completed = await self._dag_store.complete(
+                parent_run_id,
+                dag_claim_token,
+            )
+            if not completed:
+                raise RunLeaseLost(f"DAG {parent_run_id} was taken over before completion")
 
         duration_ms = int((time.monotonic() - start_time) * 1000)
         yield AgentEvent(
@@ -384,7 +503,7 @@ class DagLoopMixin:
                 "pending_approvals": all_pending_approvals,
                 "result_status": (
                     "WAITING_FOR_APPROVAL"
-                    if any(result.status == "waiting" for result in all_results.values())
+                    if has_waiting
                     else None
                 ),
                 "turns": total_turns,
@@ -394,6 +513,110 @@ class DagLoopMixin:
                 "tool_calls": [],
             },
         )
+
+    async def _continue_parent_dag_after_subrun(
+        self,
+        sub_run_id: str,
+        child_result: AgentResult,
+    ) -> AsyncIterator[AgentEvent]:
+        """Merge a resumed child and continue its durable parent when ready."""
+        parent_run_id = await self._record_parent_dag_subrun(
+            sub_run_id,
+            child_result,
+        )
+        if not parent_run_id:
+            return
+        async for event in self._resume_parent_dag_by_id(parent_run_id):
+            yield event
+
+    async def _record_parent_dag_subrun(
+        self,
+        sub_run_id: str,
+        child_result: AgentResult,
+    ) -> Optional[str]:
+        """Persist a terminal child result before fallible post-processing."""
+        if not self._dag_store.enabled:
+            return None
+        if child_result.status in (
+            AgentStatus.WAITING_FOR_APPROVAL,
+            AgentStatus.WAITING_FOR_INPUT,
+        ):
+            # The child raised another question. Its existing waiting mapping
+            # remains the parent barrier until a terminal resume arrives.
+            return None
+        child_status = (
+            "completed"
+            if child_result.status == AgentStatus.COMPLETED
+            else "error"
+        )
+        return await self._dag_store.resolve_subrun(
+            sub_run_id,
+            {
+                "response": child_result.raw_message or "",
+                "status": child_status,
+                "duration_ms": child_result.metadata.get("duration_ms", 0),
+                "token_usage": child_result.metadata.get("token_usage", {}),
+            },
+        )
+
+    async def _resume_parent_dag_by_id(
+        self,
+        parent_run_id: str,
+    ) -> AsyncIterator[AgentEvent]:
+        """Claim and continue the dependency levels left after approval."""
+        state = await self._dag_store.claim_ready(
+            parent_run_id,
+            self._resume_lease_seconds(),
+        )
+        if state is None:
+            return
+
+        intent = _intent_from_data(state.intent)
+        results = _results_from_data(state.results)
+        context = await self.prepare_context(
+            state.tenant_id,
+            intent.raw_message,
+            state.metadata,
+        )
+        context["request_id"] = parent_run_id
+        context["resumed"] = True
+
+        exec_data: Dict[str, Any] = {}
+        async for event in self._stream_dag(
+            intent,
+            state.tenant_id,
+            context,
+            state.metadata,
+            initial_results=results,
+            parent_run_id=parent_run_id,
+            dag_claim_token=state.claim_token,
+        ):
+            if event.type == EventType.EXECUTION_END:
+                exec_data = event.data
+            yield event
+
+        status = (
+            AgentStatus.WAITING_FOR_APPROVAL
+            if exec_data.get("result_status") == "WAITING_FOR_APPROVAL"
+            else AgentStatus.COMPLETED
+        )
+        result = AgentResult(
+            agent_type=self.__class__.__name__,
+            status=status,
+            raw_message=exec_data.get("final_response", ""),
+            metadata={
+                "dag_execution": True,
+                "resumed_parent_run_id": parent_run_id,
+                "sub_tasks": exec_data.get("sub_tasks", len(intent.sub_tasks)),
+                "levels": exec_data.get("levels", 0),
+                "duration_ms": exec_data.get("duration_ms", 0),
+                "token_usage": exec_data.get("token_usage", {}),
+                "pending_approvals": exec_data.get("pending_approvals", []),
+                "tool_calls_count": exec_data.get("tool_calls_count", 0),
+            },
+        )
+        result = await self.post_process(result, context)
+        yield AgentEvent(type=EventType.EXECUTION_END, data=result)
 
     async def _synthesize_dag_results(
         self,

@@ -383,7 +383,7 @@ class TranscriptStore:
             return _changed(result)
         except Exception as e:
             logger.warning(f"Could not mark run {run_id} as {status}: {e}")
-            return False
+            raise TranscriptUnavailable(f"Could not mark run {run_id} as {status}") from e
 
     async def fail(self, run_id: str, claim_token: Optional[str] = None) -> bool:
         """Mark an unfinished run failed without rewriting a finished one."""

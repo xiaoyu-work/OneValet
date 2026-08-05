@@ -42,35 +42,66 @@ def upgrade() -> None:
     )
     op.execute(
         """
-        UPDATE pending_asks
+        UPDATE pending_asks AS pa
            SET execution_state = CASE
                    -- Before 024, executed_at was stamped before the executor
                    -- started. It proves an attempt was claimed, not that the
                    -- action completed, so migrate it as ambiguous.
-                   WHEN executed_at IS NULL THEN 'pending'
-                   WHEN LOWER(COALESCE(resolution, '')) IN
+                   WHEN pa.executed_at IS NULL THEN 'pending'
+                   WHEN LOWER(COALESCE(pa.resolution, '')) IN
                         ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
                          'confirm', 'allow', 'accept')
+                    AND EXISTS (
+                        SELECT 1 FROM run_transcripts AS rt
+                        WHERE rt.run_id = pa.run_id
+                          AND rt.status IN ('running', 'suspended')
+                    )
                        THEN 'started'
                    ELSE 'completed'
                END,
                execution_started_at = CASE
-                   WHEN executed_at IS NOT NULL
-                    AND LOWER(COALESCE(resolution, '')) IN
+                   WHEN pa.executed_at IS NOT NULL
+                    AND LOWER(COALESCE(pa.resolution, '')) IN
                         ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
                          'confirm', 'allow', 'accept')
-                       THEN executed_at
+                    AND EXISTS (
+                        SELECT 1 FROM run_transcripts AS rt
+                        WHERE rt.run_id = pa.run_id
+                          AND rt.status IN ('running', 'suspended')
+                    )
+                       THEN pa.executed_at
                    ELSE NULL
                END,
                execution_finished_at = CASE
-                   WHEN executed_at IS NOT NULL
-                    AND LOWER(COALESCE(resolution, '')) NOT IN
+                   WHEN pa.executed_at IS NOT NULL
+                    AND (
+                        LOWER(COALESCE(pa.resolution, '')) NOT IN
+                            ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
+                             'confirm', 'allow', 'accept')
+                        OR NOT EXISTS (
+                            SELECT 1 FROM run_transcripts AS rt
+                            WHERE rt.run_id = pa.run_id
+                              AND rt.status IN ('running', 'suspended')
+                        )
+                    )
+                       THEN pa.executed_at
+                   ELSE NULL
+               END,
+               execution_outcome = CASE
+                   WHEN pa.executed_at IS NOT NULL
+                    AND LOWER(COALESCE(pa.resolution, '')) IN
                         ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
                          'confirm', 'allow', 'accept')
-                       THEN executed_at
+                    AND NOT EXISTS (
+                        SELECT 1 FROM run_transcripts AS rt
+                        WHERE rt.run_id = pa.run_id
+                          AND rt.status IN ('running', 'suspended')
+                    )
+                       THEN 'Legacy approved attempt has an unknown outcome; '
+                            || 'its run is no longer resumable.'
                    ELSE NULL
                END
-         WHERE state = 'resolved';
+         WHERE pa.state = 'resolved';
         """
     )
 

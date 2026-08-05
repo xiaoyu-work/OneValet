@@ -1804,6 +1804,7 @@ class StandardAgent(BaseAgent):
                 data={
                     "tool": tc.name,
                     "args": args,
+                    "preview": preview,
                     "agent": self.__class__.__name__,
                     "agent_type": hints.get("agent_type", ""),
                 },

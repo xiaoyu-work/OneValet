@@ -225,9 +225,13 @@ class ResumeMixin:
             total_tool_count=len(tool_schemas),
         )
         result.metadata["resumed_run_id"] = run_id
+        parent_run_id = await self._record_parent_dag_subrun(run_id, result)
         try:
             result = await self.post_process(result, context)
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+            if parent_run_id:
+                async for event in self._resume_parent_dag_by_id(parent_run_id):
+                    yield event
         finally:
             # Everything this invocation held is released; only now is it safe
             # to let a continuation claim the run. In a finally because a
@@ -426,6 +430,19 @@ class ResumeMixin:
                 await asyncio.sleep(_RESUME_RETRY_DELAY * attempt)
 
             if not await self._still_owed(run_id):
+                dag_produced = False
+                async for _ in self._resume_parent_dag_by_id(run_id):
+                    dag_produced = True
+                if dag_produced:
+                    self._handoff_attempts.pop(run_id, None)
+                    return
+                dag_store = getattr(self, "_dag_store", None)
+                if (
+                    dag_store is not None
+                    and dag_store.enabled
+                    and await dag_store.is_unfinished(run_id)
+                ):
+                    continue
                 logger.info(f"[Resume] Run {run_id} has nothing outstanding; nothing to continue")
                 self._handoff_attempts.pop(run_id, None)
                 return
@@ -583,4 +600,10 @@ class ResumeMixin:
         for run_id in await inbox.runs_awaiting_execution(tenant_id, limit):
             if run_id not in seen:
                 runs.append({"run_id": run_id, "status": "awaiting_action"})
+                seen.add(run_id)
+        dag_store = getattr(self, "_dag_store", None)
+        if dag_store is not None and dag_store.enabled:
+            for dag_run in await dag_store.list_resumable(tenant_id, limit):
+                if dag_run["run_id"] not in seen:
+                    runs.append(dag_run)
         return runs

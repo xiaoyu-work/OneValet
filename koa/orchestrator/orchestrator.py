@@ -63,6 +63,7 @@ from .ask_mirror import AskMirror
 from .audit_logger import AuditLogger
 from .context_manager import ContextManager
 from .dag_loop import DagLoopMixin
+from .dag_state import DagContinuationStore
 from .execution_policy import ExecutionPolicyEngine
 from .inbox import InboxStore
 from .llm_manager import LLMManagerMixin
@@ -345,6 +346,7 @@ class Orchestrator(
 
         # Durable transcripts so a run can outlive the process that started it.
         self._transcript_store = TranscriptStore(database)
+        self._dag_store = DagContinuationStore(database)
 
         # The human-attention queue: what the assistant is waiting on a person
         # for, and where their answer comes back in.
@@ -516,6 +518,19 @@ class Orchestrator(
             if reserved:
                 self._schedule_maintenance_resume(run_id)
 
+        for parent_run_id in await self._dag_store.ready_parents(
+            self._resume_lease_seconds(),
+            _MAX_AUTOMATIC_RECOVERIES,
+        ):
+            reserved = await self._dag_store.reserve_recovery(
+                parent_run_id,
+                self._resume_lease_seconds(),
+                _MAX_AUTOMATIC_RECOVERIES,
+                _RECOVERY_BACKOFF_BASE_SECONDS,
+            )
+            if reserved:
+                self._schedule_dag_recovery(parent_run_id)
+
     def _schedule_maintenance_resume(self, run_id: str) -> None:
         active = getattr(self, "_maintenance_resumes", None)
         if active is None:
@@ -538,6 +553,33 @@ class Orchestrator(
             active.discard(run_id)
             recovery.close()
             logger.warning(f"Could not schedule recovery of run {run_id}: {e}")
+
+    def _schedule_dag_recovery(self, parent_run_id: str) -> None:
+        active = getattr(self, "_dag_recoveries", None)
+        if active is None:
+            active = set()
+            self._dag_recoveries = active
+        if parent_run_id in active:
+            return
+
+        async def _recover() -> None:
+            try:
+                async for _ in self._resume_parent_dag_by_id(parent_run_id):
+                    pass
+            finally:
+                active.discard(parent_run_id)
+
+        recovery = _recover()
+        active.add(parent_run_id)
+        try:
+            self.task_registry.create_task(
+                recovery,
+                name=f"recover-dag:{parent_run_id}",
+            )
+        except RuntimeError as e:
+            active.discard(parent_run_id)
+            recovery.close()
+            logger.warning(f"Could not schedule DAG recovery {parent_run_id}: {e}")
 
     async def shutdown(self) -> None:
         """Shutdown the orchestrator gracefully.
@@ -1197,6 +1239,15 @@ class Orchestrator(
             agent_type=self.__class__.__name__,
             status=status,
             raw_message=final_response,
+            metadata={
+                "dag_execution": True,
+                "sub_tasks": dag_exec_data.get("sub_tasks", len(intent.sub_tasks)),
+                "levels": dag_exec_data.get("levels", 0),
+                "duration_ms": dag_exec_data.get("duration_ms", 0),
+                "token_usage": dag_exec_data.get("token_usage", {}),
+                "pending_approvals": dag_exec_data.get("pending_approvals", []),
+                "tool_calls_count": dag_exec_data.get("tool_calls_count", 0),
+            },
         )
 
         tool_calls = dag_exec_data.get("tool_calls", [])

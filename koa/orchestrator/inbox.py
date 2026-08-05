@@ -406,13 +406,18 @@ class InboxStore:
                        resolution = NULL,
                        resolved_by = NULL,
                        resolved_at = NULL,
-                       title = 'Retry an action with an uncertain outcome?',
+                       title = 'Retry '
+                               || COALESCE(data->>'tool', 'an action')
+                               || ' after an uncertain attempt?',
                        body = 'The previous approved attempt started, but the service '
                               || 'stopped before confirming whether it completed. '
-                              || 'Check the destination, then approve only if retrying is safe.',
+                              || 'Check the destination, then approve only if retrying is safe.'
+                              || E'\n\nOriginal request:\n'
+                              || COALESCE(data->>'preview', body),
                        expires_at = NOW() + INTERVAL '1 day',
                        execution_state = $2,
-                       execution_claim_token = NULL
+                       execution_claim_token = NULL,
+                       execution_outcome = 'Previous attempt started; outcome is uncertain.'
                  WHERE state = $3
                    AND execution_state = $4
                    AND execution_started_at
@@ -549,6 +554,52 @@ class InboxStore:
                       FROM candidates
                      WHERE pending_asks.id = candidates.id
                     RETURNING run_id
+                ),
+                dag_owners AS MATERIALIZED (
+                    SELECT dag.parent_run_id, waiting.sub_run_id
+                    FROM dag_continuations AS dag
+                    JOIN dag_waiting_subruns AS waiting
+                      ON waiting.parent_run_id = dag.parent_run_id
+                    JOIN expired
+                      ON expired.run_id = waiting.sub_run_id
+                    FOR UPDATE OF dag
+                ),
+                released_dag AS (
+                    DELETE FROM dag_waiting_subruns AS waiting
+                    USING dag_owners
+                     WHERE waiting.sub_run_id = dag_owners.sub_run_id
+                    RETURNING waiting.parent_run_id, waiting.sub_task_id
+                ),
+                released_results AS (
+                    SELECT released_dag.parent_run_id,
+                           jsonb_object_agg(
+                               released_dag.sub_task_id::text,
+                               jsonb_build_object(
+                                   'sub_task_id', released_dag.sub_task_id,
+                                   'description', COALESCE(
+                                       dag.results
+                                           -> released_dag.sub_task_id::text
+                                           ->> 'description',
+                                       ''
+                                   ),
+                                   'status', 'skipped',
+                                   'response', 'Approval expired before this task ran.',
+                                   'duration_ms', 0,
+                                   'token_usage', '{}'::jsonb
+                               )
+                           ) AS result_patch
+                    FROM released_dag
+                    JOIN dag_continuations AS dag
+                      ON dag.parent_run_id = released_dag.parent_run_id
+                    GROUP BY released_dag.parent_run_id
+                ),
+                updated_dags AS (
+                    UPDATE dag_continuations AS dag
+                       SET results = dag.results || released_results.result_patch,
+                           updated_at = NOW()
+                      FROM released_results
+                     WHERE dag.parent_run_id = released_results.parent_run_id
+                    RETURNING dag.parent_run_id
                 ),
                 closed_runs AS (
                     UPDATE run_transcripts AS rt
