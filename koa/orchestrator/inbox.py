@@ -16,6 +16,7 @@ because any of several app instances may create, mirror, or resolve an ask:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import uuid
@@ -87,12 +88,24 @@ def action_key(tool_name: Any, args: Any) -> str:
     is not JSON has already been flattened to a string by ``default=str``.
     Rendering the live side any other way would leave a run unable to
     recognise its own approval, and it would ask again.
+
+    The stored key is a versioned SHA-256 hex digest rather than a delimited
+    string. PostgreSQL TEXT rejects NUL bytes, and a separator-based key also
+    has to prove that neither half can forge the boundary; canonical JSON plus
+    a digest has neither problem.
     """
     try:
-        rendered = json.dumps(args, sort_keys=True, default=str)
+        rendered = json.dumps(
+            [str(tool_name), args],
+            sort_keys=True,
+            default=str,
+            ensure_ascii=True,
+            separators=(",", ":"),
+        )
     except (TypeError, ValueError):
-        rendered = str(args)
-    return f"{tool_name}\x00{rendered}"
+        rendered = repr([str(tool_name), args])
+    digest = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
+    return f"v1:{digest}"
 
 
 _COLUMNS = """id, tenant_id, run_id, tool_call_id, kind, title, body,

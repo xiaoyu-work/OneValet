@@ -83,6 +83,24 @@ def parse_reply(text: str, options: Optional[List[str]] = None) -> Optional[str]
     return None
 
 
+def parse_explicit_reply(text: str, options: Optional[List[str]] = None) -> Optional[str]:
+    """Parse a tenant-wide chat reply without guessing its intent.
+
+    A chat message is not tied to an ask id. Even when the tenant has exactly
+    one ask open, "ok", "yes", or "sure" can be a response to the conversation
+    happening now rather than permission for a background action raised days
+    ago. The mirrored prompt explicitly says "Reply approve or reject", so the
+    chat path requires one of those option words. Surfaces that identify the
+    ask directly may use the friendlier synonym parser above.
+    """
+    reply = (text or "").strip().lower()
+    for option in (options or []):
+        canonical = option.lower()
+        if reply == canonical or reply.startswith(canonical + " "):
+            return canonical
+    return None
+
+
 class AskMirror:
     """Fans an ask out to the user's channels.
 

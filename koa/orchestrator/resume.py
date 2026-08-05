@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import build_agent_hints
-from .ask_mirror import parse_reply
+from .ask_mirror import parse_explicit_reply, parse_reply
 from .transcript_store import (
     RunLeaseLost,
     STATUS_COMPLETED,
@@ -262,7 +262,7 @@ class ResumeMixin:
             return None
 
         ask = open_asks[0]
-        decision = parse_reply(text, ask.options)
+        decision = parse_explicit_reply(text, ask.options)
         if decision is None:
             return None
         if not await inbox.resolve(ask.id, decision, resolved_by="reply"):

@@ -38,7 +38,7 @@ def upgrade() -> None:
 
     # Existing rows predate the column. Their tool_call_id is still unique
     # within the run, so it is a safe stand-in that cannot collide with a real
-    # action key (which always contains a NUL separator).
+    # action key (which has a versioned "v1:" prefix).
     op.execute("UPDATE pending_asks SET action_key = tool_call_id WHERE action_key IS NULL;")
     op.execute("ALTER TABLE pending_asks ALTER COLUMN action_key SET NOT NULL;")
 
