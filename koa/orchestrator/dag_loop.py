@@ -227,6 +227,9 @@ class DagLoopMixin:
                         if event.type == EventType.EXECUTION_END:
                             exec_data = event.data
                         yield event
+                except BaseException:
+                    await self._fail_transcript(task_context)
+                    raise
                 finally:
                     # This sub-task owns its own transcript, so it is the one
                     # that has to pass on anything the user answered while it
@@ -288,6 +291,9 @@ class DagLoopMixin:
                                 exec_d = ev.data
                             else:
                                 events.append(ev)
+                    except BaseException:
+                        await self._fail_transcript(task_context)
+                        raise
                     finally:
                         # Gathered with return_exceptions=True, so a sub-task
                         # that fails here is swallowed by its siblings. The

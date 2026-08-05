@@ -290,6 +290,27 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             if arm_handoff:
                 context["_owes_continuation"] = run_id
 
+    async def _fail_transcript(self, context: Optional[Dict[str, Any]]) -> None:
+        """Mark only a still-running transcript failed.
+
+        Error handling often runs after the loop has already set a terminal
+        status. The conditional store operation keeps a post-process failure
+        from reopening or rewriting a run that actually completed. A failure
+        also does not cancel a decision the user made: if anything is still
+        owed, keep the run suspended and arm the same continuation a normal
+        ending would.
+        """
+        store = getattr(self, "_transcript_store", None)
+        if store is None or not store.enabled:
+            return
+        run_id = (context or {}).get("request_id")
+        if not run_id:
+            return
+        if await self._owes_the_user(run_id):
+            await self._finish_transcript(context, STATUS_COMPLETED)
+            return
+        await store.fail(run_id, claim_token=(context or {}).get("_claim_token"))
+
     async def _has_unacted_decision(self, run_id: str) -> bool:
         """Whether the user has decided something this run has not carried out."""
         inbox = getattr(self, "inbox", None)
@@ -627,22 +648,14 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                     tool_choice=first_turn_tool_choice if turn == 1 else "auto",
                     media=media,
                 )
-            except _ReactLoopAuthError as e:
-                from .error_classifier import error_code_for_kind
-
-                yield AgentEvent(
-                    type=EventType.ERROR,
-                    data={
-                        "code": error_code_for_kind(e.error_kind),
-                        "error": str(e.original),
-                        "error_type": type(e.original).__name__,
-                    },
-                )
-                # Nothing about this run finished, and a caller that claimed it
-                # is owed the run back rather than left holding a lease.
-                await self._finish_transcript(context, STATUS_SUSPENDED)
+            except _ReactLoopAuthError:
+                await self._fail_transcript(context)
                 self._run_controls.finish(tenant_id, control)
-                return
+                # Let the normal loop wrapper emit the same graceful ERROR +
+                # EXECUTION_END shape as every other terminal model failure.
+                # Returning here would leave exec_data empty and the caller
+                # would wrap the failed request as COMPLETED.
+                raise
 
             if response is _INTERRUPTED:
                 logger.info(f"[ReAct] Interrupted during LLM call (turn={turn})")

@@ -381,20 +381,78 @@ class TranscriptStore:
             logger.warning(f"Could not mark run {run_id} as {status}: {e}")
             return False
 
+    async def fail(self, run_id: str, claim_token: Optional[str] = None) -> bool:
+        """Mark an unfinished run failed without rewriting a finished one."""
+        if not self._db:
+            return False
+        try:
+            if claim_token:
+                result = await self._db.execute(
+                    """
+                    UPDATE run_transcripts
+                       SET status = $2, updated_at = NOW()
+                     WHERE run_id = $1
+                       AND status = $3
+                       AND claim_token = $4
+                    """,
+                    run_id,
+                    STATUS_FAILED,
+                    STATUS_RUNNING,
+                    claim_token,
+                )
+            else:
+                result = await self._db.execute(
+                    """
+                    UPDATE run_transcripts
+                       SET status = $2, updated_at = NOW()
+                     WHERE run_id = $1
+                       AND status = $3
+                       AND claim_token IS NULL
+                    """,
+                    run_id,
+                    STATUS_FAILED,
+                    STATUS_RUNNING,
+                )
+            return _changed(result)
+        except Exception as e:
+            logger.warning(f"Could not mark run {run_id} failed: {e}")
+            return False
+
     async def prune(self, older_than_hours: int = 48, batch_size: int = 1000) -> int:
-        """Drop finished transcripts. Suspended runs are never pruned here --
-        they are still waiting on someone."""
+        """Drop terminal and abandoned transcripts in bounded batches.
+
+        Suspended rows are never pruned: they are explicitly waiting on
+        recovery. A very old running row is safe to remove only when no open
+        or unexecuted ask says the user is still owed something.
+        """
         if not self._db:
             return 0
         try:
             result = await self._db.execute(
                 """
                 WITH doomed AS (
-                    SELECT run_id FROM run_transcripts
-                    WHERE status IN ($1, $2)
-                      AND updated_at < NOW() - ($3 || ' hours')::interval
-                    ORDER BY updated_at
-                    LIMIT $4
+                    SELECT rt.run_id FROM run_transcripts AS rt
+                    WHERE rt.updated_at
+                              < NOW() - ($6 || ' hours')::interval
+                      AND (
+                          rt.status IN ($1, $2)
+                          OR (
+                              rt.status = $3
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM pending_asks AS pa
+                                  WHERE pa.run_id = rt.run_id
+                                    AND (
+                                        pa.state = $4
+                                        OR (
+                                            pa.state = $5
+                                            AND pa.executed_at IS NULL
+                                        )
+                                    )
+                              )
+                          )
+                      )
+                    ORDER BY rt.updated_at
+                    LIMIT $7
                 )
                 DELETE FROM run_transcripts AS rt
                 USING doomed
@@ -402,6 +460,9 @@ class TranscriptStore:
                 """,
                 STATUS_COMPLETED,
                 STATUS_FAILED,
+                STATUS_RUNNING,
+                "pending",
+                "resolved",
                 str(int(older_than_hours)),
                 batch_size,
             )

@@ -72,6 +72,10 @@ class TaskRegistry:
     def active_count(self) -> int:
         return len(self._tasks)
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     async def cancel_all(self, timeout: float = 5.0) -> None:
         """Cancel every tracked task and wait up to ``timeout`` seconds.
 

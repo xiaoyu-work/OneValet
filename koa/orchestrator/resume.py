@@ -57,7 +57,7 @@ class ResumeMixin:
 
     Expects on ``self`` (provided by Orchestrator):
     - ``_transcript_store``, ``inbox``
-    - ``_react_loop_events()`` (ReactLoopMixin)
+    - ``_run_react_with_fallback()``
     - ``_build_tool_schemas_with_domain_fallback()``
     - ``_build_result_from_exec_data()``
     - ``post_process()``, ``prepare_context()``
@@ -197,14 +197,17 @@ class ResumeMixin:
         )
 
         exec_data: Dict[str, Any] = {}
-        async for event in self._react_loop_events(
-            messages,
-            tool_schemas,
-            transcript.tenant_id,
+        async for event in self._run_react_with_fallback(
+            messages=messages,
+            tool_schemas=tool_schemas,
+            tenant_id=transcript.tenant_id,
             context=context,
             user_message=transcript.user_message,
+            media=None,
             metadata=transcript.metadata,
             request_tools=list(getattr(self, "builtin_tools", [])),
+            needs_memory=False,
+            preserve_messages_on_fallback=True,
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data

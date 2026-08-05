@@ -46,6 +46,7 @@ Example (hooks, no subclass):
 """
 
 import asyncio
+import copy
 import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Dict, List, Optional
@@ -401,6 +402,9 @@ class Orchestrator(
         if self._initialized:
             return
 
+        if getattr(self.task_registry, "closed", False):
+            raise RuntimeError("Cannot reinitialize an Orchestrator after shutdown")
+
         # Initialize agent registry if not provided
         if not self._registry_initialized and self._agent_registry is None:
             logger.warning("No agent registry provided. Agent-Tools will not be available.")
@@ -430,10 +434,16 @@ class Orchestrator(
 
         self._initialized = True
         if self._transcript_store.enabled and self.inbox.enabled:
-            self.task_registry.create_task(
-                self._inbox_maintenance_loop(),
-                name="inbox_maintenance",
-            )
+            maintenance = self._inbox_maintenance_loop()
+            try:
+                self.task_registry.create_task(
+                    maintenance,
+                    name="inbox_maintenance",
+                )
+            except RuntimeError:
+                maintenance.close()
+                self._initialized = False
+                raise
         logger.info("Orchestrator initialized")
 
     async def _inbox_maintenance_loop(self) -> None:
@@ -951,6 +961,7 @@ class Orchestrator(
             yield AgentEvent(type=EventType.EXECUTION_END, data=result)
         except Exception as e:
             _cancel_routing(routing_task)
+            await self._fail_transcript(context)
             logger.error(f"[Orchestrator] Unhandled error in _execute_message: {e}", exc_info=True)
             fallback_msg = await generate_graceful_error(
                 error=e,
@@ -977,6 +988,9 @@ class Orchestrator(
                     raw_message=fallback_msg,
                 ),
             )
+        except BaseException:
+            await self._fail_transcript(context)
+            raise
         finally:
             # The run is done either way, so a continuation can safely claim
             # it if the user answered something while it was still working.
@@ -1174,6 +1188,8 @@ class Orchestrator(
             status = AgentStatus.WAITING_FOR_APPROVAL
         elif exec_data.get("result_status") == "WAITING_FOR_INPUT":
             status = AgentStatus.WAITING_FOR_INPUT
+        elif exec_data.get("result_status") == "FAILED":
+            status = AgentStatus.ERROR
         else:
             status = AgentStatus.COMPLETED
 
@@ -1220,6 +1236,7 @@ class Orchestrator(
         request_tools: List[Any],
         needs_memory: bool,
         routing_task: Optional["asyncio.Task"] = None,
+        preserve_messages_on_fallback: bool = False,
     ) -> AsyncIterator[AgentEvent]:
         """Run the ReAct loop, retrying once on another model if the first fails.
 
@@ -1237,7 +1254,10 @@ class Orchestrator(
         from .graceful_response import generate_graceful_error
         from .react_loop import _ReactLoopLLMError
 
+        retry_seed = copy.deepcopy(messages) if preserve_messages_on_fallback else None
+
         async def _failed(err: "_ReactLoopLLMError") -> AsyncIterator[AgentEvent]:
+            await self._fail_transcript(context)
             yield AgentEvent(
                 type=EventType.ERROR,
                 data={
@@ -1253,6 +1273,7 @@ class Orchestrator(
                         error=err.original,
                         llm_client=getattr(self, "llm_client", None),
                     ),
+                    "result_status": "FAILED",
                     "turns": 0,
                     "token_usage": {},
                     "duration_ms": 0,
@@ -1292,9 +1313,12 @@ class Orchestrator(
             )
 
         # Rebuild messages so the retry starts from a clean transcript.
-        retry_messages = await self._build_llm_messages(
-            context, user_message, needs_memory=needs_memory
-        )
+        if retry_seed is not None:
+            retry_messages = retry_seed
+        else:
+            retry_messages = await self._build_llm_messages(
+                context, user_message, needs_memory=needs_memory
+            )
         try:
             async for event in self._react_loop_events(
                 retry_messages,
