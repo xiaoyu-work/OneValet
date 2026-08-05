@@ -1312,13 +1312,29 @@ class Orchestrator(
                 f"kind={loop_err.error_kind.value}), retrying with fallback model"
             )
 
-        # Rebuild messages so the retry starts from a clean transcript.
-        if retry_seed is not None:
-            retry_messages = retry_seed
-        else:
-            retry_messages = await self._build_llm_messages(
-                context, user_message, needs_memory=needs_memory
-            )
+        # Prefer the latest durable copy. The failed attempt may have completed
+        # and persisted tools before a later model call failed; retrying from
+        # the seed that entered the loop would forget those results and could
+        # repeat their side effects. A claimed resume may only read its own
+        # fencing generation.
+        retry_messages = None
+        store = getattr(self, "_transcript_store", None)
+        run_id = context.get("request_id")
+        if store is not None and store.enabled and run_id:
+            durable = await store.get(run_id)
+            claim_token = context.get("_claim_token")
+            if durable is not None and (
+                not claim_token or durable.claim_token == claim_token
+            ):
+                retry_messages = durable.messages
+
+        if retry_messages is None:
+            if retry_seed is not None:
+                retry_messages = retry_seed
+            else:
+                retry_messages = await self._build_llm_messages(
+                    context, user_message, needs_memory=needs_memory
+                )
         try:
             async for event in self._react_loop_events(
                 retry_messages,
