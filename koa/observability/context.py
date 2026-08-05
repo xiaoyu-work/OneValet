@@ -52,8 +52,14 @@ def get_idempotency_key() -> Optional[str]:
 
 
 def new_request_id() -> str:
-    """Generate a short, URL-safe request id."""
-    return uuid.uuid4().hex[:12]
+    """Generate a globally unique, URL-safe request id.
+
+    Request ids are durable run ids and global database keys, not display
+    labels. Truncating UUID4 to 48 bits makes collisions plausible at the
+    tens-of-millions scale (and a collision overwrites another transcript),
+    so keep all 128 bits. The hex form remains safe in logs and URL paths.
+    """
+    return uuid.uuid4().hex
 
 
 @contextmanager
@@ -65,7 +71,7 @@ def bind_request_context(
 ) -> Iterator[str]:
     """Bind request-scoped context vars; restores previous values on exit.
 
-    If ``request_id`` is ``None``, a new 12-char hex id is generated.
+    If ``request_id`` is ``None``, a new 32-char UUID hex id is generated.
 
     Yields the effective request id.
     """
