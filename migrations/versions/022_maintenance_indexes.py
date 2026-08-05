@@ -19,31 +19,37 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_run_transcripts_terminal_prune
-            ON run_transcripts (updated_at)
-            WHERE status IN ('completed', 'failed');
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_run_transcripts_running_age
-            ON run_transcripts (updated_at)
-            WHERE status = 'running';
-        """
-    )
-    op.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_pending_asks_terminal_prune
-            ON pending_asks (resolved_at)
-            WHERE (state = 'resolved' AND executed_at IS NOT NULL)
-               OR state = 'expired';
-        """
-    )
+    # These tables are precisely the ones this migration expects to be large.
+    # Building their indexes inside Alembic's transaction would block writes
+    # for the duration, so use PostgreSQL's concurrent build in an explicit
+    # autocommit block.
+    with op.get_context().autocommit_block():
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_transcripts_terminal_prune
+                ON run_transcripts (updated_at)
+                WHERE status IN ('completed', 'failed');
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_run_transcripts_running_age
+                ON run_transcripts (updated_at)
+                WHERE status = 'running';
+            """
+        )
+        op.execute(
+            """
+            CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_pending_asks_terminal_prune
+                ON pending_asks (resolved_at)
+                WHERE (state = 'resolved' AND executed_at IS NOT NULL)
+                   OR state = 'expired';
+            """
+        )
 
 
 def downgrade() -> None:
-    op.execute("DROP INDEX IF EXISTS idx_pending_asks_terminal_prune;")
-    op.execute("DROP INDEX IF EXISTS idx_run_transcripts_running_age;")
-    op.execute("DROP INDEX IF EXISTS idx_run_transcripts_terminal_prune;")
+    with op.get_context().autocommit_block():
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_pending_asks_terminal_prune;")
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_running_age;")
+        op.execute("DROP INDEX CONCURRENTLY IF EXISTS idx_run_transcripts_terminal_prune;")

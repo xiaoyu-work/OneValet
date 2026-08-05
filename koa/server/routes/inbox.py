@@ -105,7 +105,13 @@ async def resume(run_id: str):
         )
 
     scheduled = orch.schedule_resume(run_id)
+    if not scheduled:
+        raise KoaError(
+            E.SERVICE_UNAVAILABLE,
+            "The service is shutting down; retry this resume after restart.",
+            details={"run_id": run_id},
+        )
     return {
-        "status": "resuming" if scheduled else "deferred",
+        "status": "resuming",
         "run_id": run_id,
     }
