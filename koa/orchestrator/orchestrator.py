@@ -1233,7 +1233,11 @@ class Orchestrator(
                 dag_exec_data.get("pending_approvals")
                 or dag_exec_data.get("result_status") == "WAITING_FOR_APPROVAL"
             )
-            else AgentStatus.COMPLETED
+            else (
+                AgentStatus.ERROR
+                if dag_exec_data.get("result_status") == "FAILED"
+                else AgentStatus.COMPLETED
+            )
         )
         result = AgentResult(
             agent_type=self.__class__.__name__,

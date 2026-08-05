@@ -216,7 +216,8 @@ class ResumeMixin:
         ):
             if event.type == EventType.EXECUTION_END:
                 exec_data = event.data
-            yield event
+            else:
+                yield event
 
         result = self._build_result_from_exec_data(
             exec_data,

@@ -385,6 +385,44 @@ class InboxStore:
         if not self._db:
             return []
         try:
+            # Compatibility with a 023 worker running during rollout: it may
+            # set executed_at while leaving the new state at its default
+            # "pending". Rejections and rows whose run is no longer resumable
+            # are terminal history, not retry prompts.
+            await self._db.execute(
+                """
+                UPDATE pending_asks AS ask
+                   SET execution_state = $1,
+                       execution_finished_at = ask.executed_at,
+                       execution_outcome = CASE
+                           WHEN LOWER(COALESCE(ask.resolution, '')) IN
+                                ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
+                                 'confirm', 'allow', 'accept')
+                               THEN 'Legacy approved attempt has an unknown outcome; '
+                                    || 'its run is no longer resumable.'
+                           ELSE 'Legacy negative decision; action was not run.'
+                       END
+                 WHERE ask.state = $2
+                   AND ask.execution_state = $3
+                   AND ask.executed_at IS NOT NULL
+                   AND ask.executed_at
+                       < NOW() - ($4 || ' seconds')::interval
+                   AND (
+                       LOWER(COALESCE(ask.resolution, '')) NOT IN
+                           ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
+                            'confirm', 'allow', 'accept')
+                       OR NOT EXISTS (
+                           SELECT 1 FROM run_transcripts AS rt
+                           WHERE rt.run_id = ask.run_id
+                             AND rt.status IN ('running', 'suspended')
+                       )
+                   )
+                """,
+                EXECUTION_COMPLETED,
+                STATE_RESOLVED,
+                EXECUTION_PENDING,
+                str(int(stale_after_seconds)),
+            )
             await self._db.execute(
                 """
                 UPDATE pending_asks
@@ -434,6 +472,14 @@ class InboxStore:
                            AND executed_at IS NOT NULL
                            AND executed_at
                                < NOW() - ($5 || ' seconds')::interval
+                           AND LOWER(COALESCE(resolution, '')) IN
+                               ('approve', 'approved', 'yes', 'y', 'ok', 'okay',
+                                'confirm', 'allow', 'accept')
+                           AND EXISTS (
+                               SELECT 1 FROM run_transcripts AS rt
+                               WHERE rt.run_id = pending_asks.run_id
+                                 AND rt.status IN ('running', 'suspended')
+                           )
                        )
                    )
                 RETURNING {_COLUMNS}
@@ -568,15 +614,35 @@ class InboxStore:
                            resolved_at = NOW()
                       FROM candidates
                      WHERE pending_asks.id = candidates.id
-                    RETURNING run_id
+                    RETURNING id, run_id
+                ),
+                eligible_dag_children AS (
+                    SELECT DISTINCT expired.run_id
+                    FROM expired
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM pending_asks AS open_ask
+                        WHERE open_ask.run_id = expired.run_id
+                          AND open_ask.state = $2
+                          AND open_ask.expires_at > NOW()
+                          AND NOT EXISTS (
+                              SELECT 1 FROM expired AS expired_ask
+                              WHERE expired_ask.id = open_ask.id
+                          )
+                    )
+                      AND NOT EXISTS (
+                        SELECT 1 FROM pending_asks AS unexecuted
+                        WHERE unexecuted.run_id = expired.run_id
+                          AND unexecuted.state = $5
+                          AND unexecuted.execution_state <> $7
+                    )
                 ),
                 dag_owners AS MATERIALIZED (
                     SELECT dag.parent_run_id, waiting.sub_run_id
                     FROM dag_continuations AS dag
                     JOIN dag_waiting_subruns AS waiting
                       ON waiting.parent_run_id = dag.parent_run_id
-                    JOIN expired
-                      ON expired.run_id = waiting.sub_run_id
+                    JOIN eligible_dag_children AS eligible
+                      ON eligible.run_id = waiting.sub_run_id
                     FOR UPDATE OF dag
                 ),
                 released_dag AS (
@@ -626,6 +692,10 @@ class InboxStore:
                            WHERE open_ask.run_id = rt.run_id
                              AND open_ask.state = $2
                              AND open_ask.expires_at > NOW()
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM expired AS expired_ask
+                                 WHERE expired_ask.id = open_ask.id
+                             )
                        )
                        AND NOT EXISTS (
                            SELECT 1 FROM pending_asks AS unexecuted

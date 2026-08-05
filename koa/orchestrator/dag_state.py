@@ -146,11 +146,7 @@ class DagContinuationStore:
                         sub_task_id = EXCLUDED.sub_task_id
                 RETURNING parent_run_id
             )
-            UPDATE dag_continuations AS dag
-               SET status = 'waiting', updated_at = NOW()
-              FROM waiting
-             WHERE dag.parent_run_id = waiting.parent_run_id
-            RETURNING dag.parent_run_id
+            SELECT parent_run_id FROM waiting
             """,
             parent_run_id,
             sub_run_id,
@@ -159,6 +155,35 @@ class DagContinuationStore:
             claim_token,
         )
         return row is not None
+
+    async def pause(
+        self,
+        parent_run_id: str,
+        claim_token: Optional[str] = None,
+    ) -> bool:
+        """Make a quiesced parent claimable after every sibling has joined."""
+        if not self._db:
+            return False
+        if claim_token:
+            result = await self._db.execute(
+                """
+                UPDATE dag_continuations
+                   SET status = 'waiting', updated_at = NOW()
+                 WHERE parent_run_id = $1 AND claim_token = $2
+                """,
+                parent_run_id,
+                claim_token,
+            )
+        else:
+            result = await self._db.execute(
+                """
+                UPDATE dag_continuations
+                   SET status = 'waiting', updated_at = NOW()
+                 WHERE parent_run_id = $1 AND claim_token IS NULL
+                """,
+                parent_run_id,
+            )
+        return str(result).endswith(" 1")
 
     async def touch(
         self,
@@ -185,48 +210,6 @@ class DagContinuationStore:
                 parent_run_id,
             )
         return str(result).endswith(" 1")
-
-    async def wait_for(
-        self,
-        parent_run_id: str,
-        sub_run_id: str,
-        sub_task_id: int,
-        claim_token: Optional[str] = None,
-    ) -> bool:
-        if not self._db:
-            return False
-        row = await self._db.fetchrow(
-            """
-            WITH owner AS MATERIALIZED (
-                SELECT parent_run_id FROM dag_continuations
-                 WHERE parent_run_id = $1
-                   AND (
-                       ($4::text IS NULL AND claim_token IS NULL)
-                       OR claim_token = $4
-                   )
-                FOR UPDATE
-            ),
-            waiting AS (
-                INSERT INTO dag_waiting_subruns
-                    (sub_run_id, parent_run_id, sub_task_id)
-                SELECT $2, owner.parent_run_id, $3 FROM owner
-                ON CONFLICT (sub_run_id) DO UPDATE
-                    SET parent_run_id = EXCLUDED.parent_run_id,
-                        sub_task_id = EXCLUDED.sub_task_id
-                RETURNING parent_run_id
-            )
-            UPDATE dag_continuations AS dag
-               SET status = 'waiting', updated_at = NOW()
-              FROM waiting
-             WHERE dag.parent_run_id = waiting.parent_run_id
-            RETURNING dag.parent_run_id
-            """,
-            parent_run_id,
-            sub_run_id,
-            sub_task_id,
-            claim_token,
-        )
-        return row is not None
 
     async def resolve_subrun(
         self,

@@ -146,6 +146,10 @@ def downgrade() -> None:
         """
         UPDATE pending_asks
            SET executed_at = CASE
+                   -- A mixed-version 023 worker may have claimed this row by
+                   -- setting executed_at while leaving execution_state at the
+                   -- new-column default 'pending'. Preserve that reservation.
+                   WHEN executed_at IS NOT NULL THEN executed_at
                    WHEN execution_state = 'pending' THEN NULL
                    ELSE COALESCE(
                        executed_at,
