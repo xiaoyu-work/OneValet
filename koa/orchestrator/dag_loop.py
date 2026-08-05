@@ -23,7 +23,7 @@ from .dag_executor import (
     get_runnable_tasks,
     topological_sort,
 )
-from .transcript_store import RunLeaseLost
+from .transcript_store import RunLeaseLost, TranscriptUnavailable
 
 if TYPE_CHECKING:
     from .intent_analyzer import IntentAnalysis, SubTask
@@ -160,6 +160,7 @@ class DagLoopMixin:
         all_pending_approvals: list = []
         total_turns = 0
         total_tool_calls = 0
+        dag_timed_out = False
 
         # DAG-level budget: independent of max_turns (which is a model-iteration
         # count, not a time unit).
@@ -184,6 +185,7 @@ class DagLoopMixin:
                 continue
             # Fix 5: check DAG-level timeout before each level
             if time.monotonic() > deadline:
+                dag_timed_out = True
                 logger.warning(
                     f"[DAG] Timeout exceeded ({self._react_config.dag_timeout}s) "
                     f"at level {level_idx}"
@@ -286,6 +288,7 @@ class DagLoopMixin:
                 exec_data: Dict[str, Any] = {}
                 terminal_event: Optional[AgentEvent] = None
                 had_error = False
+                caught_error: Optional[Exception] = None
                 loop_finished = False
                 try:
                     async for event in self._react_loop_events(
@@ -304,6 +307,18 @@ class DagLoopMixin:
                             yield event
                         else:
                             yield event
+                    loop_finished = True
+                except (RunLeaseLost, TranscriptUnavailable, asyncio.CancelledError):
+                    await self._fail_transcript(task_context)
+                    raise
+                except Exception as e:
+                    await self._fail_transcript(task_context)
+                    caught_error = e
+                    had_error = True
+                    exec_data = {
+                        "final_response": f"Error: {e}",
+                        "result_status": "FAILED",
+                    }
                     loop_finished = True
                 except BaseException:
                     await self._fail_transcript(task_context)
@@ -325,6 +340,7 @@ class DagLoopMixin:
                 waiting = await self._owes_the_user(task_context["request_id"])
                 failed = (
                     had_error
+                    or caught_error is not None
                     or not exec_data
                     or exec_data.get("result_status") in ("FAILED", "INTERRUPTED")
                 )
@@ -470,6 +486,11 @@ class DagLoopMixin:
 
                 for st, result in zip(runnable, level_results):
                     if isinstance(result, BaseException):
+                        if isinstance(
+                            result,
+                            (RunLeaseLost, TranscriptUnavailable, asyncio.CancelledError),
+                        ):
+                            raise result
                         logger.warning(f"[DAG] Sub-task {st.id} failed: {result}")
                         sub_result = SubTaskResult(
                             sub_task_id=st.id,
@@ -527,7 +548,7 @@ class DagLoopMixin:
         )
         has_error = any(
             result.status == "error" for result in all_results.values()
-        )
+        ) or dag_timed_out
         if self._dag_store.enabled and parent_run_id and not has_waiting:
             completed = await self._dag_store.complete(
                 parent_run_id,
@@ -536,12 +557,14 @@ class DagLoopMixin:
             if not completed:
                 raise RunLeaseLost(f"DAG {parent_run_id} was taken over before completion")
         elif self._dag_store.enabled and parent_run_id:
-            paused = await self._dag_store.pause(
+            ready_now = await self._dag_store.pause(
                 parent_run_id,
                 dag_claim_token,
             )
-            if not paused:
+            if ready_now is None:
                 raise RunLeaseLost(f"DAG {parent_run_id} was taken over before pausing")
+            if ready_now:
+                context["_dag_ready_parent"] = parent_run_id
 
         yield AgentEvent(type=EventType.MESSAGE_START, data={})
         yield AgentEvent(type=EventType.MESSAGE_CHUNK, data={"chunk": final_response})
@@ -670,6 +693,27 @@ class DagLoopMixin:
         )
         result = await self.post_process(result, context)
         yield AgentEvent(type=EventType.EXECUTION_END, data=result)
+        self.hand_off_ready_dag(context)
+
+    def hand_off_ready_dag(self, context: Optional[Dict[str, Any]]) -> None:
+        """Resume a parent that became ready while its old owner unwound."""
+        parent_run_id = (context or {}).pop("_dag_ready_parent", None)
+        if not parent_run_id:
+            return
+
+        async def _continue() -> None:
+            async for _ in self._resume_parent_dag_by_id(parent_run_id):
+                pass
+
+        continuation = _continue()
+        try:
+            self.task_registry.create_task(
+                continuation,
+                name=f"resume-dag:{parent_run_id}",
+            )
+        except RuntimeError as e:
+            continuation.close()
+            logger.warning(f"Could not hand off ready DAG {parent_run_id}: {e}")
 
     async def _synthesize_dag_results(
         self,

@@ -1067,6 +1067,7 @@ class Orchestrator(
             # it if the user answered something while it was still working.
             # A request that failed does not cancel a decision they made.
             self.hand_off_unfinished(context)
+            self.hand_off_ready_dag(context)
 
     def _start_routing(
         self,

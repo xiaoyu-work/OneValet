@@ -160,30 +160,46 @@ class DagContinuationStore:
         self,
         parent_run_id: str,
         claim_token: Optional[str] = None,
-    ) -> bool:
-        """Make a quiesced parent claimable after every sibling has joined."""
+    ) -> Optional[bool]:
+        """Pause a quiesced parent and report whether no child barriers remain."""
         if not self._db:
-            return False
+            return None
         if claim_token:
-            result = await self._db.execute(
+            row = await self._db.fetchrow(
                 """
-                UPDATE dag_continuations
-                   SET status = 'waiting', updated_at = NOW()
-                 WHERE parent_run_id = $1 AND claim_token = $2
+                WITH paused AS (
+                    UPDATE dag_continuations
+                       SET status = 'waiting', updated_at = NOW()
+                     WHERE parent_run_id = $1 AND claim_token = $2
+                    RETURNING parent_run_id
+                )
+                SELECT NOT EXISTS (
+                    SELECT 1 FROM dag_waiting_subruns AS waiting
+                    WHERE waiting.parent_run_id = paused.parent_run_id
+                ) AS ready
+                FROM paused
                 """,
                 parent_run_id,
                 claim_token,
             )
         else:
-            result = await self._db.execute(
+            row = await self._db.fetchrow(
                 """
-                UPDATE dag_continuations
-                   SET status = 'waiting', updated_at = NOW()
-                 WHERE parent_run_id = $1 AND claim_token IS NULL
+                WITH paused AS (
+                    UPDATE dag_continuations
+                       SET status = 'waiting', updated_at = NOW()
+                     WHERE parent_run_id = $1 AND claim_token IS NULL
+                    RETURNING parent_run_id
+                )
+                SELECT NOT EXISTS (
+                    SELECT 1 FROM dag_waiting_subruns AS waiting
+                    WHERE waiting.parent_run_id = paused.parent_run_id
+                ) AS ready
+                FROM paused
                 """,
                 parent_run_id,
             )
-        return str(result).endswith(" 1")
+        return bool(row["ready"]) if row else None
 
     async def touch(
         self,
