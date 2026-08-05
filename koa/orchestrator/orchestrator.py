@@ -463,14 +463,15 @@ class Orchestrator(
             await asyncio.sleep(_INBOX_MAINTENANCE_INTERVAL)
 
     async def _maintain_inbox(self) -> None:
+        expired_count = await self.inbox.expire()
         transcript_count = await self._transcript_store.prune(
             _TRANSCRIPT_RETENTION_HOURS
         )
         ask_count = await self.inbox.prune(_ASK_RETENTION_DAYS)
-        if transcript_count or ask_count:
+        if expired_count or transcript_count or ask_count:
             logger.info(
-                f"[Inbox] Pruned {transcript_count} transcript(s) and "
-                f"{ask_count} ask(s)"
+                f"[Inbox] Expired {expired_count} ask(s); pruned "
+                f"{transcript_count} transcript(s) and {ask_count} ask(s)"
             )
 
         run_ids = await self.inbox.recoverable_runs(

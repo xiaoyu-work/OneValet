@@ -38,6 +38,7 @@ async def list_pending(tenant_id: str, limit: int = 50):
                 "body": a.body,
                 "options": a.options,
                 "run_id": a.run_id,
+                "expires_at": a.expires_at.isoformat() if a.expires_at else None,
             }
             for a in asks
         ]

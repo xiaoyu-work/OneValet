@@ -13,6 +13,8 @@ success, so a user with both push and SMS gets one message, not two.
 from __future__ import annotations
 
 import logging
+import math
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,15 @@ def format_ask(ask: Any) -> str:
 
     if ask.options:
         text += f"\n\nReply {' or '.join(ask.options)}."
+    expires_at = getattr(ask, "expires_at", None)
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        remaining = max(0, (expires_at - datetime.now(timezone.utc)).total_seconds())
+        if remaining < 2 * 24 * 60 * 60:
+            text += f" Expires in {max(1, math.ceil(remaining / 3600))}h."
+        else:
+            text += f" Expires in {math.ceil(remaining / 86400)}d."
     return text
 
 

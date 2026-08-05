@@ -21,6 +21,7 @@ import json
 import logging
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ KIND_APPROVAL = "approval"
 
 STATE_PENDING = "pending"
 STATE_RESOLVED = "resolved"
+STATE_EXPIRED = "expired"
 
 
 @dataclass
@@ -52,10 +54,18 @@ class Ask:
 
     #: When the approved action was carried out. None means it still owes one.
     executed_at: Optional[Any] = None
+    expires_at: Optional[Any] = None
 
     @property
     def is_open(self) -> bool:
-        return self.state == STATE_PENDING
+        if self.state != STATE_PENDING:
+            return False
+        if self.expires_at is None:
+            return True
+        expires_at = self.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        return expires_at > datetime.now(timezone.utc)
 
     @property
     def awaits_execution(self) -> bool:
@@ -109,7 +119,8 @@ def action_key(tool_name: Any, args: Any) -> str:
 
 
 _COLUMNS = """id, tenant_id, run_id, tool_call_id, kind, title, body,
-                       options, state, resolution, data, action_key, executed_at"""
+                       options, state, resolution, data, action_key, executed_at,
+                       expires_at"""
 
 #: Answers that mean "go ahead". Anything else is a refusal, so an answer we
 #: do not understand stops the action rather than performing it.
@@ -136,6 +147,7 @@ def _row_to_ask(row: Any) -> Ask:
         data=_loads(row["data"], {}),
         action_key=_key_of(row),
         executed_at=_get(row, "executed_at"),
+        expires_at=_get(row, "expires_at"),
     )
 
 
@@ -168,6 +180,7 @@ class InboxStore:
         tool_call_id: str,
         kind: str,
         action_key: str,
+        expires_in_seconds: int = 604800,
         title: str = "",
         body: str = "",
         options: Optional[List[str]] = None,
@@ -190,8 +203,11 @@ class InboxStore:
                 f"""
                 INSERT INTO pending_asks
                     (id, tenant_id, run_id, tool_call_id, kind, title, body,
-                     options, data, action_key)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+                     options, data, action_key, expires_at)
+                VALUES (
+                    $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10,
+                    NOW() + ($11 || ' seconds')::interval
+                )
                 ON CONFLICT (run_id, action_key) DO UPDATE
                     SET action_key = pending_asks.action_key
                 RETURNING {_COLUMNS}
@@ -206,6 +222,7 @@ class InboxStore:
                 json.dumps(options or []),
                 json.dumps(data or {}, default=str),
                 action_key,
+                str(int(expires_in_seconds)),
             )
         except Exception as e:
             logger.error(f"Could not create ask for run {run_id}: {e}", exc_info=True)
@@ -315,6 +332,7 @@ class InboxStore:
                       SELECT 1 FROM pending_asks AS open_ask
                       WHERE open_ask.run_id = pa.run_id
                         AND open_ask.state = $6
+                        AND open_ask.expires_at > NOW()
                   )
                 GROUP BY pa.run_id, rt.updated_at
                 ORDER BY rt.updated_at
@@ -334,6 +352,53 @@ class InboxStore:
             return []
         return [r["run_id"] for r in rows]
 
+    async def expire(self) -> int:
+        """Expire unanswered asks and close runs that have nothing else owed."""
+        if not self._db:
+            return 0
+        try:
+            row = await self._db.fetchrow(
+                """
+                WITH expired AS (
+                    UPDATE pending_asks
+                       SET state = $1,
+                           resolution = $1,
+                           resolved_at = NOW()
+                     WHERE state = $2 AND expires_at <= NOW()
+                    RETURNING run_id
+                ),
+                closed_runs AS (
+                    UPDATE run_transcripts AS rt
+                       SET status = $3, updated_at = NOW()
+                     WHERE rt.status = $4
+                       AND rt.run_id IN (SELECT run_id FROM expired)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM pending_asks AS open_ask
+                           WHERE open_ask.run_id = rt.run_id
+                             AND open_ask.state = $2
+                             AND open_ask.expires_at > NOW()
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1 FROM pending_asks AS unexecuted
+                           WHERE unexecuted.run_id = rt.run_id
+                             AND unexecuted.state = $5
+                             AND unexecuted.executed_at IS NULL
+                       )
+                    RETURNING rt.run_id
+                )
+                SELECT COUNT(*) AS expired_count FROM expired
+                """,
+                STATE_EXPIRED,
+                STATE_PENDING,
+                "failed",
+                "suspended",
+                STATE_RESOLVED,
+            )
+            return int(row["expired_count"]) if row else 0
+        except Exception as e:
+            logger.warning(f"Could not expire Inbox asks: {e}")
+            return 0
+
     async def prune(self, older_than_days: int = 30, batch_size: int = 1000) -> int:
         """Delete terminal asks in bounded batches.
 
@@ -349,17 +414,20 @@ class InboxStore:
                 """
                 WITH doomed AS (
                     SELECT id FROM pending_asks
-                    WHERE state = $1
-                      AND executed_at IS NOT NULL
-                      AND resolved_at < NOW() - ($2 || ' days')::interval
+                    WHERE (
+                              (state = $1 AND executed_at IS NOT NULL)
+                              OR state = $2
+                          )
+                      AND resolved_at < NOW() - ($3 || ' days')::interval
                     ORDER BY resolved_at
-                    LIMIT $3
+                    LIMIT $4
                 )
                 DELETE FROM pending_asks AS pa
                 USING doomed
                 WHERE pa.id = doomed.id
                 """,
                 STATE_RESOLVED,
+                STATE_EXPIRED,
                 str(int(older_than_days)),
                 batch_size,
             )
@@ -392,7 +460,7 @@ class InboxStore:
                            resolution = $3,
                            resolved_by = $4,
                            resolved_at = NOW()
-                     WHERE id = $1 AND state = $5
+                     WHERE id = $1 AND state = $5 AND expires_at > NOW()
                     RETURNING id, run_id
                 ),
                 reset_budget AS (
@@ -443,7 +511,7 @@ class InboxStore:
                 f"""
                 SELECT {_COLUMNS}
                 FROM pending_asks
-                WHERE tenant_id = $1 AND state = $2
+                WHERE tenant_id = $1 AND state = $2 AND expires_at > NOW()
                 ORDER BY created_at DESC
                 LIMIT $3
                 """,

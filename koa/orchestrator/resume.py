@@ -20,6 +20,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import build_agent_hints
 from .ask_mirror import parse_explicit_reply, parse_reply
+from .inbox import STATE_EXPIRED, STATE_PENDING
 from .transcript_store import (
     RunLeaseLost,
     STATUS_COMPLETED,
@@ -477,6 +478,10 @@ class ResumeMixin:
         ask = await inbox.get(ask_id)
         if ask is None:
             return None
+        if ask.state == STATE_EXPIRED or (
+            ask.state == STATE_PENDING and not ask.is_open
+        ):
+            raise ValueError("This approval request has expired; start the action again.")
 
         decided = parse_reply(resolution, ask.options)
         if decided is None:

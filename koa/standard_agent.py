@@ -81,6 +81,12 @@ APPROVAL_ASKED = "asked"
 APPROVAL_ALREADY_DONE = "already_done"
 APPROVAL_UNAVAILABLE = "unavailable"
 
+#: An approval is permission for the action the user saw in its current
+#: context, not a standing authorization. Destructive operations go stale
+#: sooner than ordinary writes.
+_APPROVAL_EXPIRY_SECONDS = 7 * 24 * 60 * 60
+_DESTRUCTIVE_APPROVAL_EXPIRY_SECONDS = 24 * 60 * 60
+
 
 def _log_task_exception(task: asyncio.Task) -> None:
     """Log exceptions from fire-and-forget tasks instead of silently dropping them."""
@@ -1685,6 +1691,11 @@ class StandardAgent(BaseAgent):
                 tool_call_id=tc.id,
                 kind="approval",
                 action_key=action_key(tc.name, args),
+                expires_in_seconds=(
+                    _DESTRUCTIVE_APPROVAL_EXPIRY_SECONDS
+                    if tool.risk_level == "destructive"
+                    else _APPROVAL_EXPIRY_SECONDS
+                ),
                 title=f"Approve {tc.name}?",
                 body=preview,
                 options=["approve", "reject"],
