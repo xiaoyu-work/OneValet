@@ -134,6 +134,9 @@ def build_agent_hints(
     # first run should not pay for the lookup.
     if (request_context or {}).get("resumed"):
         enriched_hints["resumed"] = True
+    claim_token = (request_context or {}).get("_claim_token")
+    if claim_token:
+        enriched_hints["_claim_token"] = claim_token
     session_id = (request_context or {}).get("session_id")
     if session_id:
         enriched_hints["session_id"] = session_id

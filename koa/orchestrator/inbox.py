@@ -33,6 +33,10 @@ STATE_RESOLVED = "resolved"
 STATE_EXPIRED = "expired"
 
 
+class InboxUnavailable(RuntimeError):
+    """The durable Inbox could not be read or changed safely."""
+
+
 @dataclass
 class Ask:
     """One thing the assistant is waiting on a person for."""
@@ -234,7 +238,12 @@ class InboxStore:
             logger.info(f"[Inbox] Asked {tenant_id}: {title or kind} (run={run_id})")
         return ask
 
-    async def claim_execution(self, ask_id: str) -> bool:
+    async def claim_execution(
+        self,
+        ask_id: str,
+        run_id: str,
+        claim_token: Optional[str],
+    ) -> bool:
         """Take ownership of carrying out an approved action.
 
         An approval authorises one action, once. Two resumes of the same run
@@ -248,15 +257,30 @@ class InboxStore:
                 """
                 UPDATE pending_asks
                    SET executed_at = NOW()
-                 WHERE id = $1 AND state = $2 AND executed_at IS NULL
+                 WHERE id = $1
+                   AND state = $2
+                   AND executed_at IS NULL
+                   AND pending_asks.run_id = $3
+                   AND EXISTS (
+                       SELECT 1 FROM run_transcripts AS rt
+                       WHERE rt.run_id = $3
+                         AND rt.status = $4
+                         AND (
+                             ($5::text IS NULL AND rt.claim_token IS NULL)
+                             OR rt.claim_token = $5
+                         )
+                   )
                 RETURNING id
                 """,
                 ask_id,
                 STATE_RESOLVED,
+                run_id,
+                "running",
+                claim_token,
             )
         except Exception as e:
             logger.error(f"Could not claim execution of ask {ask_id}: {e}", exc_info=True)
-            return False
+            raise InboxUnavailable(f"Could not claim execution of ask {ask_id}") from e
         return row is not None
 
     async def runs_awaiting_execution(self, tenant_id: str, limit: int = 20) -> List[str]:
@@ -288,7 +312,9 @@ class InboxStore:
             )
         except Exception as e:
             logger.warning(f"Could not list runs awaiting execution for {tenant_id}: {e}")
-            return []
+            raise InboxUnavailable(
+                f"Could not list runs awaiting execution for {tenant_id}"
+            ) from e
         return [r["run_id"] for r in rows]
 
     async def recoverable_runs(
@@ -490,7 +516,7 @@ class InboxStore:
             )
         except Exception as e:
             logger.error(f"Could not resolve ask {ask_id}: {e}", exc_info=True)
-            return False
+            raise InboxUnavailable(f"Could not resolve ask {ask_id}") from e
         if row is None:
             logger.info(f"[Inbox] Ask {ask_id} was already resolved; ignoring")
             return False
@@ -509,7 +535,7 @@ class InboxStore:
             )
         except Exception as e:
             logger.warning(f"Could not read ask {ask_id}: {e}")
-            return None
+            raise InboxUnavailable(f"Could not read ask {ask_id}") from e
         return _row_to_ask(row) if row else None
 
     async def pending(self, tenant_id: str, limit: int = 50) -> List[Ask]:
@@ -531,7 +557,7 @@ class InboxStore:
             )
         except Exception as e:
             logger.warning(f"Could not list pending asks for {tenant_id}: {e}")
-            return []
+            raise InboxUnavailable(f"Could not list pending asks for {tenant_id}") from e
         return [_row_to_ask(r) for r in rows]
 
     async def for_run(self, run_id: str) -> List[Ask]:
@@ -552,5 +578,5 @@ class InboxStore:
             )
         except Exception as e:
             logger.warning(f"Could not list asks for run {run_id}: {e}")
-            return []
+            raise InboxUnavailable(f"Could not list asks for run {run_id}") from e
         return [_row_to_ask(r) for r in rows]

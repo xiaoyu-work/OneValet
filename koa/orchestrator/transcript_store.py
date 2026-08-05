@@ -36,6 +36,10 @@ class RunLeaseLost(RuntimeError):
     """The transcript's fencing token no longer belongs to this process."""
 
 
+class TranscriptUnavailable(RuntimeError):
+    """Durable transcript state could not be read or written safely."""
+
+
 @dataclass
 class RunTranscript:
     run_id: str
@@ -168,7 +172,7 @@ class TranscriptStore:
             )
         except Exception as e:
             logger.warning(f"Could not read transcript {run_id}: {e}")
-            return None
+            raise TranscriptUnavailable(f"Could not read transcript {run_id}") from e
         if row is None:
             return None
         return RunTranscript(
@@ -499,7 +503,9 @@ class TranscriptStore:
             )
         except Exception as e:
             logger.warning(f"Could not list resumable runs for {tenant_id}: {e}")
-            return []
+            raise TranscriptUnavailable(
+                f"Could not list resumable runs for {tenant_id}"
+            ) from e
         return [
             {
                 "run_id": r["run_id"],

@@ -20,7 +20,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ..streaming.models import AgentEvent, EventType
 from .agent_tool import build_agent_hints
 from .ask_mirror import parse_explicit_reply, parse_reply
-from .inbox import STATE_EXPIRED, STATE_PENDING
+from .inbox import InboxUnavailable, STATE_EXPIRED, STATE_PENDING, is_approval
 from .transcript_store import (
     RunLeaseLost,
     STATUS_COMPLETED,
@@ -222,7 +222,8 @@ class ResumeMixin:
         )
         result.metadata["resumed_run_id"] = run_id
         try:
-            await self.post_process(result, context)
+            result = await self.post_process(result, context)
+            yield AgentEvent(type=EventType.EXECUTION_END, data=result)
         finally:
             # Everything this invocation held is released; only now is it safe
             # to let a continuation claim the run. In a finally because a
@@ -259,9 +260,8 @@ class ResumeMixin:
 
         try:
             open_asks = await inbox.pending(tenant_id, limit=2)
-        except Exception as e:
-            logger.warning(f"[Resume] Could not check pending asks for {tenant_id}: {e}")
-            return None
+        except InboxUnavailable:
+            raise
         if len(open_asks) != 1:
             return None
 
@@ -341,9 +341,25 @@ class ResumeMixin:
             logger.warning(f"[Resume] Could not read decisions for run {run_id}: {e}")
             return []
 
+        notes: List[str] = []
         owners: List[str] = []
+        claim_token = (context or {}).get("_claim_token")
         for ask in asks:
             if not ask.awaits_execution:
+                continue
+            if not is_approval(ask.resolution):
+                try:
+                    claimed = await inbox.claim_execution(
+                        ask.id,
+                        run_id,
+                        claim_token,
+                    )
+                except InboxUnavailable as e:
+                    logger.warning(f"[Resume] Could not record rejection {ask.id}: {e}")
+                    continue
+                if claimed:
+                    tool_name = (ask.data or {}).get("tool", "the action")
+                    notes.append(f"The user declined '{tool_name}'. It was not run.")
                 continue
             data = ask.data or {}
             owner = data.get("agent_type") or self._agent_type_for_class(data.get("agent", ""))
@@ -355,9 +371,8 @@ class ResumeMixin:
                     "the user's decision cannot be honoured"
                 )
         if not owners:
-            return []
+            return notes
 
-        notes: List[str] = []
         for agent_type in owners:
             hints = build_agent_hints(
                 self,

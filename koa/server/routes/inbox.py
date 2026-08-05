@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from ...errors import E, KoaError
+from ...orchestrator.inbox import InboxUnavailable
+from ...orchestrator.transcript_store import TranscriptUnavailable
 from ..app import require_app, verify_api_key
 
 router = APIRouter()
@@ -24,7 +26,14 @@ async def list_pending(tenant_id: str, limit: int = 50):
     if orch is None or not orch.inbox.enabled:
         return {"asks": []}
 
-    asks = await orch.inbox.pending(tenant_id, limit=limit)
+    try:
+        asks = await orch.inbox.pending(tenant_id, limit=limit)
+    except InboxUnavailable as e:
+        raise KoaError(
+            E.SERVICE_UNAVAILABLE,
+            "Inbox is temporarily unavailable",
+            details={"tenant_id": tenant_id},
+        ) from e
     return {
         "asks": [
             {
@@ -58,6 +67,12 @@ async def answer(ask_id: str, req: AnswerRequest):
 
     try:
         run_id = await orch.answer_ask(ask_id, req.resolution, resolved_by=req.resolved_by)
+    except InboxUnavailable as e:
+        raise KoaError(
+            E.SERVICE_UNAVAILABLE,
+            "Inbox is temporarily unavailable",
+            details={"ask_id": ask_id},
+        ) from e
     except ValueError as e:
         raise KoaError(E.VALIDATION_ERROR, str(e), details={"ask_id": ask_id}) from e
     if run_id is None:
@@ -83,7 +98,15 @@ async def list_resumable(tenant_id: str, limit: int = 20):
     orch = app.orchestrator
     if orch is None:
         return {"runs": []}
-    return {"runs": await orch.list_resumable_runs(tenant_id, limit=limit)}
+    try:
+        runs = await orch.list_resumable_runs(tenant_id, limit=limit)
+    except (InboxUnavailable, TranscriptUnavailable) as e:
+        raise KoaError(
+            E.SERVICE_UNAVAILABLE,
+            "Resumable runs are temporarily unavailable",
+            details={"tenant_id": tenant_id},
+        ) from e
+    return {"runs": runs}
 
 
 @router.post("/api/runs/{run_id}/resume", dependencies=[Depends(verify_api_key)])

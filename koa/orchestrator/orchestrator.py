@@ -80,7 +80,7 @@ from .resume import ResumeMixin
 from .run_control import RunControlRegistry
 from .tool_manager import ToolManagerMixin
 from .tool_policy import ToolPolicyFilter
-from .transcript_store import TranscriptStore
+from .transcript_store import RunLeaseLost, TranscriptStore, TranscriptUnavailable
 
 if TYPE_CHECKING:
     from ..llm.router import ModelRouter
@@ -1348,14 +1348,29 @@ class Orchestrator(
         store = getattr(self, "_transcript_store", None)
         run_id = context.get("request_id")
         if store is not None and store.enabled and run_id:
-            durable = await store.get(run_id)
+            try:
+                durable = await store.get(run_id)
+            except TranscriptUnavailable:
+                if context.get("_claim_token") or context.get("_transcript_owned"):
+                    raise
+                durable = None
             claim_token = context.get("_claim_token")
-            if durable is not None and (
-                not claim_token or durable.claim_token == claim_token
-            ):
+            if durable is not None:
+                if claim_token and durable.claim_token != claim_token:
+                    raise RunLeaseLost(
+                        f"Run {run_id} was taken over before model fallback"
+                    )
+                if not claim_token and durable.claim_token is not None:
+                    raise RunLeaseLost(
+                        f"Run {run_id} was taken over before model fallback"
+                    )
                 retry_messages = durable.messages
 
         if retry_messages is None:
+            if context.get("_claim_token") or context.get("_transcript_owned"):
+                raise TranscriptUnavailable(
+                    f"No verified durable transcript is available for fallback of {run_id}"
+                )
             if retry_seed is not None:
                 retry_messages = retry_seed
             else:

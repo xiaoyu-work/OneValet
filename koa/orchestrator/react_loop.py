@@ -31,7 +31,12 @@ from .planning import PlanningMixin, PlanOutcome
 from .run_state import RunState
 from .tool_execution import ToolExecutionMixin, TurnOutcome
 from .transcript_repair import repair_transcript
-from .transcript_store import RunLeaseLost, STATUS_COMPLETED, STATUS_SUSPENDED
+from .transcript_store import (
+    RunLeaseLost,
+    STATUS_COMPLETED,
+    STATUS_SUSPENDED,
+    TranscriptUnavailable,
+)
 from .turn_gate import TurnGateMixin
 
 logger = logging.getLogger(__name__)
@@ -224,6 +229,7 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             return
         if claim_token or (context or {}).get("_transcript_owned"):
             raise RunLeaseLost(f"Run {run_id} was taken over by another process")
+        raise TranscriptUnavailable(f"Could not persist transcript for run {run_id}")
 
     async def _touch_transcript(self, context: Optional[Dict[str, Any]]) -> None:
         """Refresh this run's lease without rewriting what it has done."""

@@ -1574,7 +1574,7 @@ class StandardAgent(BaseAgent):
         if not is_approval(ask.resolution):
             # Declined. Stamp it so a later resume does not reconsider,
             # and tell the model so it can say what it did not do.
-            if await inbox.claim_execution(ask.id):
+            if await self._claim_inbox_execution(inbox, ask.id):
                 return f"The user declined '{tool_name}'. It was not run."
             return ""
 
@@ -1584,7 +1584,7 @@ class StandardAgent(BaseAgent):
             # sitting suspended forever waiting on a tool that is gone; saying
             # so is what stops the decision being lost silently.
             logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
-            if await inbox.claim_execution(ask.id):
+            if await self._claim_inbox_execution(inbox, ask.id):
                 return (
                     f"The user approved '{tool_name}', but it is no longer available. "
                     "Tell them it could not be carried out."
@@ -1597,18 +1597,30 @@ class StandardAgent(BaseAgent):
         # was asked still applies.
         policy = self._evaluate_tool_policy(tool, args)
         if policy is not None and not policy.allowed:
-            if await inbox.claim_execution(ask.id):
+            if await self._claim_inbox_execution(inbox, ask.id):
                 return (
                     f"'{tool_name}' was approved but is no longer permitted: "
                     f"{policy.reason}. It was not run."
                 )
             return ""
 
-        if not await inbox.claim_execution(ask.id):
+        if not await self._claim_inbox_execution(inbox, ask.id):
             logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
             return ""
 
         return await self._run_approved_tool(tool, args)
+
+    async def _claim_inbox_execution(self, inbox: Any, ask_id: str) -> bool:
+        """Spend a decision only while this agent still owns its run."""
+        hints = self.context_hints or {}
+        run_id = hints.get("run_id")
+        if not run_id:
+            raise RuntimeError("Cannot claim an Inbox action without its run id")
+        return await inbox.claim_execution(
+            ask_id,
+            run_id,
+            hints.get("_claim_token"),
+        )
 
     async def _run_approved_tool(self, tool: Any, args: Dict[str, Any]) -> str:
         """Execute one approved action and describe the outcome.
@@ -1763,7 +1775,7 @@ class StandardAgent(BaseAgent):
         if not is_approval(ask.resolution):
             logger.info(f"[{self.__class__.__name__}:{self.name}] {tool_name}: user declined this")
             return APPROVAL_DECLINED
-        if await inbox.claim_execution(ask.id):
+        if await self._claim_inbox_execution(inbox, ask.id):
             logger.info(
                 f"[{self.__class__.__name__}:{self.name}] {tool_name}: "
                 "user approved this; carrying it out"
