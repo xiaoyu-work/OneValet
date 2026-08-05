@@ -714,6 +714,23 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
                 continue
             tool_calls = validated_tool_calls
 
+            # Persist the assistant's calls before any of them can create a
+            # side effect or durable ask. If the process dies after an inner
+            # agent records an approval but before the outer call returns, the
+            # Inbox would otherwise hold an answerable question with no
+            # transcript to resume. Unanswered calls are explicit recovery
+            # markers: resume closes ordinary ones as interrupted, while an
+            # approved action is honoured from the arguments stored with its
+            # ask.
+            await self._persist_transcript(
+                context,
+                tenant_id,
+                messages,
+                user_message,
+                metadata,
+                turn,
+            )
+
             tool_names = [tc.name for tc in tool_calls]
             logger.info(f"[ReAct] turn={turn} calling: {', '.join(tool_names)}")
 
@@ -795,9 +812,9 @@ class ReactLoopMixin(ToolExecutionMixin, PlanningMixin, TurnGateMixin):
             )
 
             # Checkpoint the transcript now that this round's tool results
-            # are recorded. Every persisted copy therefore describes work
-            # that actually completed, so a resume never re-runs a tool
-            # whose result is already in the messages.
+            # are recorded. The pre-execution copy made every call visible;
+            # this one answers the calls that completed, so a resume can
+            # distinguish them from work the process died before finishing.
             await self._persist_transcript(
                 context, tenant_id, messages, user_message, metadata, turn
             )

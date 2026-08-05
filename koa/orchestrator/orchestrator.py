@@ -96,6 +96,8 @@ logger = logging.getLogger(__name__)
 _INBOX_MAINTENANCE_INTERVAL = 300
 _TRANSCRIPT_RETENTION_HOURS = 48
 _ASK_RETENTION_DAYS = 30
+_MAX_AUTOMATIC_RECOVERIES = 5
+_RECOVERY_BACKOFF_BASE_SECONDS = 300
 
 
 from .state_persistence import PlanStore  # noqa: E402
@@ -463,9 +465,17 @@ class Orchestrator(
 
         run_ids = await self.inbox.recoverable_runs(
             self._resume_lease_seconds(),
+            _MAX_AUTOMATIC_RECOVERIES,
         )
         for run_id in run_ids:
-            self._schedule_maintenance_resume(run_id)
+            reserved = await self._transcript_store.reserve_recovery(
+                run_id,
+                self._resume_lease_seconds(),
+                _MAX_AUTOMATIC_RECOVERIES,
+                _RECOVERY_BACKOFF_BASE_SECONDS,
+            )
+            if reserved:
+                self._schedule_maintenance_resume(run_id)
 
     def _schedule_maintenance_resume(self, run_id: str) -> None:
         active = getattr(self, "_maintenance_resumes", None)

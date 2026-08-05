@@ -46,6 +46,8 @@ class RunTranscript:
     metadata: Dict[str, Any]
     turn: int
     claim_token: Optional[str] = None
+    recovery_attempts: int = 0
+    next_recovery_at: Optional[Any] = None
 
 
 def _loads(value: Any, default: Any) -> Any:
@@ -94,9 +96,10 @@ class TranscriptStore:
     ) -> bool:
         """Write the run's current transcript, replacing any previous version.
 
-        Called after each tool round, so the stored copy always reflects work
-        that actually completed. A failure here must not break the request --
-        the run is still valid in memory, it just will not survive a restart.
+        Called before a tool round to make its unanswered calls recoverable,
+        and after results arrive to record what actually completed. A failure
+        on a claimed run fences execution: continuing without a transcript
+        would let another process take over and repeat side effects.
         """
         if not self._db:
             return False
@@ -158,7 +161,7 @@ class TranscriptStore:
             row = await self._db.fetchrow(
                 """
                 SELECT run_id, tenant_id, status, messages, user_message, metadata,
-                       turn, claim_token
+                       turn, claim_token, recovery_attempts, next_recovery_at
                 FROM run_transcripts WHERE run_id = $1
                 """,
                 run_id,
@@ -177,6 +180,8 @@ class TranscriptStore:
             metadata=_loads(row["metadata"], {}),
             turn=row["turn"] or 0,
             claim_token=row["claim_token"],
+            recovery_attempts=row["recovery_attempts"] or 0,
+            next_recovery_at=row["next_recovery_at"],
         )
 
     async def claim(self, run_id: str, stale_after_seconds: int) -> Optional[str]:
@@ -222,6 +227,53 @@ class TranscriptStore:
             logger.warning(f"Could not claim run {run_id}: {e}")
             return None
         return token if row is not None else None
+
+    async def reserve_recovery(
+        self,
+        run_id: str,
+        stale_after_seconds: int,
+        max_attempts: int,
+        base_delay_seconds: int,
+    ) -> bool:
+        """Reserve one automatic recovery attempt with durable backoff.
+
+        The update is the multi-instance arbiter. A process-local counter would
+        reset on deploy and every app instance would get its own budget.
+        """
+        if not self._db:
+            return False
+        try:
+            row = await self._db.fetchrow(
+                """
+                UPDATE run_transcripts
+                   SET recovery_attempts = recovery_attempts + 1,
+                       next_recovery_at = NOW() + make_interval(
+                           secs => $6::integer * power(2, recovery_attempts)::integer
+                       )
+                 WHERE run_id = $1
+                   AND recovery_attempts < $5
+                   AND (next_recovery_at IS NULL OR next_recovery_at <= NOW())
+                   AND (
+                       status = $3
+                       OR (
+                           status = $2
+                           AND updated_at
+                               < NOW() - ($4 || ' seconds')::interval
+                       )
+                   )
+                RETURNING run_id
+                """,
+                run_id,
+                STATUS_RUNNING,
+                STATUS_SUSPENDED,
+                str(int(stale_after_seconds)),
+                max_attempts,
+                base_delay_seconds,
+            )
+        except Exception as e:
+            logger.warning(f"Could not reserve recovery of run {run_id}: {e}")
+            return False
+        return row is not None
 
     async def release(self, run_id: str, claim_token: str) -> None:
         """Hand a claimed run back, but only if it is still ours to hand back.
@@ -293,18 +345,36 @@ class TranscriptStore:
         try:
             if claim_token:
                 result = await self._db.execute(
-                    "UPDATE run_transcripts SET status = $2, "
-                    "updated_at = NOW() WHERE run_id = $1 AND claim_token = $3",
+                    """
+                    UPDATE run_transcripts
+                       SET status = $2,
+                           updated_at = NOW(),
+                           recovery_attempts = CASE WHEN $2 = $4 THEN 0
+                                                    ELSE recovery_attempts END,
+                           next_recovery_at = CASE WHEN $2 = $4 THEN NULL
+                                                   ELSE next_recovery_at END
+                     WHERE run_id = $1 AND claim_token = $3
+                    """,
                     run_id,
                     status,
                     claim_token,
+                    STATUS_COMPLETED,
                 )
             else:
                 result = await self._db.execute(
-                    "UPDATE run_transcripts SET status = $2, updated_at = NOW() "
-                    "WHERE run_id = $1 AND claim_token IS NULL",
+                    """
+                    UPDATE run_transcripts
+                       SET status = $2,
+                           updated_at = NOW(),
+                           recovery_attempts = CASE WHEN $2 = $3 THEN 0
+                                                    ELSE recovery_attempts END,
+                           next_recovery_at = CASE WHEN $2 = $3 THEN NULL
+                                                   ELSE next_recovery_at END
+                     WHERE run_id = $1 AND claim_token IS NULL
+                    """,
                     run_id,
                     status,
+                    STATUS_COMPLETED,
                 )
             return _changed(result)
         except Exception as e:
@@ -351,7 +421,8 @@ class TranscriptStore:
         try:
             rows = await self._db.fetch(
                 """
-                SELECT run_id, status, user_message, turn, updated_at
+                SELECT run_id, status, user_message, turn, updated_at,
+                       recovery_attempts, next_recovery_at
                 FROM run_transcripts
                 WHERE tenant_id = $1 AND status IN ($2, $3)
                 ORDER BY updated_at DESC
@@ -372,6 +443,10 @@ class TranscriptStore:
                 "user_message": r["user_message"],
                 "turn": r["turn"],
                 "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
+                "recovery_attempts": r["recovery_attempts"] or 0,
+                "next_recovery_at": (
+                    r["next_recovery_at"].isoformat() if r["next_recovery_at"] else None
+                ),
             }
             for r in rows
         ]

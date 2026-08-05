@@ -264,6 +264,7 @@ class InboxStore:
     async def recoverable_runs(
         self,
         stale_after_seconds: int,
+        max_attempts: int,
         limit: int = 100,
     ) -> List[str]:
         """Suspended runs whose answered decisions are ready to carry out.
@@ -292,6 +293,11 @@ class InboxStore:
                               < NOW() - ($5 || ' seconds')::interval
                       )
                   )
+                  AND rt.recovery_attempts < $7
+                  AND (
+                      rt.next_recovery_at IS NULL
+                      OR rt.next_recovery_at <= NOW()
+                  )
                   AND NOT EXISTS (
                       SELECT 1 FROM pending_asks AS open_ask
                       WHERE open_ask.run_id = pa.run_id
@@ -299,7 +305,7 @@ class InboxStore:
                   )
                 GROUP BY pa.run_id, rt.updated_at
                 ORDER BY rt.updated_at
-                LIMIT $7
+                LIMIT $8
                 """,
                 STATE_RESOLVED,
                 KIND_APPROVAL,
@@ -307,6 +313,7 @@ class InboxStore:
                 "running",
                 str(int(stale_after_seconds)),
                 STATE_PENDING,
+                max_attempts,
                 limit,
             )
         except Exception as e:
@@ -366,10 +373,23 @@ class InboxStore:
         try:
             row = await self._db.fetchrow(
                 """
-                UPDATE pending_asks
-                   SET state = $2, resolution = $3, resolved_by = $4, resolved_at = NOW()
-                 WHERE id = $1 AND state = $5
-                RETURNING id
+                WITH resolved AS (
+                    UPDATE pending_asks
+                       SET state = $2,
+                           resolution = $3,
+                           resolved_by = $4,
+                           resolved_at = NOW()
+                     WHERE id = $1 AND state = $5
+                    RETURNING id, run_id
+                ),
+                reset_budget AS (
+                    UPDATE run_transcripts AS rt
+                       SET recovery_attempts = 0,
+                           next_recovery_at = NULL
+                      FROM resolved
+                     WHERE rt.run_id = resolved.run_id
+                )
+                SELECT id FROM resolved
                 """,
                 ask_id,
                 STATE_RESOLVED,

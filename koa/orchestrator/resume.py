@@ -86,9 +86,6 @@ class ResumeMixin:
             logger.info(f"[Resume] Run {run_id} already {transcript.status}; nothing to do")
             return
 
-        messages = list(transcript.messages)
-        pending = store.unanswered_tool_calls(messages)
-
         # A run wakes once, when nothing is left for the user to answer.
         open_asks = await self._open_ask_count(run_id)
         if open_asks:
@@ -107,6 +104,20 @@ class ResumeMixin:
         if not claim_token:
             logger.info(f"[Resume] Run {run_id} is already being continued; leaving it alone")
             return
+
+        # The first read was only enough to decide whether claiming made
+        # sense. Another process may have completed a round and handed the run
+        # back between that read and our claim; continuing its older message
+        # list would replay work the row now says is done. Read under the
+        # fencing token and use only that copy.
+        claimed = await store.get(run_id)
+        if claimed is None or claimed.claim_token != claim_token:
+            logger.warning(f"[Resume] Could not read the transcript claimed for run {run_id}")
+            await store.release(run_id, claim_token)
+            return
+        transcript = claimed
+        messages = list(transcript.messages)
+        pending = store.unanswered_tool_calls(messages)
 
         # Two different things can be outstanding, and they are answered in
         # different currencies. A tool call the process died in the middle of
