@@ -247,11 +247,12 @@ class DagLoopMixin:
                 total_turns += exec_data.get("turns", 0)
                 total_tool_calls += exec_data.get("tool_calls_count", 0)
 
+                waiting = await self._owes_the_user(task_context["request_id"])
                 all_results[st.id] = SubTaskResult(
                     sub_task_id=st.id,
                     description=st.description,
                     response=exec_data.get("final_response", ""),
-                    status="completed",
+                    status="waiting" if waiting else "completed",
                     duration_ms=exec_data.get("duration_ms", 0),
                     token_usage=exec_data.get("token_usage", {}),
                 )
@@ -303,11 +304,12 @@ class DagLoopMixin:
                         # with nothing said about it.
                         self.hand_off_unfinished(task_context)
 
+                    waiting = await self._owes_the_user(task_context["request_id"])
                     sub_result = SubTaskResult(
                         sub_task_id=sub_task.id,
                         description=sub_task.description,
                         response=exec_d.get("final_response", ""),
-                        status="completed",
+                        status="waiting" if waiting else "completed",
                         duration_ms=exec_d.get("duration_ms", 0),
                         token_usage=exec_d.get("token_usage", {}),
                     )
@@ -380,7 +382,11 @@ class DagLoopMixin:
                 "sub_tasks": len(intent.sub_tasks),
                 "levels": len(levels),
                 "pending_approvals": all_pending_approvals,
-                "result_status": None,
+                "result_status": (
+                    "WAITING_FOR_APPROVAL"
+                    if any(result.status == "waiting" for result in all_results.values())
+                    else None
+                ),
                 "turns": total_turns,
                 "token_usage": aggregated_usage,
                 "duration_ms": duration_ms,
@@ -400,22 +406,28 @@ class DagLoopMixin:
         Includes user profile and language context so the synthesis
         matches the user's communication style and language preference.
         """
-        # If only one sub-task completed successfully, return its result directly
+        # If this truly was a one-task DAG, avoid an unnecessary synthesis call.
+        # A single success alongside waiting/skipped work is not the whole
+        # answer and must not hide what remains incomplete.
         successful = [r for r in results.values() if r.status == "completed"]
-        if len(successful) == 1:
+        if len(results) == 1 and len(successful) == 1:
             return successful[0].response
 
         result_parts = []
         for sub_id in sorted(results.keys()):
             r = results[sub_id]
-            result_parts.append(f"## Sub-task {sub_id}: {r.description}\n{r.response}")
+            result_parts.append(
+                f"## Sub-task {sub_id}: {r.description} "
+                f"[status: {r.status}]\n{r.response}"
+            )
 
         synthesis_message = (
             f'The user asked: "{original_message}"\n\n'
             "Here are the results from each sub-task:\n\n"
             + "\n\n".join(result_parts)
             + "\n\nSynthesize these into a single, coherent response for the user. "
-            "Preserve all specific data points. Be concise."
+            "Preserve all specific data points. Clearly say which work is "
+            "waiting or skipped; never present it as completed. Be concise."
         )
 
         # Build a context-aware system prompt for synthesis

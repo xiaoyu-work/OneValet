@@ -470,6 +470,13 @@ class Orchestrator(
             )
 
     async def _maintain_inbox(self) -> None:
+        uncertain_asks = await self.inbox.recover_stale_executions(
+            self._resume_lease_seconds()
+        )
+        for ask in uncertain_asks:
+            if self.ask_mirror.enabled:
+                await self.ask_mirror.mirror(ask)
+
         expired_count = 0
         transcript_count = 0
         ask_count = 0
@@ -488,9 +495,10 @@ class Orchestrator(
             ask_count += asks
             if max(expired, transcripts, asks) < _MAINTENANCE_BATCH_SIZE:
                 break
-        if expired_count or transcript_count or ask_count:
+        if uncertain_asks or expired_count or transcript_count or ask_count:
             logger.info(
-                f"[Inbox] Expired {expired_count} ask(s); pruned "
+                f"[Inbox] Reopened {len(uncertain_asks)} uncertain action(s); "
+                f"expired {expired_count} ask(s); pruned "
                 f"{transcript_count} transcript(s) and {ask_count} ask(s)"
             )
 
@@ -1179,7 +1187,10 @@ class Orchestrator(
 
         status = (
             AgentStatus.WAITING_FOR_APPROVAL
-            if dag_exec_data.get("pending_approvals")
+            if (
+                dag_exec_data.get("pending_approvals")
+                or dag_exec_data.get("result_status") == "WAITING_FOR_APPROVAL"
+            )
             else AgentStatus.COMPLETED
         )
         result = AgentResult(

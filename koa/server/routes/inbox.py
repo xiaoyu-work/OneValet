@@ -28,6 +28,10 @@ async def list_pending(tenant_id: str, limit: int = 50):
 
     try:
         asks = await orch.inbox.pending(tenant_id, limit=limit)
+        outcomes = await orch.inbox.recent_outcomes(
+            tenant_id,
+            limit=min(limit, 20),
+        )
     except InboxUnavailable as e:
         raise KoaError(
             E.SERVICE_UNAVAILABLE,
@@ -44,9 +48,26 @@ async def list_pending(tenant_id: str, limit: int = 50):
                 "options": a.options,
                 "run_id": a.run_id,
                 "expires_at": a.expires_at.isoformat() if a.expires_at else None,
+                "execution_state": a.execution_state,
+                "execution_outcome": a.execution_outcome,
             }
             for a in asks
-        ]
+        ],
+        "recent_outcomes": [
+            {
+                "id": a.id,
+                "title": a.title,
+                "run_id": a.run_id,
+                "resolution": a.resolution,
+                "execution_outcome": a.execution_outcome,
+                "execution_finished_at": (
+                    a.execution_finished_at.isoformat()
+                    if a.execution_finished_at
+                    else None
+                ),
+            }
+            for a in outcomes
+        ],
     }
 
 

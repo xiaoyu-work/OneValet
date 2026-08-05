@@ -63,7 +63,14 @@ from .llm.base import ToolCall as LLMToolCall
 from .media_dedup import append_unique_media
 from .message import Message
 from .models import AgentTool, AgentToolContext, RequiredField, ToolOutput
-from .orchestrator.inbox import action_key, is_approval
+from .orchestrator.inbox import (
+    EXECUTION_CLAIMED,
+    EXECUTION_COMPLETED,
+    EXECUTION_STARTED,
+    InboxUnavailable,
+    action_key,
+    is_approval,
+)
 from .protocols import LLMClientProtocol
 from .result import AgentResult, AgentStatus, ApprovalResult
 from .streaming.engine import StreamEngine
@@ -1267,9 +1274,34 @@ class StandardAgent(BaseAgent):
                 decision = await self._ask_inbox_for_approval(tc, tool, args)
 
                 if decision == APPROVAL_APPROVED:
-                    # They already said yes. Fall through and do it -- this is
-                    # the run their approval was waiting for.
-                    requires_approval = False
+                    ask = getattr(self, "_inbox_decision_ask", None)
+                    if ask is None:
+                        raise RuntimeError(
+                            f"Approved Inbox action {tc.name!r} has no durable ask"
+                        )
+                    result_text = await self._honour_decision(
+                        self.context_hints["inbox"],
+                        ask,
+                        ask.data or {"tool": tc.name, "args": args},
+                    )
+                    result_text = result_text or (
+                        f"'{tc.name}' is already being handled; do not run it again."
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": result_text,
+                        }
+                    )
+                    self._tool_trace.append(
+                        {
+                            "tool": tc.name,
+                            "status": "approved_result",
+                            "summary": result_text[:240],
+                        }
+                    )
+                    continue
                 else:
                     if decision == APPROVAL_ASKED:
                         error_text = (
@@ -1279,9 +1311,9 @@ class StandardAgent(BaseAgent):
                         status = "asked"
                     elif decision == APPROVAL_ALREADY_DONE:
                         error_text = (
-                            f"'{tc.name}' was already run once on the user's approval, "
-                            "and that approval is spent. Do not run it again with these "
-                            "arguments. If it needs doing again, say so and ask them."
+                            f"'{tc.name}' is already being handled or was already run "
+                            "on this approval. Do not run it again with these arguments. "
+                            "If it needs doing again, say so and ask them."
                         )
                         status = "already_done"
                     elif decision == APPROVAL_DECLINED:
@@ -1527,6 +1559,7 @@ class StandardAgent(BaseAgent):
         Returns a line per action for the model to read.
         """
         hints = self.context_hints or {}
+        self._inbox_decision_ask = None
         inbox = hints.get("inbox")
         run_id = hints.get("run_id")
         if inbox is None or not run_id or not getattr(inbox, "enabled", False):
@@ -1574,7 +1607,11 @@ class StandardAgent(BaseAgent):
         if not is_approval(ask.resolution):
             # Declined. Stamp it so a later resume does not reconsider,
             # and tell the model so it can say what it did not do.
-            if await self._claim_inbox_execution(inbox, ask.id):
+            execution_token = await self._claim_inbox_execution(inbox, ask.id)
+            if execution_token:
+                await self._finish_inbox_execution(
+                    inbox, ask.id, execution_token, "declined; action was not run"
+                )
                 return f"The user declined '{tool_name}'. It was not run."
             return ""
 
@@ -1584,7 +1621,14 @@ class StandardAgent(BaseAgent):
             # sitting suspended forever waiting on a tool that is gone; saying
             # so is what stops the decision being lost silently.
             logger.warning(f"Approved tool {tool_name!r} is not available on {self.name}")
-            if await self._claim_inbox_execution(inbox, ask.id):
+            execution_token = await self._claim_inbox_execution(inbox, ask.id)
+            if execution_token:
+                await self._finish_inbox_execution(
+                    inbox,
+                    ask.id,
+                    execution_token,
+                    f"tool {tool_name!r} was no longer available; action was not run",
+                )
                 return (
                     f"The user approved '{tool_name}', but it is no longer available. "
                     "Tell them it could not be carried out."
@@ -1597,20 +1641,38 @@ class StandardAgent(BaseAgent):
         # was asked still applies.
         policy = self._evaluate_tool_policy(tool, args)
         if policy is not None and not policy.allowed:
-            if await self._claim_inbox_execution(inbox, ask.id):
+            execution_token = await self._claim_inbox_execution(inbox, ask.id)
+            if execution_token:
+                await self._finish_inbox_execution(
+                    inbox,
+                    ask.id,
+                    execution_token,
+                    f"policy denied the action: {policy.reason}",
+                )
                 return (
                     f"'{tool_name}' was approved but is no longer permitted: "
                     f"{policy.reason}. It was not run."
                 )
             return ""
 
-        if not await self._claim_inbox_execution(inbox, ask.id):
+        execution_token = await self._claim_inbox_execution(inbox, ask.id)
+        if not execution_token:
             logger.info(f"[Inbox] Ask {ask.id} already carried out elsewhere")
             return ""
 
-        return await self._run_approved_tool(tool, args)
+        return await self._run_approved_tool(
+            inbox,
+            ask,
+            execution_token,
+            tool,
+            args,
+        )
 
-    async def _claim_inbox_execution(self, inbox: Any, ask_id: str) -> bool:
+    async def _claim_inbox_execution(
+        self,
+        inbox: Any,
+        ask_id: str,
+    ) -> Optional[str]:
         """Spend a decision only while this agent still owns its run."""
         hints = self.context_hints or {}
         run_id = hints.get("run_id")
@@ -1622,15 +1684,31 @@ class StandardAgent(BaseAgent):
             hints.get("_claim_token"),
         )
 
-    async def _run_approved_tool(self, tool: Any, args: Dict[str, Any]) -> str:
+    @staticmethod
+    async def _finish_inbox_execution(
+        inbox: Any,
+        ask_id: str,
+        execution_token: str,
+        outcome: str,
+    ) -> None:
+        if not await inbox.finish_execution(ask_id, execution_token, outcome):
+            raise InboxUnavailable(f"Execution claim for ask {ask_id} was lost")
+
+    async def _run_approved_tool(
+        self,
+        inbox: Any,
+        ask: Any,
+        execution_token: str,
+        tool: Any,
+        args: Dict[str, Any],
+    ) -> str:
         """Execute one approved action and describe the outcome.
 
-        The claim is never handed back. A tool that raised may still have done
-        its work -- a timeout in particular means only that we stopped waiting,
-        not that the provider stopped -- and retrying a send on that basis
-        risks doing it twice for something the user authorised once. The
-        failure is reported instead, and whether to try again is left to the
-        model, which can ask.
+        A claim abandoned before the executor starts is recoverable. Once
+        `begin_execution` is durable, a timeout or process loss is ambiguous:
+        the provider may have acted. Maintenance reopens that row as an
+        explicit retry question rather than automatically repeating a send or
+        payment.
 
         The note says what was run and what came back, and stops there. Tools
         report their own failures as ordinary text rather than by raising, so
@@ -1639,6 +1717,8 @@ class StandardAgent(BaseAgent):
         see. The model reads the result and tells the user what it says.
         """
         name = tool.name
+        if not await inbox.begin_execution(ask.id, execution_token):
+            raise InboxUnavailable(f"Execution claim for ask {ask.id} was lost before start")
         try:
             result = await asyncio.wait_for(
                 tool.executor(args, self._build_tool_context()),
@@ -1646,13 +1726,21 @@ class StandardAgent(BaseAgent):
             )
         except asyncio.TimeoutError:
             logger.warning(f"Approved action {name} timed out")
-            return (
+            note = (
                 f"'{name}' was approved and started, but timed out before confirming. "
                 "It may or may not have completed -- check before trying again."
             )
+            await self._finish_inbox_execution(
+                inbox, ask.id, execution_token, f"uncertain timeout: {note}"
+            )
+            return note
         except Exception as e:
             logger.error(f"Approved action {name} failed: {e}", exc_info=True)
-            return f"'{name}' was approved but failed: {e}"
+            note = f"'{name}' was approved but failed: {e}"
+            await self._finish_inbox_execution(
+                inbox, ask.id, execution_token, f"executor raised: {e}"
+            )
+            return note
 
         text = result.text if isinstance(result, ToolOutput) else str(result)
         if isinstance(result, ToolOutput) and result.media:
@@ -1661,11 +1749,13 @@ class StandardAgent(BaseAgent):
             text = text[: self.max_tool_result_chars] + "\n...[truncated]"
         self._tool_trace.append({"tool": name, "status": "approved_and_run", "summary": text[:240]})
         logger.info(f"[{self.__class__.__name__}:{self.name}] ran approved {name}")
-        return (
+        note = (
             f"The user approved '{name}', so I ran it just now with the arguments "
             f"they saw. It returned: {text}\n"
             "Read that before telling them it worked; if it reports a problem, say so."
         )
+        await self._finish_inbox_execution(inbox, ask.id, execution_token, text)
+        return note
 
     async def _ask_inbox_for_approval(self, tc, tool, args: Dict[str, Any]) -> str:
         """Consult the Inbox about this action. Returns what to do with it.
@@ -1726,7 +1816,7 @@ class StandardAgent(BaseAgent):
         # A conflict returns the row that already existed, which may carry an
         # answer given while this run was away.
         if not ask.is_open:
-            return await self._spend_decision(inbox, ask, tc.name)
+            return await self._spend_decision(ask, tc.name)
 
         # Deliver it to wherever the user is. Best-effort: the ask is durable,
         # so a failed notification means they find it in the app instead.
@@ -1762,11 +1852,11 @@ class StandardAgent(BaseAgent):
             data = ask.data or {}
             if action_key(data.get("tool"), data.get("args")) != wanted:
                 continue
-            return await self._spend_decision(inbox, ask, tool_name)
+            return await self._spend_decision(ask, tool_name)
         return ""
 
-    async def _spend_decision(self, inbox: Any, ask: Any, tool_name: str) -> str:
-        """Turn an existing ask into this call's decision, consuming it once."""
+    async def _spend_decision(self, ask: Any, tool_name: str) -> str:
+        """Turn an existing ask into this call's decision."""
         if ask.is_open:
             # Already asked on an earlier attempt at this run. Asking again
             # would put a second copy of the same question in front of the
@@ -1775,17 +1865,18 @@ class StandardAgent(BaseAgent):
         if not is_approval(ask.resolution):
             logger.info(f"[{self.__class__.__name__}:{self.name}] {tool_name}: user declined this")
             return APPROVAL_DECLINED
-        if await self._claim_inbox_execution(inbox, ask.id):
-            logger.info(
-                f"[{self.__class__.__name__}:{self.name}] {tool_name}: "
-                "user approved this; carrying it out"
-            )
-            return APPROVAL_APPROVED
+        if ask.execution_state in (
+            EXECUTION_CLAIMED,
+            EXECUTION_STARTED,
+            EXECUTION_COMPLETED,
+        ):
+            return APPROVAL_ALREADY_DONE
+        self._inbox_decision_ask = ask
         logger.info(
             f"[{self.__class__.__name__}:{self.name}] {tool_name}: "
-            "approval already spent; not repeating it"
+            "user approved this; carrying it out"
         )
-        return APPROVAL_ALREADY_DONE
+        return APPROVAL_APPROVED
 
     async def _approval_preview(self, tc, tool, args: Dict[str, Any]) -> str:
         """What the user actually sees on their phone.

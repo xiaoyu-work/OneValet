@@ -353,7 +353,7 @@ class ResumeMixin:
                 continue
             if not is_approval(ask.resolution):
                 try:
-                    claimed = await inbox.claim_execution(
+                    execution_token = await inbox.claim_execution(
                         ask.id,
                         run_id,
                         claim_token,
@@ -361,7 +361,16 @@ class ResumeMixin:
                 except InboxUnavailable as e:
                     logger.warning(f"[Resume] Could not record rejection {ask.id}: {e}")
                     continue
-                if claimed:
+                if execution_token:
+                    if not await inbox.finish_execution(
+                        ask.id,
+                        execution_token,
+                        "declined; action was not run",
+                    ):
+                        logger.warning(
+                            f"[Resume] Lost execution claim while recording rejection {ask.id}"
+                        )
+                        continue
                     tool_name = (ask.data or {}).get("tool", "the action")
                     notes.append(f"The user declined '{tool_name}'. It was not run.")
                 continue

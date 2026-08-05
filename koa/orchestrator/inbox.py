@@ -32,6 +32,11 @@ STATE_PENDING = "pending"
 STATE_RESOLVED = "resolved"
 STATE_EXPIRED = "expired"
 
+EXECUTION_PENDING = "pending"
+EXECUTION_CLAIMED = "claimed"
+EXECUTION_STARTED = "started"
+EXECUTION_COMPLETED = "completed"
+
 
 class InboxUnavailable(RuntimeError):
     """The durable Inbox could not be read or changed safely."""
@@ -59,6 +64,12 @@ class Ask:
     #: When the approved action was carried out. None means it still owes one.
     executed_at: Optional[Any] = None
     expires_at: Optional[Any] = None
+    execution_state: str = EXECUTION_PENDING
+    execution_claim_token: Optional[str] = None
+    execution_claimed_at: Optional[Any] = None
+    execution_started_at: Optional[Any] = None
+    execution_finished_at: Optional[Any] = None
+    execution_outcome: Optional[str] = None
 
     @property
     def is_open(self) -> bool:
@@ -77,7 +88,7 @@ class Ask:
         return (
             self.kind == KIND_APPROVAL
             and self.state == STATE_RESOLVED
-            and self.executed_at is None
+            and self.execution_state != EXECUTION_COMPLETED
         )
 
 
@@ -124,7 +135,9 @@ def action_key(tool_name: Any, args: Any) -> str:
 
 _COLUMNS = """id, tenant_id, run_id, tool_call_id, kind, title, body,
                        options, state, resolution, data, action_key, executed_at,
-                       expires_at"""
+                       expires_at, execution_state, execution_claim_token,
+                       execution_claimed_at, execution_started_at,
+                       execution_finished_at, execution_outcome"""
 
 #: Answers that mean "go ahead". Anything else is a refusal, so an answer we
 #: do not understand stops the action rather than performing it.
@@ -152,6 +165,12 @@ def _row_to_ask(row: Any) -> Ask:
         action_key=_key_of(row),
         executed_at=_get(row, "executed_at"),
         expires_at=_get(row, "expires_at"),
+        execution_state=_get(row, "execution_state") or EXECUTION_PENDING,
+        execution_claim_token=_get(row, "execution_claim_token"),
+        execution_claimed_at=_get(row, "execution_claimed_at"),
+        execution_started_at=_get(row, "execution_started_at"),
+        execution_finished_at=_get(row, "execution_finished_at"),
+        execution_outcome=_get(row, "execution_outcome"),
     )
 
 
@@ -243,32 +262,40 @@ class InboxStore:
         ask_id: str,
         run_id: str,
         claim_token: Optional[str],
-    ) -> bool:
+    ) -> Optional[str]:
         """Take ownership of carrying out an approved action.
 
         An approval authorises one action, once. Two resumes of the same run
-        can race here, so the stamp is the claim: whoever sets executed_at
-        performs the action and everyone else is told they lost.
+        can race here, so the execution token is the claim. The run row is
+        locked in the same statement, preventing a stale fencing generation
+        from validating and claiming after a takeover.
         """
         if not self._db:
-            return False
+            return None
+        execution_token = uuid.uuid4().hex
         try:
             row = await self._db.fetchrow(
                 """
-                UPDATE pending_asks
-                   SET executed_at = NOW()
-                 WHERE id = $1
-                   AND state = $2
-                   AND executed_at IS NULL
-                   AND pending_asks.run_id = $3
-                   AND EXISTS (
-                       SELECT 1 FROM run_transcripts AS rt
+                WITH owner AS MATERIALIZED (
+                    SELECT rt.run_id FROM run_transcripts AS rt
                        WHERE rt.run_id = $3
                          AND rt.status = $4
                          AND (
                              ($5::text IS NULL AND rt.claim_token IS NULL)
                              OR rt.claim_token = $5
                          )
+                    FOR UPDATE
+                )
+                UPDATE pending_asks
+                   SET execution_state = $6,
+                       execution_claim_token = $7,
+                       execution_claimed_at = NOW()
+                 WHERE id = $1
+                   AND state = $2
+                   AND execution_state = $8
+                   AND pending_asks.run_id = $3
+                   AND EXISTS (
+                       SELECT 1 FROM owner
                    )
                 RETURNING id
                 """,
@@ -277,11 +304,131 @@ class InboxStore:
                 run_id,
                 "running",
                 claim_token,
+                EXECUTION_CLAIMED,
+                execution_token,
+                EXECUTION_PENDING,
             )
         except Exception as e:
             logger.error(f"Could not claim execution of ask {ask_id}: {e}", exc_info=True)
             raise InboxUnavailable(f"Could not claim execution of ask {ask_id}") from e
+        return execution_token if row is not None else None
+
+    async def begin_execution(self, ask_id: str, execution_token: str) -> bool:
+        """Record the last safe point before entering the tool executor."""
+        if not self._db:
+            return False
+        try:
+            row = await self._db.fetchrow(
+                """
+                UPDATE pending_asks
+                   SET execution_state = $2,
+                       execution_started_at = NOW()
+                 WHERE id = $1
+                   AND execution_state = $3
+                   AND execution_claim_token = $4
+                RETURNING id
+                """,
+                ask_id,
+                EXECUTION_STARTED,
+                EXECUTION_CLAIMED,
+                execution_token,
+            )
+        except Exception as e:
+            raise InboxUnavailable(f"Could not start execution of ask {ask_id}") from e
         return row is not None
+
+    async def finish_execution(
+        self,
+        ask_id: str,
+        execution_token: str,
+        outcome: str,
+    ) -> bool:
+        """Finish an execution attempt and retain its observable outcome."""
+        if not self._db:
+            return False
+        try:
+            row = await self._db.fetchrow(
+                """
+                UPDATE pending_asks
+                   SET execution_state = $2,
+                       executed_at = NOW(),
+                       execution_finished_at = NOW(),
+                       execution_outcome = $3
+                 WHERE id = $1
+                   AND execution_state IN ($4, $5)
+                   AND execution_claim_token = $6
+                RETURNING id
+                """,
+                ask_id,
+                EXECUTION_COMPLETED,
+                outcome[:4000],
+                EXECUTION_CLAIMED,
+                EXECUTION_STARTED,
+                execution_token,
+            )
+        except Exception as e:
+            raise InboxUnavailable(f"Could not finish execution of ask {ask_id}") from e
+        return row is not None
+
+    async def recover_stale_executions(
+        self,
+        stale_after_seconds: int,
+    ) -> List[Ask]:
+        """Recover abandoned claims and surface ambiguous started actions.
+
+        A claim that never reached `started` is safe to retry automatically.
+        Once the executor started, repeating could duplicate a send/payment, so
+        reopen the ask as an explicit retry decision instead.
+        """
+        if not self._db:
+            return []
+        try:
+            await self._db.execute(
+                """
+                UPDATE pending_asks
+                   SET execution_state = $1,
+                       execution_claim_token = NULL,
+                       execution_claimed_at = NULL
+                 WHERE state = $2
+                   AND execution_state = $3
+                   AND execution_claimed_at
+                       < NOW() - ($4 || ' seconds')::interval
+                """,
+                EXECUTION_PENDING,
+                STATE_RESOLVED,
+                EXECUTION_CLAIMED,
+                str(int(stale_after_seconds)),
+            )
+            rows = await self._db.fetch(
+                f"""
+                UPDATE pending_asks
+                   SET state = $1,
+                       resolution = NULL,
+                       resolved_by = NULL,
+                       resolved_at = NULL,
+                       title = 'Retry an action with an uncertain outcome?',
+                       body = 'The previous approved attempt started, but the service '
+                              || 'stopped before confirming whether it completed. '
+                              || 'Check the destination, then approve only if retrying is safe.',
+                       expires_at = NOW() + INTERVAL '1 day',
+                       execution_state = $2,
+                       execution_claim_token = NULL
+                 WHERE state = $3
+                   AND execution_state = $4
+                   AND execution_started_at
+                       < NOW() - ($5 || ' seconds')::interval
+                RETURNING {_COLUMNS}
+                """,
+                STATE_PENDING,
+                EXECUTION_PENDING,
+                STATE_RESOLVED,
+                EXECUTION_STARTED,
+                str(int(stale_after_seconds)),
+            )
+        except Exception as e:
+            logger.warning(f"Could not recover stale Inbox executions: {e}")
+            return []
+        return [_row_to_ask(row) for row in rows]
 
     async def runs_awaiting_execution(self, tenant_id: str, limit: int = 20) -> List[str]:
         """Runs holding a decision the user made that was never acted on.
@@ -301,13 +448,14 @@ class InboxStore:
                 WHERE tenant_id = $1
                   AND kind = $2
                   AND state = $3
-                  AND executed_at IS NULL
+                  AND execution_state <> $4
                 ORDER BY run_id
-                LIMIT $4
+                LIMIT $5
                 """,
                 tenant_id,
                 KIND_APPROVAL,
                 STATE_RESOLVED,
+                EXECUTION_COMPLETED,
                 limit,
             )
         except Exception as e:
@@ -340,7 +488,7 @@ class InboxStore:
                 JOIN run_transcripts AS rt ON rt.run_id = pa.run_id
                 WHERE pa.state = $1
                   AND pa.kind = $2
-                  AND pa.executed_at IS NULL
+                  AND pa.execution_state = $9
                   AND (
                       rt.status = $3
                       OR (
@@ -372,6 +520,7 @@ class InboxStore:
                 STATE_PENDING,
                 max_attempts,
                 limit,
+                EXECUTION_PENDING,
             )
         except Exception as e:
             logger.warning(f"Could not list recoverable Inbox runs: {e}")
@@ -416,7 +565,7 @@ class InboxStore:
                            SELECT 1 FROM pending_asks AS unexecuted
                            WHERE unexecuted.run_id = rt.run_id
                              AND unexecuted.state = $5
-                             AND unexecuted.executed_at IS NULL
+                             AND unexecuted.execution_state <> $7
                        )
                     RETURNING rt.run_id
                 )
@@ -428,6 +577,7 @@ class InboxStore:
                 "suspended",
                 STATE_RESOLVED,
                 batch_size,
+                EXECUTION_COMPLETED,
             )
             return int(row["expired_count"]) if row else 0
         except Exception as e:
@@ -450,7 +600,7 @@ class InboxStore:
                 WITH doomed AS (
                     SELECT id FROM pending_asks
                     WHERE (
-                              (state = $1 AND executed_at IS NOT NULL)
+                              (state = $1 AND execution_state = $5)
                               OR state = $2
                           )
                       AND resolved_at < NOW() - ($3 || ' days')::interval
@@ -466,6 +616,7 @@ class InboxStore:
                 STATE_EXPIRED,
                 str(int(older_than_days)),
                 batch_size,
+                EXECUTION_COMPLETED,
             )
             return int(str(result).rsplit(" ", 1)[-1]) if result else 0
         except Exception as e:
@@ -559,6 +710,32 @@ class InboxStore:
             logger.warning(f"Could not list pending asks for {tenant_id}: {e}")
             raise InboxUnavailable(f"Could not list pending asks for {tenant_id}") from e
         return [_row_to_ask(r) for r in rows]
+
+    async def recent_outcomes(self, tenant_id: str, limit: int = 20) -> List[Ask]:
+        """Recently finished approval attempts, newest first."""
+        if not self._db:
+            return []
+        try:
+            rows = await self._db.fetch(
+                f"""
+                SELECT {_COLUMNS}
+                FROM pending_asks
+                WHERE tenant_id = $1
+                  AND state = $2
+                  AND execution_state = $3
+                ORDER BY execution_finished_at DESC
+                LIMIT $4
+                """,
+                tenant_id,
+                STATE_RESOLVED,
+                EXECUTION_COMPLETED,
+                limit,
+            )
+        except Exception as e:
+            raise InboxUnavailable(
+                f"Could not list recent Inbox outcomes for {tenant_id}"
+            ) from e
+        return [_row_to_ask(row) for row in rows]
 
     async def for_run(self, run_id: str) -> List[Ask]:
         """Every ask belonging to a run, in creation order.

@@ -450,7 +450,7 @@ class TranscriptStore:
                                             pa.state = $5
                                         OR (
                                                 pa.state = $6
-                                            AND pa.executed_at IS NULL
+                                            AND pa.execution_state <> $9
                                         )
                                     )
                               )
@@ -472,6 +472,7 @@ class TranscriptStore:
                 "resolved",
                 str(int(older_than_hours)),
                 batch_size,
+                "completed",
             )
             return int(str(result).rsplit(" ", 1)[-1]) if result else 0
         except Exception as e:
